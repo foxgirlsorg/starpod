@@ -1,0 +1,714 @@
+//! The runtime configuration pipeline.
+//!
+//! `Subscription + User Preferences → Normalization → Merging → Validation → Runtime Configuration`
+//!
+//! This module implements steps ①–③ of that pipeline as **pure functions**.
+//! There is no I/O, no clock, no randomness, and no knowledge of the GUI or
+//! the proxy engine. That is what makes the pipeline independently testable,
+//! as GOAL.md §3 requires.
+//!
+//! The precedence contract — the heart of the pipeline — is:
+//!
+//! | # | Field | Precedence |
+//! |---|-------|------------|
+//! | P1 | ports, `allow_lan`, `bind_address` | user > subscription > default |
+//! | P2 | `mode`, `log_level`, `tun`, `dns` | user > subscription > default |
+//! | P3 | nodes | union; the user wins on a name collision |
+//! | P4 | proxy groups | user > subscription, per group name |
+//! | P5 | rules | user rules, then subscription rules, then the `MATCH` tail |
+//! | P6 | the selected node | user > subscription default, by node id |
+//!
+//! "Never silently overwrite user settings" is enforced structurally: the
+//! user's preferences and the subscription-derived settings are separate
+//! values, and the merge reads them separately. No code path lets one write
+//! the other.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use crate::domain::{
+    BuildInput, BuildOutcome, EngineManagedSubscription, Finding, Node, ProxyGroup, ProxyMode,
+    RuleProvider, RuntimeConfig, Severity, StoredRule, SubscriptionPayload, SubscriptionSettings,
+    TunSettings, UserPreferences,
+};
+use crate::rules::translate_all;
+
+#[cfg(test)]
+mod tests;
+
+/// The default configuration, used when neither the user nor any
+/// subscription supplies a value.
+pub const DEFAULT_MIXED_PORT: u16 = 7890;
+/// The default SOCKS port.
+pub const DEFAULT_SOCKS_PORT: u16 = 7891;
+
+/// The name of the group the app creates to hold the user's selection.
+///
+/// It is always created, even when the user has not defined any group, so
+/// that there is always something for the engine to select a node from.
+pub const DEFAULT_GROUP_NAME: &str = "PROXY";
+
+/// Build a candidate configuration from the given inputs.
+///
+/// This never touches the running configuration and never mutates its
+/// inputs. The caller validates the result (the engine's `meow -t`) and
+/// only then applies it.
+pub fn build(input: &BuildInput) -> BuildOutcome {
+    let mut findings = Vec::new();
+
+    let normalized = normalize(input, &mut findings);
+    let merged = merge(&normalized, &mut findings);
+    let validated = validate(&merged, &mut findings);
+
+    let has_errors = findings.iter().any(|f| f.severity == Severity::Error);
+    if has_errors {
+        return BuildOutcome {
+            config: None,
+            findings,
+        };
+    }
+
+    BuildOutcome {
+        config: Some(validated),
+        findings,
+    }
+}
+
+/// Step ① — normalization.
+///
+/// Node and group names are made unique, deterministically: the first
+/// claimant of a name keeps it, and a later claimant gets ` (2)`, ` (3)`,
+/// … The order of processing is fixed (user nodes first, then subscriptions
+/// in list order), so the same input always produces the same names. That
+/// matters: it is what lets a user's group selection survive a subscription
+/// refresh.
+struct Normalized {
+    preferences: UserPreferences,
+    user_rules: Vec<StoredRule>,
+    nodes: Vec<Node>,
+    groups: Vec<ProxyGroup>,
+    subscriptions: Vec<SubscriptionPayload>,
+    engine_managed: Vec<EngineManagedSubscription>,
+    rule_providers: Vec<RuleProvider>,
+    /// The renames normalization applied, from the original name to the new
+    /// one. Group members follow these, so a member still points at the node
+    /// it named before normalization.
+    renames: HashMap<String, String>,
+}
+
+fn normalize(input: &BuildInput, findings: &mut Vec<Finding>) -> Normalized {
+    let mut used_names: BTreeSet<String> = BTreeSet::new();
+    let mut renames: HashMap<String, String> = HashMap::new();
+    let mut nodes = Vec::new();
+    let mut groups = Vec::new();
+
+    // The user's own nodes come first, so they keep their names and a
+    // subscription node of the same name is the one that gets renamed.
+    for node in &input.user_nodes {
+        let original = node.name.clone();
+        let node = unique_name(node.clone(), &mut used_names, "node", findings);
+        if node.name != original {
+            renames.insert(original, node.name.clone());
+        }
+        nodes.push(node);
+    }
+    for group in &input.user_groups {
+        let original = group.name.clone();
+        let group = unique_name(group.clone(), &mut used_names, "group", findings);
+        if group.name != original {
+            renames.insert(original, group.name.clone());
+        }
+        groups.push(group);
+    }
+
+    // Subscription nodes follow, so a subscription node of the same name as
+    // a user's node is the one that gets renamed — which is exactly P3's
+    // "the user wins on a name collision".
+    //
+    // Subscription *groups* follow the same rule (P4: the user's group wins
+    // per group name). A subscription group whose name collides with a
+    // user's group is dropped by the merge rather than renamed — but it
+    // must not consume the name here either, or the user's group would be
+    // renamed away from it.
+    let mut subscriptions = Vec::new();
+    for payload in &input.subscriptions {
+        let mut normalized_payload = payload.clone();
+        normalized_payload.nodes = payload
+            .nodes
+            .iter()
+            .map(|node| {
+                let original = node.name.clone();
+                let node = unique_name(node.clone(), &mut used_names, "node", findings);
+                if node.name != original {
+                    renames.insert(original, node.name.clone());
+                }
+                node
+            })
+            .collect();
+
+        // A group that collides with a name already taken is not renamed
+        // here: the merge drops it (the user's group of the same name
+        // wins), and renaming it would make the drop invisible.
+        let mut kept_groups = Vec::new();
+        let mut dropped_group_names = Vec::new();
+        for group in &payload.groups {
+            if used_names.contains(&group.name) {
+                dropped_group_names.push(group.name.clone());
+            } else {
+                used_names.insert(group.name.clone());
+                kept_groups.push(group.clone());
+            }
+        }
+        normalized_payload.groups = kept_groups;
+
+        for name in dropped_group_names {
+            findings.push(Finding {
+                severity: Severity::Info,
+                message: format!(
+                    "the subscription’s group “{name}” was dropped because a group of the same \
+                     name already exists"
+                ),
+                subject: Some(name),
+            });
+        }
+
+        subscriptions.push(normalized_payload);
+    }
+
+    // A rule's order must be unique. Ties are broken by rule id, so the
+    // result is deterministic no matter what order the rules were stored in.
+    let mut user_rules = input.user_rules.clone();
+    user_rules.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.id.cmp(&b.id)));
+
+    Normalized {
+        preferences: input.preferences.clone(),
+        user_rules,
+        nodes,
+        groups,
+        subscriptions,
+        engine_managed: input.engine_managed.clone(),
+        rule_providers: input.rule_providers.clone(),
+        renames,
+    }
+}
+
+/// Give `item` a name that is unique within `used`, suffixing ` (2)`, ` (3)`…
+fn unique_name<T: Named>(
+    mut item: T,
+    used: &mut BTreeSet<String>,
+    what: &str,
+    findings: &mut Vec<Finding>,
+) -> T {
+    let original = item.name().to_string();
+    if used.insert(original.clone()) {
+        item.set_name(original);
+        return item;
+    }
+    let mut counter = 2;
+    loop {
+        let candidate = format!("{original} ({counter})");
+        if used.insert(candidate.clone()) {
+            findings.push(Finding {
+                severity: Severity::Warning,
+                message: format!(
+                    "another {what} is already named “{original}”; this one was renamed to \
+                     “{candidate}”"
+                ),
+                subject: Some(candidate.clone()),
+            });
+            item.set_name(candidate);
+            return item;
+        }
+        counter += 1;
+    }
+}
+
+/// Anything with a name that must be unique in the configuration.
+trait Named {
+    fn name(&self) -> &str;
+    fn set_name(&mut self, name: String);
+}
+
+impl Named for Node {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+}
+
+impl Named for ProxyGroup {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+}
+
+/// Step ② — merging.
+fn merge(normalized: &Normalized, findings: &mut Vec<Finding>) -> RuntimeConfig {
+    let prefs = &normalized.preferences;
+
+    // P1 and P2: the user's own settings win; a subscription's settings are
+    // the fallback; the app's defaults are the last resort.
+    //
+    // The distinction that matters here is between "the user chose this" and
+    // "the user never said". A user's *explicit* choice always wins. A
+    // preference the user has never expressed falls through to the
+    // subscription, and then to the app's default.
+    let mut mixed_port = prefs.mixed_port;
+    let mut socks_port = prefs.socks_port;
+    let mut port = prefs.port;
+    let mut allow_lan = prefs.allow_lan;
+    let mut bind_address = prefs.bind_address.clone();
+    let mut mode = prefs.mode;
+    let mut log_level = prefs.log_level;
+
+    for payload in &normalized.subscriptions {
+        let settings: &SubscriptionSettings = &payload.settings;
+        if mixed_port.is_none() {
+            mixed_port = settings.mixed_port;
+        }
+        if socks_port.is_none() {
+            socks_port = settings.socks_port;
+        }
+        if port.is_none() {
+            port = settings.port;
+        }
+        if allow_lan.is_none() {
+            allow_lan = settings.allow_lan;
+        }
+        if bind_address.is_none() {
+            bind_address = settings.bind_address.clone();
+        }
+        if mode.is_none() {
+            mode = settings.mode;
+        }
+        if log_level.is_none() {
+            log_level = settings.log_level;
+        }
+    }
+
+    if mixed_port.is_none() {
+        mixed_port = Some(DEFAULT_MIXED_PORT);
+    }
+    if socks_port.is_none() {
+        socks_port = Some(DEFAULT_SOCKS_PORT);
+    }
+    // The safe default is to *not* expose the proxy to the network.
+    let allow_lan = allow_lan.unwrap_or(false);
+    let mode = mode.unwrap_or_default();
+    let log_level = log_level.unwrap_or_default();
+
+    // P3: the nodes are the union of the user's and the subscriptions'. The
+    // user's node wins on a name collision — but normalization has already
+    // made every name unique, so a collision here is impossible by
+    // construction. The map is kept anyway to make the precedence explicit
+    // and to survive a future change to normalization.
+    let mut proxies: BTreeMap<String, Node> = BTreeMap::new();
+    for node in &normalized.nodes {
+        proxies.insert(node.name.clone(), node.clone());
+    }
+    for payload in &normalized.subscriptions {
+        for node in &payload.nodes {
+            proxies
+                .entry(node.name.clone())
+                .or_insert_with(|| node.clone());
+        }
+    }
+
+    // P4: the groups are the user's, then the subscriptions'. A group of
+    // the same name is taken from the user.
+    let mut proxy_groups: BTreeMap<String, ProxyGroup> = BTreeMap::new();
+    for group in &normalized.groups {
+        proxy_groups.insert(group.name.clone(), group.clone());
+    }
+    for payload in &normalized.subscriptions {
+        for group in &payload.groups {
+            proxy_groups
+                .entry(group.name.clone())
+                .or_insert_with(|| group.clone());
+        }
+    }
+
+    // A group whose members were renamed by normalization must follow the
+    // rename, or it would point at a node that no longer exists.
+    if !normalized.renames.is_empty() {
+        for group in proxy_groups.values_mut() {
+            for member in &mut group.members {
+                if let Some(renamed) = normalized.renames.get(member.as_str()) {
+                    *member = renamed.clone();
+                }
+            }
+        }
+    }
+
+    // There must always be a group to select a node from.
+    if !proxy_groups.contains_key(DEFAULT_GROUP_NAME) {
+        let members: Vec<String> = proxies.keys().cloned().collect();
+        proxy_groups.insert(
+            DEFAULT_GROUP_NAME.to_string(),
+            ProxyGroup {
+                id: "builtin-proxy".to_string(),
+                name: DEFAULT_GROUP_NAME.to_string(),
+                group_type: "select".to_string(),
+                members,
+                strategy: None,
+                url: None,
+                interval: None,
+                raw: Default::default(),
+            },
+        );
+    }
+
+    // P5: the user's rules come first, then the subscription's rules, then
+    // the mandatory `MATCH` tail.
+    let mut rules: Vec<String> = Vec::new();
+    for rule in &normalized.user_rules {
+        if !rule.enabled {
+            continue;
+        }
+        rules.extend(translate_all(std::slice::from_ref(&rule.spec)));
+    }
+    for payload in &normalized.subscriptions {
+        rules.extend(translate_all(&payload.rules));
+    }
+    // The `MATCH` tail is the app's, not the user's. If the user wrote one,
+    // it is dropped and replaced by the app's own — a rule after `MATCH` is
+    // unreachable anyway.
+    if let Some(index) = rules.iter().position(|r| r.starts_with("MATCH,")) {
+        if index + 1 < rules.len() {
+            findings.push(Finding {
+                severity: Severity::Warning,
+                message: "rules after the MATCH rule can never match and were removed".to_string(),
+                subject: None,
+            });
+        }
+        rules.truncate(index);
+    }
+    rules.push(format!("MATCH,{}", default_target(&normalized.preferences)));
+
+    // P6: the selected node is resolved by id, so a rename in the
+    // subscription does not lose the user's selection. The selection itself
+    // is applied through the engine's own API, not through the config file;
+    // what the config carries is the group the engine selects from.
+    if resolve_selected_group(normalized, &proxy_groups).is_none()
+        && let Some(preferred) = &normalized.preferences.selected_group
+    {
+        findings.push(Finding {
+            severity: Severity::Warning,
+            message: format!(
+                "the selected group “{preferred}” does not exist in this configuration"
+            ),
+            subject: Some(preferred.clone()),
+        });
+    }
+
+    RuntimeConfig {
+        mixed_port,
+        socks_port,
+        port,
+        allow_lan,
+        bind_address,
+        mode,
+        log_level,
+        tun: prefs.tun.clone(),
+        proxies: proxies.into_values().collect(),
+        proxy_groups: proxy_groups.into_values().collect(),
+        rules,
+        rule_providers: normalized.rule_providers.clone(),
+        subscriptions: normalized.engine_managed.clone(),
+    }
+}
+
+/// The rule target the `MATCH` tail sends unmatched traffic to.
+///
+/// It follows the user's selected group when there is one, and falls back
+/// to `DIRECT` — never to a group that does not exist.
+fn default_target(prefs: &UserPreferences) -> String {
+    match &prefs.selected_group {
+        Some(group) if !group.is_empty() => group.clone(),
+        _ => DEFAULT_GROUP_NAME.to_string(),
+    }
+}
+
+/// The group the engine selects from.
+fn resolve_selected_group(
+    normalized: &Normalized,
+    groups: &BTreeMap<String, ProxyGroup>,
+) -> Option<String> {
+    let preferred = normalized.preferences.selected_group.as_deref()?;
+    if groups.contains_key(preferred) {
+        Some(preferred.to_string())
+    } else {
+        None
+    }
+}
+
+/// Step ③ — validation.
+///
+/// These are the app-side checks. The engine-side check (`meow -t`) runs
+/// separately and is authoritative; this layer catches the problems the
+/// engine would report less clearly, and produces the warnings the user
+/// needs to see before applying.
+fn validate(config: &RuntimeConfig, findings: &mut Vec<Finding>) -> RuntimeConfig {
+    // The ports must not collide.
+    let mut ports: Vec<(&str, u16)> = Vec::new();
+    for (name, port) in [
+        ("mixed_port", config.mixed_port),
+        ("socks_port", config.socks_port),
+        ("port", config.port),
+    ] {
+        if let Some(port) = port {
+            ports.push((name, port));
+        }
+    }
+    for (i, (name_a, port_a)) in ports.iter().enumerate() {
+        for (name_b, port_b) in ports.iter().skip(i + 1) {
+            if port_a == port_b {
+                findings.push(Finding {
+                    severity: Severity::Error,
+                    message: format!(
+                        "{name_a} and {name_b} are both set to port {port_a}; they must differ"
+                    ),
+                    subject: None,
+                });
+            }
+        }
+    }
+
+    // The node names must be unique.
+    let mut seen_nodes = BTreeSet::new();
+    for node in &config.proxies {
+        if !seen_nodes.insert(node.name.as_str()) {
+            findings.push(Finding {
+                severity: Severity::Error,
+                message: format!("more than one node is named “{}”", node.name),
+                subject: Some(node.name.clone()),
+            });
+        }
+    }
+
+    // The group names must be unique, and no group may contain itself.
+    let mut seen_groups = BTreeSet::new();
+    for group in &config.proxy_groups {
+        if !seen_groups.insert(group.name.as_str()) {
+            findings.push(Finding {
+                severity: Severity::Error,
+                message: format!("more than one group is named “{}”", group.name),
+                subject: Some(group.name.clone()),
+            });
+        }
+        if group.members.iter().any(|m| m == &group.name) {
+            findings.push(Finding {
+                severity: Severity::Error,
+                message: format!("the group “{}” contains itself", group.name),
+                subject: Some(group.name.clone()),
+            });
+        }
+    }
+
+    // Every group member must resolve to a node or a group.
+    let known: BTreeSet<&str> = config
+        .proxies
+        .iter()
+        .map(|n| n.name.as_str())
+        .chain(config.proxy_groups.iter().map(|g| g.name.as_str()))
+        .collect();
+    for group in &config.proxy_groups {
+        for member in &group.members {
+            if !known.contains(member.as_str()) {
+                findings.push(Finding {
+                    severity: Severity::Error,
+                    message: format!(
+                        "the group “{}” refers to “{member}”, which is not a node or a group",
+                        group.name
+                    ),
+                    subject: Some(group.name.clone()),
+                });
+            }
+        }
+        if group.members.is_empty() {
+            findings.push(Finding {
+                severity: Severity::Warning,
+                message: format!("the group “{}” has no members", group.name),
+                subject: Some(group.name.clone()),
+            });
+        }
+    }
+
+    // A group must not contain a cycle.
+    for cycle in find_group_cycles(&config.proxy_groups) {
+        findings.push(Finding {
+            severity: Severity::Error,
+            message: format!("the groups form a cycle: {}", cycle.join(" → ")),
+            subject: None,
+        });
+    }
+
+    // Every rule's target must resolve.
+    let builtins = crate::rules::BuiltinTarget::ALL;
+    for rule in &config.rules {
+        let Some(target) = rule_target(rule) else {
+            continue;
+        };
+        if builtins.iter().any(|b| b.as_str() == target) {
+            continue;
+        }
+        if known.contains(target) {
+            continue;
+        }
+        findings.push(Finding {
+            severity: Severity::Error,
+            message: format!("the rule “{rule}” sends traffic to “{target}”, which does not exist"),
+            subject: None,
+        });
+    }
+
+    // Every `RULE-SET` must name a declared provider.
+    let providers: BTreeSet<&str> = config
+        .rule_providers
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    for rule in &config.rules {
+        if let Some(rest) = rule.strip_prefix("RULE-SET,") {
+            let name = rest.split(',').next().unwrap_or("").trim();
+            if !providers.contains(name) {
+                findings.push(Finding {
+                    severity: Severity::Error,
+                    message: format!(
+                        "the rule “{rule}” refers to the rule provider “{name}”, which is not \
+                         declared"
+                    ),
+                    subject: None,
+                });
+            }
+        }
+    }
+
+    // Geodata: a warning, not an error — the engine resolves the database.
+    let needs_geodata = config.rules.iter().any(|rule| {
+        ["GEOIP,", "SRC-GEOIP,", "IP-ASN,", "SRC-IP-ASN,"]
+            .iter()
+            .any(|prefix| rule.starts_with(prefix))
+    });
+    if needs_geodata {
+        findings.push(Finding {
+            severity: Severity::Warning,
+            message: "this configuration uses GEOIP or IP-ASN rules; the engine will download a \
+                      geo database the first time it is needed"
+                .to_string(),
+            subject: None,
+        });
+    }
+
+    // The `MATCH` tail must be there, and must be last.
+    match config.rules.iter().rposition(|r| r.starts_with("MATCH,")) {
+        Some(index) if index + 1 == config.rules.len() => {}
+        Some(_) => findings.push(Finding {
+            severity: Severity::Error,
+            message: "the MATCH rule must be the last rule in the list".to_string(),
+            subject: None,
+        }),
+        None => findings.push(Finding {
+            severity: Severity::Error,
+            message: "the rule list has no MATCH rule".to_string(),
+            subject: None,
+        }),
+    }
+
+    config.clone()
+}
+
+/// The target of an engine rule line, when it has one.
+fn rule_target(rule: &str) -> Option<&str> {
+    let mut parts = rule.splitn(4, ',');
+    let kind = parts.next()?;
+    if kind == "MATCH" {
+        return parts.next().map(str::trim);
+    }
+    if kind == "RULE-SET" {
+        return parts.nth(1).map(str::trim);
+    }
+    if kind == "SUB-RULE" {
+        return None;
+    }
+    parts.nth(1).map(str::trim)
+}
+
+/// Find the group-reference cycles in a group list.
+fn find_group_cycles(groups: &[ProxyGroup]) -> Vec<Vec<String>> {
+    let names: BTreeSet<&str> = groups.iter().map(|g| g.name.as_str()).collect();
+    let mut cycles = Vec::new();
+    for group in groups {
+        let mut path = Vec::new();
+        let mut seen = BTreeSet::new();
+        if let Some(cycle) = walk_groups(group, &names, groups, &mut path, &mut seen) {
+            cycles.push(cycle);
+        }
+    }
+    cycles
+}
+
+fn walk_groups(
+    group: &ProxyGroup,
+    names: &BTreeSet<&str>,
+    groups: &[ProxyGroup],
+    path: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+) -> Option<Vec<String>> {
+    if path.iter().any(|p| p == &group.name) {
+        let mut cycle = path.clone();
+        cycle.push(group.name.clone());
+        return Some(cycle);
+    }
+    if !seen.insert(group.name.clone()) {
+        return None;
+    }
+    path.push(group.name.clone());
+    for member in &group.members {
+        if !names.contains(member.as_str()) {
+            continue;
+        }
+        let Some(next) = groups.iter().find(|g| g.name == *member) else {
+            continue;
+        };
+        if let Some(cycle) = walk_groups(next, names, groups, path, seen) {
+            return Some(cycle);
+        }
+    }
+    path.pop();
+    None
+}
+
+/// The port the app's HTTP proxy listens on, for display.
+pub fn http_port(config: &RuntimeConfig) -> Option<u16> {
+    config.mixed_port.or(config.port)
+}
+
+/// The port the app's SOCKS proxy listens on, for display.
+pub fn socks_port(config: &RuntimeConfig) -> Option<u16> {
+    config.socks_port
+}
+
+/// Whether the configuration exposes the proxy beyond this machine.
+pub fn is_lan_exposed(config: &RuntimeConfig) -> bool {
+    config.allow_lan
+}
+
+/// The TUN settings, with the enabled flag applied.
+pub fn tun_settings(prefs: &UserPreferences) -> TunSettings {
+    prefs.tun.clone()
+}
+
+/// The routing mode as a display string.
+pub fn mode_label(mode: ProxyMode) -> &'static str {
+    mode.as_str()
+}
+
+/// The rules of a payload, translated.
+pub fn payload_rules(payload: &SubscriptionPayload) -> Vec<String> {
+    translate_all(&payload.rules)
+}

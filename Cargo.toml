@@ -1,0 +1,108 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/starpod-core",
+    "crates/starpod-subscription",
+    "crates/starpod-store",
+    "crates/starpod-engine",
+    "crates/starpod-ui",
+    "crates/starpod-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+repository = "https://github.com/foxgirlsorg/starpod"
+description = "A cross-platform desktop proxy client for the meow-rs engine"
+
+[workspace.dependencies]
+# --- internal crates ---------------------------------------------------------
+starpod-core = { path = "crates/starpod-core" }
+starpod-subscription = { path = "crates/starpod-subscription" }
+starpod-store = { path = "crates/starpod-store" }
+starpod-engine = { path = "crates/starpod-engine" }
+starpod-ui = { path = "crates/starpod-ui" }
+
+# --- serialisation -----------------------------------------------------------
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# The same YAML library meow itself uses (meow pins `=2.0.0`). `serde_yaml` is
+# deprecated and `serde_yml` is an unmaintained shim, so this is the only
+# live option that matches the engine's parser.
+serde-saphyr = { version = "2.1", features = ["serialize", "deserialize"] }
+
+# --- async -------------------------------------------------------------------
+tokio = { version = "1.54", features = [
+    "rt-multi-thread",
+    "macros",
+    "process",
+    "fs",
+    "io-util",
+    "sync",
+    "time",
+    "net",
+    "signal",
+] }
+tokio-util = { version = "0.7", features = ["io"] }
+async-compat = "0.2"
+async-trait = "0.1"
+futures-core = "0.3"
+futures-util = "0.3"
+
+# --- http --------------------------------------------------------------------
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+    "json",
+    "charset",
+    "http2",
+    "gzip",
+] }
+url = "2.5"
+base64 = "0.23"
+
+# --- platform ----------------------------------------------------------------
+dirs = "7.0"
+nix = { version = "0.31", features = ["signal", "process", "fs", "user"] }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_System_Threading",
+    "Win32_System_Console",
+    "Win32_UI_Shell",
+    "Win32_System_Memory",
+    "Win32_Storage_FileSystem",
+] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_System_Threading",
+    "Win32_System_Console",
+] }
+security-framework = "3.7"
+secret-service = { version = "5.2", features = ["rt-tokio-crypto-rust"] }
+
+# --- archive extraction ------------------------------------------------------
+zip = { version = "9.5", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1.1"
+
+# --- misc --------------------------------------------------------------------
+sha2 = "0.10"
+rand = "0.9"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1.29", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["formatting", "parsing", "serde", "macros"] }
+
+# --- dev ---------------------------------------------------------------------
+tempfile = "3.27"
+wiremock = "0.6"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -155,19 +155,24 @@ Note `secret` is a config key — the app must **not** put the controller secret
 YAML (it is passed via `--secret` on the command line instead, and the YAML is written to a
 user-readable location).
 
-### 1.5 Rule grammar (verified token-level, `meow-rules-0.29.0/src/parser.rs:128-240`)
+### 1.5 Rule grammar (verified token-level)
 
-A rule line is `TYPE,payload,target[,flags...]` — **at least 3 comma-separated parts** required
-(`"rule needs at least 3 parts"`).
+Verified against `meow-rules-0.29.0/src/parser.rs:95-240`,
+`meow-config-0.29.0/src/rule_parser.rs:104-177`, and
+`meow-common-0.29.0/src/rule.rs`.
 
-**Rule types meow actually supports** (from `meow-common-0.29.0/src/rule.rs` `RuleType::as_str`,
-cross-checked against the parser's match arms — these two agree exactly):
+**The general shape** is `TYPE,payload,target[,flags...]` — **at least 3 comma-separated parts**
+required (`"rule needs at least 3 parts"`). Three forms break that shape and are handled
+separately by the parser (see below): `MATCH`, the logic rules, and `RULE-SET`/`SUB-RULE`.
+
+**Rule types meow actually supports** (from `RuleType::as_str`, cross-checked against the
+parser's match arms — these two agree exactly):
 
 ```
 DOMAIN  DOMAIN-SUFFIX  DOMAIN-KEYWORD  DOMAIN-REGEX  DOMAIN-WILDCARD
 GEOIP  SRC-GEOIP  GEOSITE
 IP-CIDR  IP-CIDR6  SRC-IP-CIDR  IP-SUFFIX  SRC-IP-SUFFIX  IP-ASN  SRC-IP-ASN
-SRC-PORT  DST-PPORT->DST-PORT  IN-PORT  NETWORK  DSCP
+SRC-PORT  DST-PORT  IN-PORT  NETWORK  DSCP
 PROCESS-NAME  PROCESS-PATH  UID
 IN-NAME  IN-TYPE  IN-USER
 RULE-SET  SUB-RULE
@@ -178,15 +183,86 @@ AND  OR  NOT  MATCH
 `no-resolve` (verified: `flags.no_resolve |= flags.is_src`).
 `IP-CIDR`/`IP-SUFFIX` accept `src` as a suffix; `SRC-*` variants hard-code it.
 
+The flag field is consulted **only** for `IP-CIDR`, `IP-SUFFIX`, `GEOIP`, `IP-ASN` and `RULE-SET`.
+Every other rule type ignores it — the domain rules, the port rules, the process rules and the
+rest read only the first three fields.
+
 **Targets:** `DIRECT`, `REJECT`, `REJECT-DROP`, `COMPATIBLE`, `PASS`, `PASS-RULE` (built-in
 outbounds, registered by the engine — `meow-config-0.29.0/src/lib.rs:2332-2411`), plus the name
 of any proxy or proxy-group.
 
-**Logic rules:** `AND,((RULE1),(RULE2)),TARGET` — parenthesised sub-rules, nested to a bounded
-depth (`MAX_LOGIC_DEPTH`).
+A target that does not resolve is **not** a config-load error. The engine warns and skips the
+rule at match time (`meow-tunnel-0.29.0/src/match_engine.rs:229-236`: *"rule {} matched target
+'{adapter_name}' which is unavailable for this connection … skipping it"*). The app therefore
+validates targets itself before applying a configuration — see §3.4 ③ Layer A.
 
-**`RULE-SET` payload** is `provider_name,behavior` where behavior is `domain` | `ipcidr` (aliases
-`ip-cidr`) | `classical`. The rule is `RULE-SET,<provider>,<behavior>,<target>`.
+**The four special forms — each breaks the `TYPE,payload,target` shape:**
+
+1. **`MATCH,<target>`** — only two fields. The parser short-circuits before the 3-part check:
+   `"MATCH only needs adapter"`, and the adapter defaults to `DIRECT` if omitted.
+
+2. **Logic rules** — `AND,((RULE1),(RULE2)),TARGET`, `OR,(...)`, `NOT,(...)`. The parser detects
+   `AND`/`OR`/`NOT` **before** the naive comma split, because their payloads contain
+   parenthesised sub-rules whose commas would otherwise be split incorrectly. Sub-rules are
+   parenthesised; nesting is bounded by `MAX_LOGIC_DEPTH` (64).
+
+   > **An inner rule has no target — this is the sharpest detail in the whole grammar, and it was
+   > wrong in an earlier draft of this document.** Inside a logic group the engine splices a
+   > placeholder adapter into every entry and discards it
+   > (`meow-rules-0.29.0/src/parser.rs:445-472`, `splice_inner_adapter`:
+   > `const PLACEHOLDER: &str = "LOGIC-INNER-PLACEHOLDER"`). The consequence is that **the third
+   > comma-separated field of an inner entry is the *flags* field, not a target**. The engine's
+   > own `splice_inner_adapter` therefore rebuilds an inner entry as `TYPE,PAYLOAD,PLACEHOLDER`
+   > — a two-field entry with the placeholder in the target slot — and the *outer* logic rule owns
+   > the real target, taken from the **last** comma-separated field of the tail (upstream's
+   > `ParseRulePayload` semantics, mirrored by `next_back()`).
+   >
+   > So the correct inner forms are `TYPE,payload` and `TYPE,payload,flags`. Writing
+   > `AND,((DOMAIN,a.com,DIRECT)),Proxy` — which reads naturally — makes the engine read `DIRECT`
+   > as the flags field, where it is silently ignored. The app **rejects that spelling** rather
+   > than storing a target the engine will never use, and emits inner rules without a target.
+   >
+   > The engine also rejects `MATCH` inside a logic group (it would splice into an always-true
+   > final leg), and rejects a `DOMAIN-REGEX` inner payload containing a comma (the naive split
+   > would truncate it).
+
+3. **`RULE-SET,<provider>,<target>[,flags]`** — **two fields after the type, and the behaviour is
+   NOT in the rule line.** The behaviour (`domain` | `ipcidr` | `classical`) comes from the
+   *rule-provider's* own definition (`RawRuleProvider.behavior`, `raw.rs:722`), not from the rule.
+   The rule line names the provider and the target. An unknown provider is a hard error:
+   `"unknown rule-provider '{name}'"`. The parser warns when `src` is applied to a
+   `domain`-behaviour provider, where it has no effect.
+
+   > **Correction to an earlier draft of this document**, which described the payload as
+   > `RULE-SET,<provider>,<behavior>,<target>`. That is wrong, and it would have produced a
+   > config the engine rejects. The correct form is `RULE-SET,<provider>,<target>`.
+
+   `RULE-SET` is resolved at the **configuration** level — the engine resolves providers before
+   parsing the rule list — so it is a top-level form only, and the app rejects it inside a logic
+   group.
+
+4. **`SUB-RULE,<block-name>`** — takes **exactly one** field. A third comma field is a hard
+   error (`"SUB-RULE takes exactly <block-name> — trailing fields are ..."`); upstream's
+   unsupported `SUB-RULE,(cond),name` conditional form is rejected rather than silently dropped.
+   The blocks themselves live in the top-level `sub_rules:` map, whose values are **lists of rule
+   lines** (`HashMap<String, Vec<String>>`), parsed with the same rules, resolved in topological
+   order with a cycle check.
+
+   A `SUB-RULE` in the top-level rule list must name a **defined** block; an undefined block is a
+   hard config error (`meow-config-0.29.0/src/lib.rs:3062-3072`).
+
+**Rule type matching is case-sensitive** — the engine compares the type verbatim, with exactly
+one exception: `AND`/`OR`/`NOT` are upper-cased before the dispatch
+(`meow-rules-0.29.0/src/parser.rs:106-111`). `MATCH` is matched exactly. The app mirrors this
+rather than accepting any casing, so a lowercase `domain` is rejected rather than silently
+accepted by the app and rejected by the engine.
+
+**The engine tolerates a dead domain payload** — it warns (or fails the load in `strict: true`
+mode) rather than rejecting the rule. The dead shapes are: for `DOMAIN`/`DOMAIN-SUFFIX`, an empty
+payload, a leading or trailing dot, a `*` or `+` anywhere, or an empty label (`a..b`); for
+`DOMAIN-WILDCARD`, a `+` anywhere or an empty label; for `DOMAIN-KEYWORD`, `..`. The app
+performs the same check itself (`starpod-core/src/rules/translate.rs`, `dead_payload_reason`) so
+it can point at the problem in its own UI.
 
 **`GEOSITE` payload** may carry an attribute: `microsoft@cn`. The category is the part before `@`.
 
@@ -564,7 +640,7 @@ bytes → sniff format → YAML parse → shape check → per-entry validation �
 The user-facing model is **not** meow's raw rule string. It is structured:
 
 ```rust
-enum RuleKind {
+enum RuleKind {  // one variant per token in meow's RuleType::as_str
     Domain, DomainSuffix, DomainKeyword, DomainRegex, DomainWildcard,
     GeoSite, GeoIp, SrcGeoIp,
     IpCidr, SrcIpCidr, IpSuffix, SrcIpSuffix, IpAsn, SrcIpAsn,
@@ -576,34 +652,53 @@ enum RuleKind {
     Match,
 }
 
-struct RuleSpec {
-    id: RuleId,
-    kind: RuleKind,
-    payload: String,       // domain, CIDR, category, provider name, …
-    target: RuleTarget,    // see below
-    flags: RuleFlags { no_resolve: bool, is_src: bool },
-    enabled: bool,
-    order: u32,            // explicit ordering; first match wins
+/// A top-level rule. Every variant carries a target except `SubRule`.
+enum RuleSpec {
+    Simple { kind: RuleKind, payload: String, target: RuleTarget, flags: RuleFlags },
+    Match  { target: RuleTarget },
+    Logic  { kind: LogicKind, sub_rules: Vec<InnerRule>, target: RuleTarget },
+    RuleSet{ provider: String, target: RuleTarget, flags: RuleFlags },
+    SubRule{ block: String },
 }
 
-enum RuleTarget {
-    Direct, Reject, RejectDrop, Compatible, Pass,
-    Node(String),      // by node id → resolved to name at emit time
-    Group(String),     // by group id → resolved to name at emit time
+/// A rule inside a logic group. It has NO target — the enclosing logic rule
+/// owns it, and the engine discards any target written there (§1.5).
+enum InnerRule {
+    Simple { kind: RuleKind, payload: String, flags: RuleFlags },
+    Logic  { kind: LogicKind, sub_rules: Vec<InnerRule> },
 }
+
+/// The app-level concepts the engine knows nothing about live alongside:
+struct StoredRule { id: RuleId, spec: RuleSpec, enabled: bool, order: u32 }
+
+struct RuleTarget { name: String }   // a built-in outbound name, or a node/group name
 ```
+
+**Why `RuleSpec` and `InnerRule` are separate types.** They are not two spellings of one thing —
+they are different rule shapes with different fields. A top-level rule carries a target; an inner
+rule does not, and the engine reads an inner rule's third field as its *flags* field (§1.5). A
+single type would have to carry an `Option<RuleTarget>` that the engine would silently ignore,
+which is exactly the "a rule the user wrote that does not do what it says" failure GOAL.md §5
+warns about. Two types make the distinction unrepresentable rather than merely discouraged.
 
 **Translation layer** (`starpod-core/src/rules/translate.rs`): `RuleSpec` → meow rule string.
 - `RuleKind` → the exact token from §1.5. The mapping table is **derived from meow's
   `RuleType::as_str`**, so an unsupported kind cannot be constructed.
-- `RuleTarget::Direct` → `"DIRECT"`, etc.; `Node`/`Group` → the resolved display name.
+- `RuleTarget` → the built-in outbound's name, or the resolved display name of a node/group.
 - Flags → `,no-resolve` / `,src`, appended only when set, and `src` implies `no-resolve`.
-- `And`/`Or`/`Not` → `AND,((R1),(R2)),TARGET` with nested parenthesisation.
+- `And`/`Or`/`Not` → `AND,((R1),(R2)),TARGET` with nested parenthesisation, where each `Ri` is an
+  **inner** rule and therefore carries no target.
 
 **Round-trip guarantee:** the translator emits only strings meow's parser accepts, and the app
 **validates every emitted rule by parsing it with meow's own grammar** — but meow is a subprocess,
 so the app validates by running `meow.exe -t -f <candidate.yaml>` (§4.4). At the *unit* level the
-app has its own mirror of the token table and asserts the translation is total.
+app has its own mirror of the token table and asserts the translation is total — the round-trip
+test in `rules/parse.rs` parses each canonical rule line and re-emits it byte-for-byte.
+
+**The raw-text editor and the inner-rule rule.** Because the raw-text editor parses into the same
+`RuleSpec`/`InnerRule` model, a user pasting `AND,((DOMAIN,a.com,DIRECT)),Proxy` is told that an
+inner rule has no target — rather than being silently given a rule that the engine would route
+differently than they expect.
 
 ### 3.3.1 Two rule editors (user decision: structured + raw text)
 
@@ -1204,10 +1299,57 @@ process it does not own. Two mitigations, both implemented:
 2. **Crash handler.** A panic hook that stops the child before the process exits, so the common
    case (a Rust panic) does not orphan anything.
 
-**Tray implementation.** The `tray-icon` crate, with a foxgirls-styled icon in brand red
-(`#de6161`) that visually distinguishes "running" (filled) from "stopped" (hollow/muted) — the
-same status-dot idiom as the UI (§6.1). The tray menu carries: Show/Hide, Connect/Disconnect,
-the current mode, the current node, and Quit.
+**Tray implementation — Slint's native `SystemTrayIcon`, not the `tray-icon` crate.** Slint 1.18
+ships a `SystemTrayIcon` builtin element (verified in
+`i-slint-compiler-1.18.1/builtin_elements.rs:3972-4160`), so the tray needs **no extra
+dependency**:
+
+```slint
+export component AppTray inherits SystemTrayIcon {
+    icon: @image-url("tray-icon.png");
+    tooltip: "Starpod - Connected";
+    title: "Starpod";
+
+    Menu {
+        MenuItem { title: "Show Starpod"; activated => { show-window(); } }
+        MenuSeparator { }
+        MenuItem { title: "Connect"; enabled: !running; activated => { connect(); } }
+        MenuItem { title: "Disconnect"; enabled: running; activated => { disconnect(); } }
+        MenuSeparator { }
+        MenuItem { title: "Quit"; activated => { quit(); } }
+    }
+}
+```
+
+Its documented API (`icon`, `tooltip`, `title`, `visible`, `clicked`) and its behaviour are
+exactly what this design needs:
+
+- **A visible `SystemTrayIcon` keeps the Slint event loop alive on its own**, exactly like a
+  visible window — so "hide the window, keep the proxy running" works with the plain
+  `slint::run_event_loop()`, and the loop exits when the tray is hidden or `quit_event_loop()` is
+  called.
+- `show()` / `hide()` on a tray-rooted component set the `visible` property, which the platform
+  backend maps to the native tray API — so left-click-to-restore is a two-line binding
+  (`tray.on_clicked(...)` -> `window.show()`).
+- **Platform support is exactly our three targets:** Linux via `StatusNotifierItem` /
+  `AppIndicator` on D-Bus, macOS via `NSStatusItem`, Windows via `Shell_NotifyIcon`.
+- The menu tree is **reactive** — when a `MenuItem`'s `title`/`enabled`/`checked` binding changes,
+  Slint rebuilds the platform menu, so the tray reflects live state (running vs. stopped, the
+  current node) without any manual menu rebuilding.
+- **Constraint:** a `SystemTrayIcon` must contain exactly one `Menu` child, not inside an `if` or
+  `for`, and no other child element types. `MenuItem` `shortcut` bindings are ignored (a tray menu
+  is not attached to a focused window).
+
+The tray icon is a foxgirls-styled mark in brand red (`#de6161`) that visually distinguishes
+"running" (filled) from "stopped" (hollow/muted) — the same status-dot idiom as the UI (§6.1).
+The tray menu carries: Show/Hide, Connect/Disconnect, the current mode, the current node, and Quit.
+
+**One caveat, and it is the same hazard as before.** On Linux, a desktop environment or shell
+extension implementing `StatusNotifierItem` is required; plain X11 system trays are not supported
+(GNOME needs an extension such as AppIndicator and KStatusNotifierItem Support). The app must
+degrade gracefully: if the tray cannot be created, closing the window **stops the engine and
+exits**, and the app says so once at startup. This is a real cross-platform hazard, not a
+hypothetical one.
 
 **The tray is not available on every environment** — a Linux desktop without a StatusNotifier host
 has no tray. The app must degrade gracefully: if the tray cannot be created, closing the window
@@ -1241,7 +1383,6 @@ screen reserves a row for it and the tray makes it the natural next step.
 | `secret-service` | Linux Secret Service | with a file fallback |
 | `libc` / `nix` | Unix signals | `nix` for `kill(pid, SIGTERM)` |
 | `dirs` | platform data/config dirs | |
-| `tray-icon` | system tray (v1) | Linux needs a StatusNotifier host; the app degrades gracefully when absent (§6.4) |
 | `elevation` / `sudo` | elevating the engine child for TUN | Windows `ShellExecuteW` + `runas`; macOS/Linux via `osascript`/`sudo`. Alternatively hand-rolled per platform — see the note below. |
 | `wait-timeout` | child-stop timeout | the graceful stop has a deadline before the force kill |
 | `url` | URL parsing/validation | |
@@ -1255,7 +1396,7 @@ thin wrapper. It is roughly 80 lines and it is the one place where a bad impleme
 security problem, so it is written explicitly rather than delegated.
 
 **Deliberately absent:** no `openssl`/`native-tls` (use `rustls`), no `serde_yaml` (deprecated),
-no `serde_yml` (unmaintained shim), no `tray-icon` before the tray decision (now added).
+no `serde_yml` (unmaintained shim), and no `tray-icon` crate (Slint 1.18 ships a native `SystemTrayIcon` element).
 
 ---
 
@@ -1345,7 +1486,7 @@ architectural consequences. **No open architectural questions remain.**
 | **Q1** | Who owns fetching and parsing the subscription? | **Both, per subscription** — a per-subscription toggle. App-managed is the default; engine-managed is opt-in. | Two fetch paths, one shared pipeline. App-managed adds a format sniffer, a validator and a cache; engine-managed adds a registration call and a supervision loop. The observable differences are tabulated in §3.2.1 and are the test matrix. |
 | **Q2** | How does the app authenticate to the subscription server? | **URL token + an optional `Authorization` header.** | One extra field on the subscription model (`header`), one extra header on the provider request. Engine-managed mode cannot carry the header (meow's `AddSubscriptionRequest` has no header field) — the UI marks such subscriptions. |
 | **Q3** | Is TUN mode in scope for v1? | **Yes, with an elevation prompt.** | The *child* is elevated, not the GUI (§4.5). The extractor must preserve `wintun.dll` beside `meow.exe`. TUN failure must not take down the mixed-port proxy. |
-| **Q4** | What happens when the window is closed? | **Hide to the system tray; the proxy keeps running.** | Two exits, both graceful (§1.7, §6.4). Needs the `tray-icon` crate, an ownership marker, adoption-on-restart, and a graceful degradation path where no tray exists. |
+| **Q4** | What happens when the window is closed? | **Hide to the system tray; the proxy keeps running.** | Two exits, both graceful (§1.7, §6.4). Uses Slint's native `SystemTrayIcon` element (no extra crate), plus an ownership marker, adoption-on-restart, and a graceful degradation path where no tray exists. |
 | **Q5** | How much of the subscription-vs-preference split does the server control? | **The app is authoritative.** User settings always win; a refresh never overwrites them. | The precedence table P1–P6 (§3.4) is the contract. For engine-managed subscriptions, the engine's own rule order is corrected by the re-assertion loop (§4.6). |
 | **Q6** | How are rules edited in v1? | **Structured editor + a raw-text advanced mode.** | Both editors operate on the same `RuleSpec` list; raw lines are *parsed into* `RuleSpec`s, so they cannot bypass the target-resolution validation (§3.3.1). |
 | **Q7** | What persistence format? | **JSON** for state, YAML for the generated config and the subscription cache. | The store sits behind a trait, so this is cheap to revisit. JSON matches the rest of the stack. |
