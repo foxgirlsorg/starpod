@@ -37,7 +37,15 @@ component NavItem inherits Rectangle {
         spacing: Design.space-md;
         alignment: start;
 
-        @children
+        // The icon column: 16px wide, its icon centred on the row's middle
+        // line, so the icon and the label share one vertical axis.
+        VerticalLayout {
+            width: 16px;
+            vertical-stretch: 0;
+            alignment: center;
+
+            @children
+        }
 
         Text {
             text: root.label;
@@ -215,9 +223,13 @@ export component AppWindow inherits Window {
                     alignment: start;
                     height: 28px;
 
-                    StatusDot {
-                        kind: engine-kind;
-                        y: (parent.height - self.height) / 2;
+                    VerticalLayout {
+                        width: 10px;
+                        alignment: center;
+
+                        StatusDot {
+                            kind: engine-kind;
+                        }
                     }
 
                     Text {

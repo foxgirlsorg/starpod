@@ -9,18 +9,21 @@
 import { ScrollView } from "std-widgets.slint";
 import { Design } from "../design.slint";
 import { Bridge, SettingsModel } from "../bridge.slint";
-import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, Field, FieldKind, SectionHeading, SettingRow, LoadingState, EmptyState } from "../primitives.slint";
+import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, Field, FieldKind, AppSelect, SectionHeading, SettingRow, LoadingState, EmptyState } from "../primitives.slint";
 import { IconTriangleAlert } from "../icons.slint";
 
 // ---------------------------------------------------------------------------
 // Local building blocks
 // ---------------------------------------------------------------------------
 
-// A label, an optional explanation, and a control on the right.
-// SettingRow has no slot for a control, so the editable rows use this.
+// A label and an optional explanation on the left, a control on the right.
+// The control column has a fixed width, and both columns are centred
+// vertically on the row. SettingRow has no slot for a control, so the
+// editable rows use this.
 component ControlRow inherits HorizontalLayout {
     in property <string> label;
     in property <string> description;
+    in property <length> control-width: 220px;
     spacing: Design.space-lg;
 
     VerticalLayout {
@@ -47,7 +50,9 @@ component ControlRow inherits HorizontalLayout {
     }
 
     VerticalLayout {
+        width: root.control-width;
         horizontal-stretch: 0;
+        vertical-stretch: 0;
         alignment: center;
 
         @children
@@ -112,69 +117,6 @@ component ToggleSwitch inherits Rectangle {
     }
 }
 
-// A combo box. The list opens inline below the field, which keeps the layout
-// predictable inside a scroll view.
-component ChoiceField inherits VerticalLayout {
-    in property <[string]> choices;
-    in property <int> selected-index: 0;
-    in property <bool> enabled: true;
-    callback picked(int);
-
-    private property <bool> expanded: false;
-    spacing: Design.space-xs;
-
-    Field {
-        kind: FieldKind.combo;
-        width: 180px;
-        choices: root.choices;
-        selected-index: root.selected-index;
-        enabled: root.enabled;
-
-        selected(i) => {
-            root.expanded = !root.expanded;
-        }
-    }
-
-    if (root.expanded) : Rectangle {
-        width: 180px;
-        height: root.choices.length * 30px + 8px;
-        background: Design.card;
-        border-radius: Design.radius-md;
-        border-width: 1px;
-        border-color: Design.input;
-
-        VerticalLayout {
-            padding: 4px;
-            spacing: 2px;
-
-            for choice[i] in root.choices : Rectangle {
-                height: 28px;
-                border-radius: Design.radius-sm;
-                background: i == root.selected-index ? Design.secondary
-                    : row-touch.has-hover ? Design.muted
-                    : transparent;
-
-                Text {
-                    x: Design.space-sm;
-                    height: parent.height;
-                    text: choice;
-                    color: Design.foreground;
-                    font-family: Design.font-family;
-                    font-size: Design.font-sm;
-                    vertical-alignment: center;
-                }
-
-                row-touch := TouchArea {
-                    clicked => {
-                        root.picked(i);
-                        root.expanded = false;
-                    }
-                }
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The page
 // ---------------------------------------------------------------------------
@@ -227,20 +169,6 @@ export component SettingsPage inherits VerticalLayout {
     // -1 is "not set" in the model and shows as an empty field.
     function num-text(v: int) -> string {
         return v < 0 ? "" : "\{v}";
-    }
-
-    function mode-index(m: string) -> int {
-        if (m == "global") { return 1; }
-        if (m == "direct") { return 2; }
-        return 0;
-    }
-
-    function log-index(l: string) -> int {
-        if (l == "silent") { return 0; }
-        if (l == "error") { return 1; }
-        if (l == "warning") { return 2; }
-        if (l == "debug") { return 4; }
-        return 3;
     }
 
     // A port is 1 to 65535. Empty uses the default (HTTP: off). 0 is refused:
@@ -371,7 +299,6 @@ export component SettingsPage inherits VerticalLayout {
 
                     Field {
                         kind: FieldKind.number;
-                        width: 160px;
                         placeholder: "7890";
                         value <=> root.t-mixed;
                         error: !root.ok-mixed ? "Enter a port from 1 to 65535, or leave it empty."
@@ -388,7 +315,6 @@ export component SettingsPage inherits VerticalLayout {
 
                     Field {
                         kind: FieldKind.number;
-                        width: 160px;
                         placeholder: "7891";
                         value <=> root.t-socks;
                         error: !root.ok-socks ? "Enter a port from 1 to 65535, or leave it empty."
@@ -405,7 +331,6 @@ export component SettingsPage inherits VerticalLayout {
 
                     Field {
                         kind: FieldKind.number;
-                        width: 160px;
                         placeholder: "off";
                         value <=> root.t-http;
                         error: !root.ok-http ? "Enter a port from 1 to 65535, or leave it empty."
@@ -422,7 +347,6 @@ export component SettingsPage inherits VerticalLayout {
 
                     Field {
                         kind: FieldKind.text;
-                        width: 180px;
                         placeholder: "127.0.0.1";
                         value <=> root.t-bind;
                         edited(text) => {
@@ -438,6 +362,7 @@ export component SettingsPage inherits VerticalLayout {
                         : "Only this computer can use the proxy.";
 
                     HorizontalLayout {
+                        vertical-stretch: 0;
                         spacing: Design.space-sm;
                         alignment: end;
 
@@ -460,11 +385,11 @@ export component SettingsPage inherits VerticalLayout {
                     label: "Routing mode";
                     description: "Rule follows your rules, Global sends everything through the proxy, Direct bypasses it.";
 
-                    ChoiceField {
-                        choices: root.mode-choices;
-                        selected-index: root.mode-index(root.draft.mode);
-                        picked(i) => {
-                            root.draft.mode = root.mode-choices[i];
+                    AppSelect {
+                        options: root.mode-choices;
+                        value: root.draft.mode;
+                        selected(v) => {
+                            root.draft.mode = v;
                         }
                     }
                 }
@@ -473,11 +398,11 @@ export component SettingsPage inherits VerticalLayout {
                     label: "Log level";
                     description: "How much the engine writes to the Logs screen.";
 
-                    ChoiceField {
-                        choices: root.log-choices;
-                        selected-index: root.log-index(root.draft.log-level);
-                        picked(i) => {
-                            root.draft.log-level = root.log-choices[i];
+                    AppSelect {
+                        options: root.log-choices;
+                        value: root.draft.log-level;
+                        selected(v) => {
+                            root.draft.log-level = v;
                         }
                     }
                 }
@@ -513,10 +438,15 @@ export component SettingsPage inherits VerticalLayout {
                     label: "Enable TUN";
                     description: "Off by default. Turning it on triggers the elevation prompt.";
 
-                    ToggleSwitch {
-                        checked: root.draft.tun-enabled;
-                        toggled(v) => {
-                            root.draft.tun-enabled = v;
+                    HorizontalLayout {
+                        vertical-stretch: 0;
+                        alignment: end;
+
+                        ToggleSwitch {
+                            checked: root.draft.tun-enabled;
+                            toggled(v) => {
+                                root.draft.tun-enabled = v;
+                            }
                         }
                     }
                 }
@@ -527,7 +457,6 @@ export component SettingsPage inherits VerticalLayout {
 
                     Field {
                         kind: FieldKind.text;
-                        width: 180px;
                         placeholder: "starpod-tun";
                         value <=> root.t-device;
                         error: root.tun-name-ok ? "" : "Enter a device name, or turn TUN off.";
@@ -543,7 +472,6 @@ export component SettingsPage inherits VerticalLayout {
 
                     Field {
                         kind: FieldKind.number;
-                        width: 160px;
                         placeholder: "default";
                         value <=> root.t-mtu;
                         error: root.ok-mtu ? "" : "Enter a whole number from 1280 to 9000, or leave it empty.";
@@ -565,7 +493,6 @@ export component SettingsPage inherits VerticalLayout {
 
                     Field {
                         kind: FieldKind.number;
-                        width: 160px;
                         placeholder: "60";
                         value <=> root.t-refresh;
                         error: root.ok-refresh ? "" : "Enter a whole number from 0 to 10080, or leave it empty.";
@@ -653,27 +580,36 @@ export component SettingsPage inherits VerticalLayout {
                         ? (Bridge.engine-version != "" ? "Installed, version " + Bridge.engine-version : "Installed")
                         : "Not installed yet.";
 
-                    AppButton {
-                        text: Bridge.engine-installed ? "Update engine" : "Install engine";
-                        size: ButtonSize.lg;
-                        busy: Bridge.busy;
-                        busy-text: Bridge.busy-message;
-                        enabled: !Bridge.busy;
-                        disabled-reason: "Another operation is running. Wait for it to finish.";
-                        clicked => {
-                            Bridge.install-engine();
+                    HorizontalLayout {
+                        vertical-stretch: 0;
+                        alignment: end;
+
+                        AppButton {
+                            text: Bridge.engine-installed ? "Update engine" : "Install engine";
+                            size: ButtonSize.lg;
+                            busy: Bridge.busy;
+                            busy-text: Bridge.busy-message;
+                            enabled: !Bridge.busy;
+                            disabled-reason: "Another operation is running. Wait for it to finish.";
+                            clicked => {
+                                Bridge.install-engine();
+                            }
                         }
                     }
                 }
 
                 // Two-step clear: the first press asks, the second deletes.
+                // Three buttons sit in this row when confirming, so its
+                // control column is wider than the others.
                 ControlRow {
                     label: "Cached subscription data";
+                    control-width: 340px;
                     description: root.confirm-clear
                         ? "This deletes the downloaded subscription content. Your subscriptions stay configured."
                         : "Removes downloaded subscription content. It is fetched again on the next refresh.";
 
                     HorizontalLayout {
+                        vertical-stretch: 0;
                         spacing: Design.space-sm;
                         alignment: end;
 

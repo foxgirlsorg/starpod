@@ -13,3 +13,6 @@
 .vscode/
 .DS_Store
 Thumbs.db
+
+# UI screenshots written by tools/ui-shot.sh
+/shots/

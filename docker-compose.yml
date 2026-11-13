@@ -16,6 +16,21 @@ services:
       CARGO_TARGET_DIR: /target
     command: cargo build --workspace --all-targets
 
+  # Headless UI screenshots into <repo>/shots/ (tools/ui-shot.sh, see its header).
+  # Run: docker compose run --rm shot [dashboard|servers|rules|settings|logs]
+  shot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /work
+    entrypoint: ["bash", "/work/tools/ui-shot.sh"]
+    volumes:
+      - .:/work
+      - ./.scratch/cargo-registry:/usr/local/cargo/registry
+      - starpod-target:/target
+    environment:
+      CARGO_TARGET_DIR: /target
+
   # Cross-compiles dist/starpod.exe (x86_64-pc-windows-gnu, mingw-w64).
   # Run: docker compose run --rm windows
   windows:

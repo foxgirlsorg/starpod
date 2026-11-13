@@ -23,10 +23,20 @@ RUN apt-get update \
         libgl1-mesa-dev \
         libegl1-mesa-dev \
         libdbus-1-dev \
+        xvfb \
+        xauth \
+        x11-utils \
+        imagemagick \
+        xdotool \
+        fonts-dejavu-core \
+        fonts-inter \
         python3 \
         git \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# xvfb, xauth, x11-utils, imagemagick, xdotool and the fonts are for the
+# headless UI screenshots (tools/ui-shot.sh).
 
 # Bake the pinned toolchain (rust-toolchain.toml pins 1.92.0) into the image.
 RUN rustup toolchain install 1.92.0 --profile minimal --component rustfmt --component clippy \

@@ -92,9 +92,11 @@ fn try_platform_store(_fallback_path: &Path) -> Result<Box<dyn SecretStore>, Str
     // connection attempt.
     let store = super::secret_service::SecretServiceStore::new();
     // Probe: connecting is the only reliable way to know whether a keyring
-    // is running, and it costs one D-Bus round trip.
-    match secret_service::blocking::SecretService::connect(secret_service::EncryptionType::Plain) {
-        Ok(_) => Ok(Box::new(store)),
+    // is running, and it costs one D-Bus round trip. The probe runs on a
+    // worker thread, because this may be called from a tokio worker and the
+    // blocking D-Bus API panics there (see `secret_service.rs`).
+    match super::secret_service::probe() {
+        Ok(()) => Ok(Box::new(store)),
         Err(err) => Err(format!("no keyring is available on this system ({err})")),
     }
 }

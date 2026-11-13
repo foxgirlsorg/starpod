@@ -48,7 +48,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .thread_name("starpod-runtime")
         .build()?;
     info!("tokio runtime built");
-    let service = runtime.block_on(open_service())?;
+    // Opened outside `block_on`: on Linux the secret store probes the Secret
+    // Service through zbus's *blocking* API, which panics with "Cannot start a
+    // runtime from within a runtime" when called inside a tokio context.
+    let service = AppService::open_default()?;
+    info!("service opened");
+    let service = runtime.block_on(load_service(service))?;
     let _ = ENGINE.set((runtime.handle().clone(), service.clone()));
 
     select_renderer();
@@ -87,10 +92,8 @@ fn select_renderer() {
     }
 }
 
-/// Open the app's real dependencies and load the saved state.
-async fn open_service() -> Result<SharedAppService, AppError> {
-    let mut service = AppService::open_default()?;
-    info!("service opened");
+/// Load the saved state into the opened service.
+async fn load_service(mut service: AppService) -> Result<SharedAppService, AppError> {
     service.load().await?;
     info!("state loaded");
     Ok(service.into_shared())

@@ -7,9 +7,9 @@
 
 import { Design } from "../design.slint";
 import { Bridge } from "../bridge.slint";
-import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, EmptyState, LoadingState, SectionHeading } from "../primitives.slint";
+import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, EmptyState, LoadingState, SectionHeading, AppSelect, Field } from "../primitives.slint";
 import { IconChevronRight } from "../icons.slint";
-import { ScrollView, ComboBox, TextEdit } from "std-widgets.slint";
+import { ScrollView, TextEdit } from "std-widgets.slint";
 
 export component RulesPage inherits VerticalLayout {
     horizontal-stretch: 1;
@@ -19,10 +19,9 @@ export component RulesPage inherits VerticalLayout {
     private property <int> mode: 0;
     // The position of the rule the form is editing, or -1 when it adds one.
     private property <int> editing-index: -1;
-    // The combos hold the chosen value itself (bound through `current-value`),
-    // so no index lookup is needed when a rule is loaded into the form.
-    // A ComboBox given a value that is not in its model shows nothing and
-    // selects nothing, so the drafts start on the first choice, not on "".
+    // The selects hold the chosen value itself, so no index lookup is needed
+    // when a rule is loaded into the form. The drafts start on the first
+    // choice the engine offers, or "" until the lists arrive.
     private property <string> kind-draft: root.default-kind();
     private property <string> target-draft: root.default-target();
     private property <string> payload-draft: "";
@@ -284,85 +283,36 @@ export component RulesPage inherits VerticalLayout {
                         ? "Save replaces this rule in place. Cancel leaves it unchanged."
                         : "New rules go to the end of your list.";
 
+                    // Kind and Target share one row at equal width.
                     HorizontalLayout {
                         spacing: Design.space-md;
 
-                        VerticalLayout {
+                        AppSelect {
                             horizontal-stretch: 1;
-                            spacing: Design.space-xs;
-
-                            Text {
-                                text: "Kind";
-                                color: Design.muted-foreground;
-                                font-family: Design.font-family;
-                                font-size: Design.font-xs;
-                            }
-
-                            ComboBox {
-                                model: Bridge.rule-kinds;
-                                current-value <=> root.kind-draft;
+                            label: "Kind";
+                            options: Bridge.rule-kinds;
+                            value: root.kind-draft;
+                            selected(v) => {
+                                root.kind-draft = v;
                             }
                         }
 
-                        VerticalLayout {
+                        AppSelect {
                             horizontal-stretch: 1;
-                            spacing: Design.space-xs;
-
-                            Text {
-                                text: "Target";
-                                color: Design.muted-foreground;
-                                font-family: Design.font-family;
-                                font-size: Design.font-xs;
-                            }
-
-                            ComboBox {
-                                model: Bridge.rule-targets;
-                                current-value <=> root.target-draft;
+                            label: "Target";
+                            options: Bridge.rule-targets;
+                            value: root.target-draft;
+                            selected(v) => {
+                                root.target-draft = v;
                             }
                         }
                     }
 
-                    VerticalLayout {
-                        spacing: Design.space-xs;
-
-                        Text {
-                            text: "Payload";
-                            color: Design.muted-foreground;
-                            font-family: Design.font-family;
-                            font-size: Design.font-xs;
-                        }
-
-                        Rectangle {
-                            height: 36px;
-                            background: Design.background;
-                            border-radius: Design.radius-md;
-                            border-width: 1px;
-                            border-color: Design.input;
-
-                            // TextInput has no placeholder property in 1.18,
-                            // so the hint is shown only while the value is empty.
-                            if (root.payload-draft == "") : Text {
-                                x: Design.space-sm;
-                                width: parent.width - 2 * Design.space-sm;
-                                height: parent.height;
-                                text: "example.com, 10.0.0.0/8, 443";
-                                color: Design.muted-foreground;
-                                font-family: Design.font-family;
-                                font-size: Design.font-sm;
-                                vertical-alignment: center;
-                            }
-
-                            TextInput {
-                                x: Design.space-sm;
-                                width: parent.width - 2 * Design.space-sm;
-                                height: parent.height;
-                                color: Design.foreground;
-                                font-family: Design.font-family;
-                                font-size: Design.font-sm;
-                                vertical-alignment: center;
-                                text <=> root.payload-draft;
-                            }
-                        }
+                    // The payload takes the full width of the card.
+                    Field {
+                        label: "Payload";
+                        placeholder: "example.com, 10.0.0.0/8, 443";
+                        value <=> root.payload-draft;
                     }
 
                     Text {

@@ -8,12 +8,13 @@ import { ListView } from "std-widgets.slint";
 import { Design } from "../design.slint";
 import { Bridge, LogItem } from "../bridge.slint";
 import {
-    AppButton, ButtonVariant, Badge, BadgeVariant, Card,
-    EmptyState, LoadingState, SectionHeading
+    AppButton, ButtonVariant, ButtonSize, Badge, BadgeVariant, Card,
+    LoadingState, SectionHeading
 } from "../primitives.slint";
 
 // ---------------------------------------------------------------------------
-// One segment of the level filter.
+// One segment of the level filter. The same pill style as the Dashboard's
+// routing mode: the selected segment takes the brand red.
 // ---------------------------------------------------------------------------
 
 component LevelSegment inherits Rectangle {
@@ -21,11 +22,10 @@ component LevelSegment inherits Rectangle {
     in property <bool> selected: false;
     callback picked();
 
-    min-width: 64px;
-    height: 26px;
-    horizontal-stretch: 1;
+    width: 72px;
+    height: 24px;
     border-radius: Design.radius-md;
-    background: root.selected ? Design.background : transparent;
+    background: root.selected ? Design.primary : transparent;
 
     // The focus ring, the same halo AppButton uses.
     Rectangle {
@@ -42,10 +42,10 @@ component LevelSegment inherits Rectangle {
 
     Text {
         text: root.text;
-        color: root.selected ? Design.foreground : Design.muted-foreground;
+        color: root.selected ? Design.primary-foreground : Design.foreground;
         font-family: Design.font-family;
         font-size: Design.font-sm;
-        font-weight: root.selected ? 500 : 400;
+        font-weight: 500;
         horizontal-alignment: center;
         vertical-alignment: center;
         wrap: no-wrap;
@@ -150,6 +150,40 @@ component LogRow inherits VerticalLayout {
 }
 
 // ---------------------------------------------------------------------------
+// A compact centred empty state: a title and one line, no box.
+// ---------------------------------------------------------------------------
+
+component CompactEmpty inherits VerticalLayout {
+    in property <string> title;
+    in property <string> description;
+
+    padding-top: Design.space-xl;
+    padding-bottom: Design.space-xs;
+    spacing: Design.space-xs;
+    alignment: start;
+    vertical-stretch: 0;
+
+    Text {
+        text: root.title;
+        color: Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        font-weight: 500;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+
+    Text {
+        text: root.description;
+        color: Design.muted-foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-xs;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The page.
 // ---------------------------------------------------------------------------
 
@@ -177,20 +211,23 @@ export component LogsPage inherits VerticalLayout {
         vertical-stretch: 1;
         spacing: Design.space-md;
 
-        // Toolbar: the level filter on the left, Copy and Clear on the right.
+        // Toolbar: one 36px row. Every item is centred on the row's middle
+        // line, so the filter and the buttons share one axis.
         HorizontalLayout {
-            spacing: Design.space-md;
+            spacing: Design.space-sm;
             alignment: start;
+            height: 36px;
 
+            // The level filter: a compact five-segment control, 368px wide.
             Rectangle {
-                width: 340px;
+                width: 368px;
                 height: 32px;
-                background: Design.muted;
+                y: (parent.height - self.height) / 2;
+                background: Design.secondary;
                 border-radius: Design.radius-lg;
 
                 HorizontalLayout {
-                    padding: 3px;
-                    spacing: 2px;
+                    padding: Design.space-xs;
 
                     LevelSegment {
                         text: "All";
@@ -227,6 +264,8 @@ export component LogsPage inherits VerticalLayout {
             AppButton {
                 text: "Copy";
                 variant: ButtonVariant.outline;
+                size: ButtonSize.md;
+                y: (parent.height - self.height) / 2;
                 enabled: Bridge.logs.length > 0;
                 disabled-reason: "There are no log lines to copy yet.";
                 clicked => { Bridge.copy-logs(); }
@@ -235,6 +274,8 @@ export component LogsPage inherits VerticalLayout {
             AppButton {
                 text: "Clear";
                 variant: ButtonVariant.ghost;
+                size: ButtonSize.md;
+                y: (parent.height - self.height) / 2;
                 enabled: Bridge.logs.length > 0;
                 disabled-reason: "There are no log lines to clear.";
                 clicked => { Bridge.clear-logs(); }
@@ -252,11 +293,10 @@ export component LogsPage inherits VerticalLayout {
         // Empty state. The filter can hide every line, so when it is not
         // "all" the page says so.
         if (Bridge.logs.length == 0) : VerticalLayout {
-            vertical-stretch: 1;
-            alignment: center;
-            spacing: Design.space-md;
+            vertical-stretch: 0;
+            spacing: Design.space-xs;
 
-            EmptyState {
+            CompactEmpty {
                 title: "No log lines yet";
                 description: "Engine startup and shutdown, validation failures and subscription errors appear here as they happen.";
             }

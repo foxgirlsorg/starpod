@@ -437,6 +437,15 @@ pub fn run(
 ) -> Result<(), Box<dyn Error>> {
     let window = AppWindow::new()?;
     info!("window created");
+    // Debug hook for tools/ui-shot.sh: STARPOD_UI_PAGE=0..4 opens that page.
+    if let Some(page) = std::env::var("STARPOD_UI_PAGE")
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .filter(|page| (0..=4).contains(page))
+    {
+        window.global::<Bridge>().set_active_page(page);
+        info!(page, "STARPOD_UI_PAGE: opened the page given in the environment");
+    }
     let tray = create_tray();
     let tray_available = tray.is_some();
     let weak = window.as_weak();

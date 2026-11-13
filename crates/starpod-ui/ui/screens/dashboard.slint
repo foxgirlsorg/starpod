@@ -8,10 +8,11 @@
 import { ScrollView } from "std-widgets.slint";
 import { Design } from "../design.slint";
 import { Bridge } from "../bridge.slint";
-import { AppButton, ButtonSize, ButtonVariant, Card, EmptyState, LoadingState, SectionHeading, StatusDot, StatusKind } from "../primitives.slint";
+import { AppButton, ButtonSize, ButtonVariant, Card, LoadingState, SectionHeading, StatusDot, StatusKind } from "../primitives.slint";
 import { IconRefreshCw, IconTriangleAlert } from "../icons.slint";
 
-// One routing mode in the segmented control.
+// One routing mode in the compact segmented control. Each segment is a fixed
+// 88px; the selected one takes the brand red.
 component ModeSegment inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
@@ -19,7 +20,7 @@ component ModeSegment inherits Rectangle {
     in property <string> disabled-reason;
     callback clicked();
 
-    horizontal-stretch: 1;
+    width: 88px;
     height: 28px;
     border-radius: Design.radius-md;
     background: root.selected ? Design.primary : transparent;
@@ -43,6 +44,8 @@ component ModeSegment inherits Rectangle {
     }
 
     touch := TouchArea {
+        width: parent.width;
+        height: parent.height;
         enabled: root.enabled;
         clicked => {
             root.clicked();
@@ -50,17 +53,41 @@ component ModeSegment inherits Rectangle {
     }
 }
 
-// One label-and-value card in the information grid.
-component InfoCard inherits Card {
+// One information card: a muted label above a 14px value. The card is a
+// plain surface rather than a `Card`, because `Card`'s title is the larger
+// heading style and these cards need a small muted label.
+component InfoCard inherits Rectangle {
+    in property <string> label;
     in property <string> value;
 
-    Text {
-        text: root.value;
-        color: Design.foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-md;
-        font-weight: 500;
-        wrap: word-wrap;
+    horizontal-stretch: 1;
+    background: Design.card;
+    border-radius: Design.radius-xl;
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.10);
+
+    VerticalLayout {
+        padding: Design.space-lg;
+        spacing: Design.space-xs;
+        alignment: center;
+
+        Text {
+            text: root.label;
+            color: Design.muted-foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-xs;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.value;
+            color: Design.foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-sm;
+            font-weight: 500;
+            wrap: word-wrap;
+        }
     }
 }
 
@@ -83,6 +110,17 @@ export component DashboardPage inherits Rectangle {
         : Bridge.engine-phase == "failed" ? StatusKind.error
         : (Bridge.engine-phase == "starting" || Bridge.engine-phase == "stopping") ? StatusKind.syncing
         : StatusKind.stopped;
+
+    // Two info columns when the content is at least 760px wide, one below.
+    // The content width is the page width less the page padding on each side.
+    private property <bool> wide: root.width - 2 * Design.space-xl >= 760px;
+
+    // The four information values, read once for both column layouts.
+    private property <string> node-text: Bridge.current-node != "" ? Bridge.current-node : "No node selected";
+    private property <string> address-text: Bridge.listen-address != "" ? Bridge.listen-address : "Not reported";
+    private property <string> uptime-text: Bridge.uptime != "" ? Bridge.uptime : "Not running";
+    private property <string> version-text: Bridge.engine-version != "" ? Bridge.engine-version
+        : Bridge.engine-installed ? "Unknown" : "Not installed";
 
     ScrollView {
         width: root.width;
@@ -111,6 +149,7 @@ export component DashboardPage inherits Rectangle {
                 if (Bridge.busy) : HorizontalLayout {
                     spacing: Design.space-sm;
                     alignment: start;
+                    height: 20px;
 
                     IconRefreshCw {
                         width: 14px;
@@ -130,10 +169,12 @@ export component DashboardPage inherits Rectangle {
                     }
                 }
 
-                // The hero status word.
+                // The hero status word: the dot and the word share one
+                // 60px row and are both centred on its middle line.
                 HorizontalLayout {
                     spacing: Design.space-md;
                     alignment: start;
+                    height: 60px;
 
                     StatusDot {
                         kind: root.engine-kind;
@@ -142,10 +183,12 @@ export component DashboardPage inherits Rectangle {
 
                     Text {
                         text: root.hero-word;
+                        height: parent.height;
                         color: root.running ? Design.primary : Design.muted-foreground;
                         font-family: Design.font-family;
                         font-size: Design.font-hero;
                         font-weight: 700;
+                        vertical-alignment: center;
                         wrap: no-wrap;
                     }
                 }
@@ -230,7 +273,7 @@ export component DashboardPage inherits Rectangle {
                     AppButton {
                         text: "Install engine";
                         variant: ButtonVariant.default;
-                        size: ButtonSize.lg;
+                        size: ButtonSize.md;
                         enabled: !Bridge.busy;
                         disabled-reason: "Another task is running.";
                         clicked => {
@@ -240,23 +283,26 @@ export component DashboardPage inherits Rectangle {
                 }
 
                 // No usable subscription: say what is missing and send the
-                // user to Servers to fix it.
+                // user to Servers to fix it. The title names the problem, the
+                // description adds one sentence, the button goes to Servers.
                 if (Bridge.engine-installed && Bridge.connect-blocked-reason != "") : Card {
                     title: Bridge.subscriptions.length == 0 ? "Add a subscription to connect"
                         : "Refresh your subscription to connect";
-                    description: Bridge.connect-blocked-reason;
+                    description: Bridge.subscriptions.length == 0
+                        ? "Connecting needs the nodes from at least one subscription."
+                        : Bridge.connect-blocked-reason;
 
                     AppButton {
-                        text: Bridge.subscriptions.length == 0 ? "Add a subscription" : "Go to Servers";
+                        text: "Go to Servers";
                         variant: ButtonVariant.default;
-                        size: ButtonSize.lg;
+                        size: ButtonSize.md;
                         clicked => {
                             Bridge.active-page = 1;
                         }
                     }
                 }
 
-                // Quick actions.
+                // Quick actions: one row, the same gap between each.
                 HorizontalLayout {
                     spacing: Design.space-sm;
                     alignment: start;
@@ -302,7 +348,7 @@ export component DashboardPage inherits Rectangle {
                     }
                 }
 
-                // Routing mode.
+                // Routing mode: a compact three-segment control, not full width.
                 VerticalLayout {
                     spacing: Design.space-sm;
 
@@ -315,13 +361,13 @@ export component DashboardPage inherits Rectangle {
                     }
 
                     Rectangle {
+                        width: 272px;
                         height: 36px;
                         background: Design.secondary;
                         border-radius: Design.radius-lg;
 
                         HorizontalLayout {
                             padding: Design.space-xs;
-                            spacing: Design.space-xs;
 
                             ModeSegment {
                                 label: "Rule";
@@ -356,33 +402,62 @@ export component DashboardPage inherits Rectangle {
                     }
                 }
 
-                // Information cards, two to a row.
-                GridLayout {
+                // Information cards: a 2-column grid of equal-height cards
+                // when wide, one column of cards below that. Each row is a
+                // HorizontalLayout, so its cards share one height.
+                if (root.wide) : VerticalLayout {
                     spacing: Design.space-md;
 
-                    Row {
+                    HorizontalLayout {
+                        spacing: Design.space-md;
+
                         InfoCard {
-                            title: "Current node";
-                            value: Bridge.current-node != "" ? Bridge.current-node : "No node selected";
+                            label: "Current node";
+                            value: root.node-text;
                         }
 
                         InfoCard {
-                            title: "Listen address";
-                            value: Bridge.listen-address != "" ? Bridge.listen-address : "Not reported";
+                            label: "Listen address";
+                            value: root.address-text;
                         }
                     }
 
-                    Row {
+                    HorizontalLayout {
+                        spacing: Design.space-md;
+
                         InfoCard {
-                            title: "Uptime";
-                            value: Bridge.uptime != "" ? Bridge.uptime : "Not running";
+                            label: "Uptime";
+                            value: root.uptime-text;
                         }
 
                         InfoCard {
-                            title: "Engine version";
-                            value: Bridge.engine-version != "" ? Bridge.engine-version
-                                : Bridge.engine-installed ? "Unknown" : "Not installed";
+                            label: "Engine version";
+                            value: root.version-text;
                         }
+                    }
+                }
+
+                if (!root.wide) : VerticalLayout {
+                    spacing: Design.space-md;
+
+                    InfoCard {
+                        label: "Current node";
+                        value: root.node-text;
+                    }
+
+                    InfoCard {
+                        label: "Listen address";
+                        value: root.address-text;
+                    }
+
+                    InfoCard {
+                        label: "Uptime";
+                        value: root.uptime-text;
+                    }
+
+                    InfoCard {
+                        label: "Engine version";
+                        value: root.version-text;
                     }
                 }
 
@@ -392,12 +467,28 @@ export component DashboardPage inherits Rectangle {
                     description: Bridge.subscriptions.length == 0 ? "No subscriptions added"
                         : "\{Bridge.subscriptions.length} subscription(s)";
 
-                    if (Bridge.subscriptions.length == 0) : EmptyState {
-                        title: "No subscriptions yet";
-                        description: "Add a subscription on the Servers page to load its nodes.";
-                        action-text: "Go to Servers";
-                        action => {
-                            Bridge.active-page = 1;
+                    if (Bridge.subscriptions.length == 0) : VerticalLayout {
+                        spacing: Design.space-sm;
+
+                        Text {
+                            text: "Add one on the Servers page to load its nodes.";
+                            color: Design.muted-foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-sm;
+                            wrap: word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            alignment: start;
+
+                            AppButton {
+                                text: "Go to Servers";
+                                variant: ButtonVariant.outline;
+                                size: ButtonSize.md;
+                                clicked => {
+                                    Bridge.active-page = 1;
+                                }
+                            }
                         }
                     }
 

@@ -18,7 +18,7 @@
 //   wrapper. `TooltipArea` is the compiler's internal machinery.
 
 import { Design } from "design.slint";
-import { IconChevronDown, IconRefreshCw, IconTriangleAlert, IconX } from "icons.slint";
+import { IconCheck, IconChevronDown, IconRefreshCw, IconTriangleAlert, IconX } from "icons.slint";
 
 // ---------------------------------------------------------------------------
 // Button
@@ -38,6 +38,9 @@ export enum ButtonSize {
     lg,
 }
 
+// Heights 28 / 32 / 36px. The width hugs the label: text plus the side
+// padding (10 / 12 / 16px), so a caller that sets no width gets a button
+// that fits its words. A busy button makes room for the spinner on the left.
 export component AppButton inherits Rectangle {
     in property <string> text;
     in property <ButtonVariant> variant: ButtonVariant.default;
@@ -53,6 +56,10 @@ export component AppButton inherits Rectangle {
     in property <string> disabled-reason;
     callback clicked();
 
+    private property <length> pad-x: root.size == ButtonSize.sm ? 10px
+        : root.size == ButtonSize.lg ? 16px : 12px;
+    private property <length> spinner-room: root.busy ? 22px : 0px;
+
     background: variant == ButtonVariant.default ? Design.primary
         : variant == ButtonVariant.outline ? Design.background
         : variant == ButtonVariant.secondary ? Design.secondary
@@ -65,8 +72,8 @@ export component AppButton inherits Rectangle {
     border-radius: Design.radius-lg;
     opacity: enabled ? 1 : 0.5;
 
-    width: size == ButtonSize.sm ? 64px : size == ButtonSize.lg ? 120px : 96px;
     height: size == ButtonSize.sm ? 28px : size == ButtonSize.lg ? 36px : 32px;
+    width: label.preferred-width + 2 * root.pad-x + root.spinner-room;
 
     // The focus ring: a brand-red halo at half strength, the site's
     // `focus-visible:ring-3 ring-ring/50`.
@@ -82,14 +89,19 @@ export component AppButton inherits Rectangle {
         visible: focus-scope.has-focus;
     }
 
-    // The label.
-    Text {
+    // The label. It fills the button's width minus any spinner room and is
+    // centred in that space on both axes.
+    label := Text {
+        x: root.spinner-room;
+        width: root.width - root.spinner-room;
+        height: root.height;
         text: root.busy && root.busy-text != "" ? root.busy-text : root.text;
         color: root.variant == ButtonVariant.default ? Design.primary-foreground
             : root.variant == ButtonVariant.destructive ? Design.primary-foreground
             : Design.foreground;
         font-family: Design.font-family;
         font-size: Design.font-sm;
+        font-weight: 500;
         horizontal-alignment: center;
         vertical-alignment: center;
         wrap: no-wrap;
@@ -99,7 +111,7 @@ export component AppButton inherits Rectangle {
     if (root.busy) : IconRefreshCw {
         width: 14px;
         height: 14px;
-        x: 8px;
+        x: root.pad-x;
         y: (root.height - 14px) / 2;
         stroke: root.variant == ButtonVariant.default || root.variant == ButtonVariant.destructive
             ? Design.primary-foreground
@@ -227,12 +239,17 @@ export enum StatusKind {
     syncing,
 }
 
+// A fixed 10px dot. It takes no stretch, so a layout that centres it
+// (a VerticalLayout with `alignment: center`) places it on the text's
+// middle line; it carries no offset of its own.
 export component StatusDot inherits Rectangle {
     in property <StatusKind> kind: StatusKind.stopped;
 
-    width: 8px;
-    height: 8px;
-    border-radius: 4px;
+    width: 10px;
+    height: 10px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: 5px;
 
     background: kind == StatusKind.running ? Design.primary
         : kind == StatusKind.error ? Design.destructive
@@ -262,6 +279,11 @@ export component StatusDot inherits Rectangle {
 
 // ---------------------------------------------------------------------------
 // Field
+//
+// A labelled text box: the label sits above the box (12px, muted), the box
+// is 36px high with a 1px input border and 12px side padding, and the value
+// or placeholder is vertically centred. An error sits below the box.
+// An empty `label` renders no label row.
 // ---------------------------------------------------------------------------
 
 export enum FieldKind {
@@ -271,7 +293,7 @@ export enum FieldKind {
     combo,
 }
 
-export component Field inherits Rectangle {
+export component Field inherits VerticalLayout {
     in property <string> label;
     in property <string> placeholder;
     // Two-way: the TextInput writes into it, so a screen can read the value
@@ -288,60 +310,69 @@ export component Field inherits Rectangle {
     callback edited(string);
     callback selected(int);
 
-    height: 64px;
-
-    background: Design.background;
-    border-radius: Design.radius-md;
-    border-width: 1px;
-    border-color: root.error != "" ? Design.destructive : Design.input;
+    spacing: Design.space-xs;
+    vertical-stretch: 0;
 
     VerticalLayout {
-        padding: Design.space-xs;
-        spacing: 0px;
+        spacing: 6px;
+        vertical-stretch: 0;
 
         if (root.label != "") : Text {
             text: root.label;
             color: Design.muted-foreground;
             font-family: Design.font-family;
             font-size: Design.font-xs;
+            wrap: no-wrap;
         }
 
-        HorizontalLayout {
-            padding-left: Design.space-sm;
-            padding-right: Design.space-sm;
-            spacing: Design.space-sm;
+        box := Rectangle {
+            height: 36px;
+            vertical-stretch: 0;
+            background: Design.background;
+            border-radius: Design.radius-md;
+            border-width: 1px;
+            border-color: root.error != "" ? Design.destructive : Design.input;
 
-            // The combo's text and chevron. A combo is a read-only field
-            // whose value is chosen from a list, so it is a `Text` plus a
-            // chevron rather than an editable input.
-            if (root.kind == FieldKind.combo) : Rectangle {
-                width: parent.width;
-                height: 26px;
+            // The focus ring: the same halo the buttons use, in Design.ring.
+            Rectangle {
+                x: -3px;
+                y: -3px;
+                width: parent.width + 6px;
+                height: parent.height + 6px;
+                border-radius: Design.radius-md + 3px;
+                border-width: 3px;
+                border-color: Design.ring;
+                opacity: 0.5;
+                visible: input.has-focus;
+            }
 
-                Text {
-                    text: root.selected-index >= 0 && root.selected-index < root.choices.length
-                        ? root.choices[root.selected-index] : "";
-                    color: root.enabled ? Design.foreground : Design.muted-foreground;
-                    font-family: Design.font-family;
-                    font-size: Design.font-sm;
-                    vertical-alignment: center;
-                    width: parent.width - 24px;
-                    wrap: no-wrap;
-                }
+            // The combo: a read-only value chosen from a list.
+            if (root.kind == FieldKind.combo) : Text {
+                x: Design.space-md;
+                width: parent.width - 2 * Design.space-md - 24px;
+                height: parent.height;
+                text: root.selected-index >= 0 && root.selected-index < root.choices.length
+                    ? root.choices[root.selected-index] : "";
+                color: root.enabled ? Design.foreground : Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-sm;
+                vertical-alignment: center;
+                wrap: no-wrap;
+            }
 
-                IconChevronDown {
-                    width: 16px;
-                    height: 16px;
-                    x: parent.width - 16px;
-                    stroke: Design.muted-foreground;
-                    stroke-width: 2px;
-                }
+            if (root.kind == FieldKind.combo) : IconChevronDown {
+                width: 16px;
+                height: 16px;
+                x: parent.width - 12px - 16px;
+                y: (parent.height - self.height) / 2;
+                stroke: Design.muted-foreground;
+                stroke-width: 2px;
+            }
 
-                TouchArea {
-                    enabled: root.enabled;
-                    clicked => {
-                        root.selected(root.selected-index);
-                    }
+            if (root.kind == FieldKind.combo) : TouchArea {
+                enabled: root.enabled;
+                clicked => {
+                    root.selected(root.selected-index);
                 }
             }
 
@@ -350,33 +381,35 @@ export component Field inherits Rectangle {
             // `TextInput` has no placeholder property in Slint 1.18, so
             // the hint is a separate `Text` that is only visible while
             // the input is empty.
-            if (root.kind != FieldKind.combo) : Rectangle {
-                width: parent.width;
-                height: 26px;
+            if (root.kind != FieldKind.combo && root.value == "") : Text {
+                x: Design.space-md;
+                width: parent.width - 2 * Design.space-md;
+                height: parent.height;
+                text: root.placeholder;
+                color: Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-sm;
+                vertical-alignment: center;
+                wrap: no-wrap;
+            }
 
-                if (root.value == "") : Text {
-                    text: root.placeholder;
-                    color: Design.muted-foreground;
-                    font-family: Design.font-family;
-                    font-size: Design.font-sm;
-                    vertical-alignment: center;
-                }
+            input := TextInput {
+                visible: root.kind != FieldKind.combo;
+                x: Design.space-md;
+                width: parent.width - 2 * Design.space-md;
+                height: parent.height;
+                color: root.enabled ? Design.foreground : Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-sm;
+                vertical-alignment: center;
+                input-type: root.kind == FieldKind.password ? InputType.password
+                    : root.kind == FieldKind.number ? InputType.number : InputType.text;
+                read-only: root.read-only;
+                enabled: root.enabled;
+                text <=> root.value;
 
-                TextInput {
-                    width: parent.width;
-                    height: 26px;
-                    color: root.enabled ? Design.foreground : Design.muted-foreground;
-                    font-family: Design.font-family;
-                    font-size: Design.font-sm;
-                    input-type: root.kind == FieldKind.password ? InputType.password
-                        : root.kind == FieldKind.number ? InputType.number : InputType.text;
-                    read-only: root.read-only;
-                    enabled: root.enabled;
-                    text <=> root.value;
-
-                    edited => {
-                        root.edited(self.text);
-                    }
+                edited => {
+                    root.edited(self.text);
                 }
             }
         }
@@ -387,7 +420,134 @@ export component Field inherits Rectangle {
         color: Design.destructive;
         font-family: Design.font-family;
         font-size: Design.font-xs;
-        y: parent.height + 2px;
+        wrap: word-wrap;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Select
+//
+// The same box as Field, showing the chosen value vertically centred with a
+// 16px chevron 12px from the right edge. A click opens a themed list in a
+// PopupWindow below the box: rows are 32px, hover uses Design.accent, and the
+// chosen row carries a check.
+//
+// The component never writes `value`. The caller owns it: bind it with
+// `value: ...` (or `<=>` to a property the caller writes), and set it again
+// in `selected(v)`. That keeps a binding to a struct field intact.
+// ---------------------------------------------------------------------------
+
+export component AppSelect inherits VerticalLayout {
+    in property <[string]> options;
+    in-out property <string> value;
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> enabled: true;
+    callback selected(string);
+
+    spacing: 6px;
+    vertical-stretch: 0;
+
+    if (root.label != "") : Text {
+        text: root.label;
+        color: Design.muted-foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-xs;
+        wrap: no-wrap;
+    }
+
+    box := Rectangle {
+        height: 36px;
+        vertical-stretch: 0;
+        background: Design.background;
+        border-radius: Design.radius-md;
+        border-width: 1px;
+        border-color: popup.is-open ? Design.ring : Design.input;
+        opacity: root.enabled ? 1 : 0.5;
+
+        Text {
+            x: Design.space-md;
+            width: parent.width - 2 * Design.space-md - 16px - Design.space-sm;
+            height: parent.height;
+            text: root.value != "" ? root.value : root.placeholder;
+            color: root.value != "" ? Design.foreground : Design.muted-foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-sm;
+            vertical-alignment: center;
+            overflow: elide;
+            wrap: no-wrap;
+        }
+
+        IconChevronDown {
+            width: 16px;
+            height: 16px;
+            x: parent.width - 12px - 16px;
+            y: (parent.height - self.height) / 2;
+            stroke: Design.muted-foreground;
+            stroke-width: 2px;
+        }
+
+        TouchArea {
+            enabled: root.enabled;
+            clicked => {
+                popup.show();
+            }
+        }
+
+        popup := PopupWindow {
+            x: 0;
+            y: box.height + 4px;
+            width: box.width;
+            height: root.options.length * 32px + 8px;
+            close-policy: close-on-click-outside;
+
+            Rectangle {
+                background: Design.popover;
+                border-radius: Design.radius-md;
+                border-width: 1px;
+                border-color: Design.input;
+
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 0px;
+
+                    for option[i] in root.options : Rectangle {
+                        height: 32px;
+                        border-radius: Design.radius-sm;
+                        background: option-touch.has-hover ? Design.accent : transparent;
+
+                        Text {
+                            x: Design.space-sm;
+                            width: parent.width - 2 * Design.space-sm - 16px - Design.space-sm;
+                            height: parent.height;
+                            text: option;
+                            color: Design.foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-sm;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            wrap: no-wrap;
+                        }
+
+                        if (option == root.value) : IconCheck {
+                            width: 16px;
+                            height: 16px;
+                            x: parent.width - 16px - Design.space-sm;
+                            y: (parent.height - self.height) / 2;
+                            stroke: Design.foreground;
+                            stroke-width: 2px;
+                        }
+
+                        option-touch := TouchArea {
+                            clicked => {
+                                root.selected(option);
+                                popup.close();
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -432,7 +592,8 @@ export component SectionHeading inherits VerticalLayout {
 // Empty state
 //
 // GOAL.md §5 requires every screen to have an explicit empty state — no
-// blank panels.
+// blank panels. It takes its natural height (no stretch), so inside a card
+// it is a compact centred block, not an empty box.
 // ---------------------------------------------------------------------------
 
 export component EmptyState inherits VerticalLayout {
@@ -441,14 +602,17 @@ export component EmptyState inherits VerticalLayout {
     in property <string> action-text;
     callback action();
 
-    spacing: Design.space-sm;
+    spacing: Design.space-xs;
     alignment: center;
+    vertical-stretch: 0;
+    padding-top: Design.space-sm;
+    padding-bottom: Design.space-sm;
 
     Text {
         text: root.title;
         color: Design.foreground;
         font-family: Design.font-family;
-        font-size: Design.font-md;
+        font-size: Design.font-sm;
         font-weight: 500;
         horizontal-alignment: center;
         wrap: word-wrap;
@@ -458,7 +622,7 @@ export component EmptyState inherits VerticalLayout {
         text: root.description;
         color: Design.muted-foreground;
         font-family: Design.font-family;
-        font-size: Design.font-sm;
+        font-size: Design.font-xs;
         horizontal-alignment: center;
         wrap: word-wrap;
     }

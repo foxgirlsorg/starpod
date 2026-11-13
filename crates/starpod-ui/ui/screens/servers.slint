@@ -8,9 +8,74 @@
 
 import { Design } from "../design.slint";
 import { Bridge } from "../bridge.slint";
-import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, Field, FieldKind, StatusDot, StatusKind, SectionHeading, EmptyState, LoadingState } from "../primitives.slint";
+import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, Field, FieldKind, StatusDot, StatusKind, SectionHeading, LoadingState } from "../primitives.slint";
 import { IconCheck } from "../icons.slint";
 import { ScrollView } from "std-widgets.slint";
+
+// One choice in the compact segmented control (the same pill style as the
+// Dashboard's routing mode). Each segment is a fixed 128px.
+component ChoiceSegment inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    callback clicked();
+
+    width: 128px;
+    height: 28px;
+    border-radius: Design.radius-md;
+    background: root.selected ? Design.primary : transparent;
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.label;
+        color: root.selected ? Design.primary-foreground : Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+
+    touch := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A centred empty state for inside a card: a title and one line, no box.
+component CompactEmpty inherits VerticalLayout {
+    in property <string> title;
+    in property <string> description;
+
+    padding-top: Design.space-md;
+    padding-bottom: Design.space-md;
+    spacing: Design.space-xs;
+    alignment: center;
+    vertical-stretch: 0;
+
+    Text {
+        text: root.title;
+        color: Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        font-weight: 500;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+
+    Text {
+        text: root.description;
+        color: Design.muted-foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-xs;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+}
 
 export component ServersPage inherits ScrollView {
     // Add-subscription form (UI state only).
@@ -43,6 +108,7 @@ export component ServersPage inherits ScrollView {
         Card {
             HorizontalLayout {
                 spacing: Design.space-sm;
+                alignment: start;
 
                 VerticalLayout {
                     horizontal-stretch: 1;
@@ -68,7 +134,7 @@ export component ServersPage inherits ScrollView {
                 AppButton {
                     text: "Refresh all";
                     variant: ButtonVariant.outline;
-                    size: ButtonSize.lg;
+                    size: ButtonSize.md;
                     enabled: Bridge.subscriptions.length > 0;
                     disabled-reason: "Add a subscription first.";
                     clicked => {
@@ -81,9 +147,9 @@ export component ServersPage inherits ScrollView {
                 message: "Loading subscriptions…";
             }
 
-            if (Bridge.loaded && Bridge.subscriptions.length == 0) : EmptyState {
+            if (Bridge.loaded && Bridge.subscriptions.length == 0) : CompactEmpty {
                 title: "No subscriptions yet";
-                description: "Add one below. Its nodes appear in the list once it has been fetched.";
+                description: "Add one below. Its nodes appear here once it has been fetched.";
             }
 
             for row in Bridge.subscriptions : VerticalLayout {
@@ -207,7 +273,7 @@ export component ServersPage inherits ScrollView {
                     if (pending-remove == row.id) : AppButton {
                         text: "Cancel";
                         variant: ButtonVariant.ghost;
-                        size: ButtonSize.lg;
+                        size: ButtonSize.md;
                         clicked => {
                             pending-remove = "";
                         }
@@ -216,7 +282,7 @@ export component ServersPage inherits ScrollView {
                     AppButton {
                         text: "Refresh";
                         variant: ButtonVariant.outline;
-                        size: ButtonSize.lg;
+                        size: ButtonSize.md;
                         enabled: row.status != "syncing";
                         disabled-reason: "This subscription is already refreshing.";
                         clicked => {
@@ -227,7 +293,7 @@ export component ServersPage inherits ScrollView {
                     AppButton {
                         text: row.mode == "app-managed" ? "Switch to engine" : "Switch to app";
                         variant: ButtonVariant.outline;
-                        size: ButtonSize.lg;
+                        size: ButtonSize.md;
                         clicked => {
                             pending-remove = "";
                             Bridge.set-subscription-mode(row.id, row.mode == "app-managed" ? "engine-managed" : "app-managed");
@@ -238,7 +304,7 @@ export component ServersPage inherits ScrollView {
                     AppButton {
                         text: pending-remove == row.id ? "Confirm remove" : "Remove";
                         variant: ButtonVariant.destructive;
-                        size: ButtonSize.lg;
+                        size: ButtonSize.md;
                         clicked => {
                             if (pending-remove == row.id) {
                                 pending-remove = "";
@@ -256,13 +322,7 @@ export component ServersPage inherits ScrollView {
         // Add subscription
         // ------------------------------------------------------------------
         Card {
-            Text {
-                text: "Add subscription";
-                color: Design.foreground;
-                font-family: Design.font-family;
-                font-size: Design.font-md;
-                font-weight: 500;
-            }
+            title: "Add subscription";
 
             Field {
                 label: "Label";
@@ -288,44 +348,53 @@ export component ServersPage inherits ScrollView {
                 value <=> form-header;
             }
 
-            Text {
-                text: "Management mode";
-                color: Design.muted-foreground;
-                font-family: Design.font-family;
-                font-size: Design.font-xs;
-            }
-
-            HorizontalLayout {
-                alignment: start;
+            VerticalLayout {
                 spacing: Design.space-sm;
 
-                AppButton {
-                    text: "App-managed";
-                    width: 140px;
-                    variant: form-mode == "app-managed" ? ButtonVariant.default : ButtonVariant.outline;
-                    clicked => {
-                        form-mode = "app-managed";
+                Text {
+                    text: "Management mode";
+                    color: Design.muted-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-xs;
+                    font-weight: 500;
+                }
+
+                Rectangle {
+                    width: 264px;
+                    height: 36px;
+                    background: Design.secondary;
+                    border-radius: Design.radius-lg;
+
+                    HorizontalLayout {
+                        padding: Design.space-xs;
+
+                        ChoiceSegment {
+                            label: "App-managed";
+                            selected: form-mode == "app-managed";
+                            clicked => {
+                                form-mode = "app-managed";
+                            }
+                        }
+
+                        ChoiceSegment {
+                            label: "Engine-managed";
+                            selected: form-mode == "engine-managed";
+                            clicked => {
+                                form-mode = "engine-managed";
+                            }
+                        }
                     }
                 }
 
-                AppButton {
-                    text: "Engine-managed";
-                    width: 140px;
-                    variant: form-mode == "engine-managed" ? ButtonVariant.default : ButtonVariant.outline;
-                    clicked => {
-                        form-mode = "engine-managed";
-                    }
+                Text {
+                    text: form-mode == "app-managed"
+                        ? "The app fetches the subscription and tracks its quota. It can send the Authorization header."
+                        : "The engine fetches the subscription itself and reports no quota here. It cannot send the Authorization header.";
+                    color: Design.muted-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-xs;
+                    wrap: word-wrap;
                 }
-            }
-
-            Text {
-                text: form-mode == "app-managed"
-                    ? "The app fetches the subscription and tracks its quota. It can send the Authorization header."
-                    : "The engine fetches the subscription itself and reports no quota here. It cannot send the Authorization header.";
-                color: Design.muted-foreground;
-                font-family: Design.font-family;
-                font-size: Design.font-xs;
-                wrap: word-wrap;
             }
 
             HorizontalLayout {
@@ -335,6 +404,7 @@ export component ServersPage inherits ScrollView {
                     text: "Add subscription";
                     width: 160px;
                     variant: ButtonVariant.default;
+                    size: ButtonSize.md;
                     enabled: form-label != "" && form-url != "";
                     disabled-reason: form-label == "" ? "Enter a label to add the subscription." : "Enter the subscription URL to add it.";
                     clicked => {
@@ -353,6 +423,7 @@ export component ServersPage inherits ScrollView {
         Card {
             HorizontalLayout {
                 spacing: Design.space-sm;
+                alignment: start;
 
                 VerticalLayout {
                     horizontal-stretch: 1;
@@ -377,7 +448,7 @@ export component ServersPage inherits ScrollView {
                 AppButton {
                     text: "Test latency";
                     variant: ButtonVariant.outline;
-                    size: ButtonSize.lg;
+                    size: ButtonSize.md;
                     width: 136px;
                     enabled: Bridge.nodes.length > 0;
                     disabled-reason: "There are no nodes to test yet.";
@@ -388,7 +459,7 @@ export component ServersPage inherits ScrollView {
             }
 
             Field {
-                placeholder: "Search nodes by name or group";
+                placeholder: "Search nodes";
                 value <=> Bridge.node-filter;
             }
 
@@ -396,12 +467,12 @@ export component ServersPage inherits ScrollView {
                 message: "Loading nodes…";
             }
 
-            if (Bridge.loaded && Bridge.nodes.length == 0 && Bridge.node-filter == "") : EmptyState {
+            if (Bridge.loaded && Bridge.nodes.length == 0 && Bridge.node-filter == "") : CompactEmpty {
                 title: "No nodes yet";
                 description: "Nodes come from subscriptions. Add one above and refresh it.";
             }
 
-            if (Bridge.loaded && Bridge.nodes.length == 0 && Bridge.node-filter != "") : EmptyState {
+            if (Bridge.loaded && Bridge.nodes.length == 0 && Bridge.node-filter != "") : CompactEmpty {
                 title: "No nodes match the search";
                 description: "Clear the search to see every node.";
             }
