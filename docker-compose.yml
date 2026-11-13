@@ -1,0 +1,21 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /work
+    volumes:
+      # Repo source, live from the host.
+      - .:/work
+      # Crate sources land here so they are readable on the Windows host
+      # under .scratch/cargo-registry/src/ (gitignored).
+      - ./.scratch/cargo-registry:/usr/local/cargo/registry
+      # Named volume for build artifacts: bind-mounted targets are slow on Windows.
+      - starpod-target:/target
+    environment:
+      CARGO_TARGET_DIR: /target
+    command: cargo build --workspace --all-targets
+
+volumes:
+  starpod-target:
+    name: starpod-target

@@ -1,0 +1,560 @@
+// The Servers screen (ARCHITECTURE §6.2).
+//
+// Layout and display only. Every action calls a Bridge callback. Rust owns
+// the subscription list, the node list and the node filter (the filter is
+// applied in Rust, never here). The only state kept in this file is UI
+// state: the add form's fields, the chosen management mode, and which
+// subscription row is waiting for its second remove click.
+
+import { Design } from "../design.slint";
+import { Bridge } from "../bridge.slint";
+import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, StatusDot, StatusKind, SectionHeading, EmptyState, LoadingState } from "../primitives.slint";
+import { IconCheck } from "../icons.slint";
+import { ScrollView } from "std-widgets.slint";
+
+// A text input with the Field chrome. `Field` in primitives takes its value
+// one way only, so it cannot be cleared after an add or bound two-way to the
+// node search. This copy holds the value as `in-out` and binds the TextInput
+// to it with `<=>`, so the parent can read and reset it.
+component FormField inherits Rectangle {
+    in property <string> label;
+    in property <string> placeholder;
+    in-out property <string> value;
+    in property <bool> password: false;
+    in property <bool> enabled: true;
+
+    height: 58px;
+
+    background: Design.background;
+    border-radius: Design.radius-md;
+    border-width: 1px;
+    border-color: Design.input;
+    opacity: root.enabled ? 1 : 0.5;
+
+    VerticalLayout {
+        padding-left: Design.space-sm;
+        padding-right: Design.space-sm;
+        padding-top: Design.space-xs;
+        padding-bottom: Design.space-xs;
+        spacing: 0px;
+
+        if (root.label != "") : Text {
+            text: root.label;
+            color: Design.muted-foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-xs;
+        }
+
+        Rectangle {
+            height: 24px;
+
+            // TextInput has no placeholder property in Slint 1.18, so the
+            // hint is a Text that is shown only while the value is empty.
+            if (root.value == "") : Text {
+                text: root.placeholder;
+                color: Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-sm;
+                vertical-alignment: center;
+            }
+
+            TextInput {
+                width: parent.width;
+                height: parent.height;
+                text <=> root.value;
+                color: root.enabled ? Design.foreground : Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-sm;
+                vertical-alignment: center;
+                single-line: true;
+                input-type: root.password ? InputType.password : InputType.text;
+                enabled: root.enabled;
+            }
+        }
+    }
+}
+
+export component ServersPage inherits ScrollView {
+    // Add-subscription form (UI state only).
+    private property <string> form-label: "";
+    private property <string> form-url: "";
+    private property <string> form-header: "";
+    // "app-managed" | "engine-managed"
+    private property <string> form-mode: "app-managed";
+    // The subscription id waiting for its second remove click.
+    private property <string> pending-remove: "";
+
+    // The node list grows with its content up to a fixed height, then scrolls.
+    private property <length> node-list-height: min(360px, max(36px, Bridge.nodes.length * 36px));
+
+    VerticalLayout {
+        width: parent.width;
+        padding: Design.space-xl;
+        spacing: Design.space-lg;
+        alignment: start;
+
+        SectionHeading {
+            eyebrow: "Upstream";
+            title: "Servers";
+            description: "Subscriptions supply the nodes. Pick a node to route traffic through it.";
+        }
+
+        // ------------------------------------------------------------------
+        // Subscriptions
+        // ------------------------------------------------------------------
+        Card {
+            HorizontalLayout {
+                spacing: Design.space-sm;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+
+                    Text {
+                        text: "Subscriptions";
+                        color: Design.foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-md;
+                        font-weight: 500;
+                    }
+
+                    Text {
+                        text: "Each subscription is a source of nodes.";
+                        color: Design.muted-foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-sm;
+                        wrap: word-wrap;
+                    }
+                }
+
+                AppButton {
+                    text: "Refresh all";
+                    variant: ButtonVariant.outline;
+                    size: ButtonSize.lg;
+                    enabled: Bridge.subscriptions.length > 0;
+                    disabled-reason: "Add a subscription first.";
+                    clicked => {
+                        Bridge.refresh-all();
+                    }
+                }
+            }
+
+            if (!Bridge.loaded) : LoadingState {
+                message: "Loading subscriptions…";
+            }
+
+            if (Bridge.loaded && Bridge.subscriptions.length == 0) : EmptyState {
+                title: "No subscriptions yet";
+                description: "Add one below. Its nodes appear in the list once it has been fetched.";
+            }
+
+            for row in Bridge.subscriptions : VerticalLayout {
+                spacing: Design.space-xs;
+
+                Rectangle {
+                    height: 1px;
+                    background: Design.border;
+                }
+
+                HorizontalLayout {
+                    spacing: Design.space-sm;
+
+                    // A fixed slot for the status dot, centred on the title line.
+                    Rectangle {
+                        width: 8px;
+                        height: 20px;
+
+                        StatusDot {
+                            x: 0px;
+                            y: (parent.height - self.height) / 2;
+                            kind: row.status == "ok" ? StatusKind.running
+                                : row.status == "error" ? StatusKind.error
+                                : row.status == "syncing" ? StatusKind.syncing
+                                : StatusKind.stopped;
+                        }
+                    }
+
+                    Text {
+                        text: row.label;
+                        color: Design.foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-sm;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        wrap: no-wrap;
+                    }
+
+                    Badge {
+                        text: row.mode;
+                        variant: row.mode == "engine-managed" ? BadgeVariant.outline : BadgeVariant.secondary;
+                        width: 116px;
+                    }
+                }
+
+                VerticalLayout {
+                    padding-left: 16px;
+                    spacing: 2px;
+
+                    Text {
+                        text: (row.status == "ok" ? "Up to date"
+                            : row.status == "error" ? "Failed"
+                            : row.status == "syncing" ? "Syncing"
+                            : "Never fetched")
+                            + " · " + (row.node-count == 1 ? "1 node" : (row.node-count + " nodes"))
+                            + " · " + (row.last-updated != "" ? ("updated " + row.last-updated) : "never updated");
+                        color: Design.muted-foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-xs;
+                        wrap: word-wrap;
+                    }
+
+                    if (row.expires != "") : Text {
+                        text: "Expires " + row.expires;
+                        color: Design.muted-foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-xs;
+                    }
+
+                    // Quota exists only for app-managed subscriptions. An
+                    // engine-managed row says so rather than showing a zero.
+                    if (row.has-quota) : VerticalLayout {
+                        spacing: 4px;
+                        padding-top: 2px;
+
+                        Rectangle {
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Design.secondary;
+
+                            Rectangle {
+                                x: 0px;
+                                width: parent.width * min(1, max(0, row.quota-used-fraction));
+                                height: parent.height;
+                                border-radius: 3px;
+                                background: row.quota-used-fraction > 0.9 ? Design.destructive : Design.primary;
+                            }
+                        }
+
+                        Text {
+                            text: row.quota-text;
+                            color: Design.muted-foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-xs;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    if (!row.has-quota) : Text {
+                        text: "Quota managed by the engine";
+                        color: Design.muted-foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-xs;
+                    }
+
+                    if (row.error != "") : Text {
+                        text: row.error;
+                        color: Design.destructive;
+                        font-family: Design.font-family;
+                        font-size: Design.font-xs;
+                        wrap: word-wrap;
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Design.space-sm;
+
+                    if (pending-remove == row.id) : AppButton {
+                        text: "Cancel";
+                        variant: ButtonVariant.ghost;
+                        size: ButtonSize.lg;
+                        clicked => {
+                            pending-remove = "";
+                        }
+                    }
+
+                    AppButton {
+                        text: "Refresh";
+                        variant: ButtonVariant.outline;
+                        size: ButtonSize.lg;
+                        enabled: row.status != "syncing";
+                        disabled-reason: "This subscription is already refreshing.";
+                        clicked => {
+                            Bridge.refresh-subscription(row.id);
+                        }
+                    }
+
+                    AppButton {
+                        text: row.mode == "app-managed" ? "Switch to engine" : "Switch to app";
+                        variant: ButtonVariant.outline;
+                        size: ButtonSize.lg;
+                        clicked => {
+                            pending-remove = "";
+                            Bridge.set-subscription-mode(row.id, row.mode == "app-managed" ? "engine-managed" : "app-managed");
+                        }
+                    }
+
+                    // Two steps: the first click arms the button, the second removes.
+                    AppButton {
+                        text: pending-remove == row.id ? "Confirm remove" : "Remove";
+                        variant: ButtonVariant.destructive;
+                        size: ButtonSize.lg;
+                        clicked => {
+                            if (pending-remove == row.id) {
+                                pending-remove = "";
+                                Bridge.remove-subscription(row.id);
+                            } else {
+                                pending-remove = row.id;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Add subscription
+        // ------------------------------------------------------------------
+        Card {
+            Text {
+                text: "Add subscription";
+                color: Design.foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-md;
+                font-weight: 500;
+            }
+
+            FormField {
+                label: "Label";
+                placeholder: "For example: Work proxies";
+                value <=> form-label;
+            }
+
+            // The URL carries a token, so it is masked like a password.
+            FormField {
+                label: "Subscription URL";
+                placeholder: "https://";
+                password: true;
+                value <=> form-url;
+            }
+
+            // The engine cannot send this header, so the field is disabled in
+            // engine-managed mode and is never passed to Bridge.
+            FormField {
+                label: "Authorization header (optional)";
+                placeholder: "Bearer …";
+                password: true;
+                enabled: form-mode == "app-managed";
+                value <=> form-header;
+            }
+
+            Text {
+                text: "Management mode";
+                color: Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-xs;
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                spacing: Design.space-sm;
+
+                AppButton {
+                    text: "App-managed";
+                    width: 140px;
+                    variant: form-mode == "app-managed" ? ButtonVariant.default : ButtonVariant.outline;
+                    clicked => {
+                        form-mode = "app-managed";
+                    }
+                }
+
+                AppButton {
+                    text: "Engine-managed";
+                    width: 140px;
+                    variant: form-mode == "engine-managed" ? ButtonVariant.default : ButtonVariant.outline;
+                    clicked => {
+                        form-mode = "engine-managed";
+                    }
+                }
+            }
+
+            Text {
+                text: form-mode == "app-managed"
+                    ? "The app fetches the subscription and tracks its quota. It can send the Authorization header."
+                    : "The engine fetches the subscription itself and reports no quota here. It cannot send the Authorization header.";
+                color: Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-xs;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                alignment: end;
+
+                AppButton {
+                    text: "Add subscription";
+                    width: 160px;
+                    variant: ButtonVariant.default;
+                    enabled: form-label != "" && form-url != "";
+                    disabled-reason: form-label == "" ? "Enter a label to add the subscription." : "Enter the subscription URL to add it.";
+                    clicked => {
+                        Bridge.add-subscription(form-label, form-url, form-mode == "app-managed" ? form-header : "", form-mode);
+                        form-label = "";
+                        form-url = "";
+                        form-header = "";
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Nodes
+        // ------------------------------------------------------------------
+        Card {
+            HorizontalLayout {
+                spacing: Design.space-sm;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+
+                    Text {
+                        text: "Nodes";
+                        color: Design.foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-md;
+                        font-weight: 500;
+                    }
+
+                    Text {
+                        text: Bridge.nodes.length == 1 ? "1 node shown" : (Bridge.nodes.length + " nodes shown");
+                        color: Design.muted-foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-sm;
+                    }
+                }
+
+                AppButton {
+                    text: "Test latency";
+                    variant: ButtonVariant.outline;
+                    size: ButtonSize.lg;
+                    width: 136px;
+                    enabled: Bridge.nodes.length > 0;
+                    disabled-reason: "There are no nodes to test yet.";
+                    clicked => {
+                        Bridge.test-latency();
+                    }
+                }
+            }
+
+            FormField {
+                placeholder: "Search nodes by name or group";
+                value <=> Bridge.node-filter;
+            }
+
+            if (!Bridge.loaded) : LoadingState {
+                message: "Loading nodes…";
+            }
+
+            if (Bridge.loaded && Bridge.nodes.length == 0 && Bridge.node-filter == "") : EmptyState {
+                title: "No nodes yet";
+                description: "Nodes come from subscriptions. Add one above and refresh it.";
+            }
+
+            if (Bridge.loaded && Bridge.nodes.length == 0 && Bridge.node-filter != "") : EmptyState {
+                title: "No nodes match the search";
+                description: "Clear the search to see every node.";
+            }
+
+            if (Bridge.nodes.length > 0) : ScrollView {
+                height: node-list-height;
+
+                VerticalLayout {
+                    width: parent.width;
+                    spacing: 2px;
+
+                    for node in Bridge.nodes : Rectangle {
+                        height: 36px;
+                        border-radius: Design.radius-md;
+                        background: node.selected ? Design.secondary
+                            : touch.has-hover ? Design.muted
+                            : transparent;
+
+                        HorizontalLayout {
+                            width: parent.width;
+                            height: parent.height;
+                            padding-left: Design.space-sm;
+                            padding-right: Design.space-sm;
+                            spacing: Design.space-sm;
+
+                            // The selected checkmark. The slot is kept when the node is not selected so the names line up.
+                            Rectangle {
+                                width: 16px;
+
+                                IconCheck {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 14px;
+                                    height: 14px;
+                                    visible: node.selected;
+                                    stroke: Design.primary;
+                                    stroke-width: 2px;
+                                }
+                            }
+
+                            Text {
+                                text: node.name;
+                                color: Design.foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-sm;
+                                font-weight: node.selected ? 600 : 400;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                                wrap: no-wrap;
+                            }
+
+                            Badge {
+                                text: node.protocol;
+                                variant: BadgeVariant.secondary;
+                                width: 80px;
+                            }
+
+                            Text {
+                                text: node.group;
+                                color: Design.muted-foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-xs;
+                                vertical-alignment: center;
+                                width: 96px;
+                                overflow: elide;
+                                wrap: no-wrap;
+                            }
+
+                            Text {
+                                text: node.latency-ms < 0 ? "—" : (node.latency-ms + " ms");
+                                color: Design.muted-foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-xs;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                                width: 64px;
+                                wrap: no-wrap;
+                            }
+                        }
+
+                        touch := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => {
+                                Bridge.select-node(node.id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -30,7 +30,9 @@ pub fn format(timestamp: i64) -> Option<String> {
 /// silently interpreted in the machine's timezone. A value that does not
 /// parse reads as absent.
 pub fn parse(text: &str) -> Option<i64> {
-    OffsetDateTime::parse(text, &Rfc3339).ok().map(|dt| dt.unix_timestamp())
+    OffsetDateTime::parse(text, &Rfc3339)
+        .ok()
+        .map(|dt| dt.unix_timestamp())
 }
 
 /// The current time, as RFC 3339.

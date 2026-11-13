@@ -1,0 +1,712 @@
+// The Settings screen (ARCHITECTURE §6.2, §4.5).
+//
+// The page edits a private copy of Bridge.settings. Nothing reaches Rust
+// until "Save", which hands the whole copy to Bridge.save-settings. "Discard"
+// throws the copy away and reads Bridge.settings again. The checks here only
+// keep bad input out of the copy and disable Save; the authoritative
+// validation stays in Rust.
+
+import { ScrollView } from "std-widgets.slint";
+import { Design } from "../design.slint";
+import { Bridge, SettingsModel } from "../bridge.slint";
+import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, Field, FieldKind, SectionHeading, SettingRow, LoadingState, EmptyState } from "../primitives.slint";
+import { IconTriangleAlert } from "../icons.slint";
+
+// ---------------------------------------------------------------------------
+// Local building blocks
+// ---------------------------------------------------------------------------
+
+// A label, an optional explanation, and a control on the right.
+// SettingRow has no slot for a control, so the editable rows use this.
+component ControlRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> description;
+    spacing: Design.space-lg;
+
+    VerticalLayout {
+        horizontal-stretch: 1;
+        alignment: center;
+        spacing: 2px;
+
+        Text {
+            text: root.label;
+            color: Design.foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-sm;
+            font-weight: 500;
+            wrap: word-wrap;
+        }
+
+        if (root.description != "") : Text {
+            text: root.description;
+            color: Design.muted-foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-xs;
+            wrap: word-wrap;
+        }
+    }
+
+    VerticalLayout {
+        horizontal-stretch: 0;
+        alignment: center;
+
+        @children
+    }
+}
+
+// An on/off switch. The caller binds `checked` and handles `toggled`.
+component ToggleSwitch inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+
+    width: 40px;
+    height: 22px;
+    border-radius: 11px;
+    background: root.checked ? Design.primary : Design.secondary;
+    border-width: 1px;
+    border-color: Design.input;
+    opacity: root.enabled ? 1 : 0.5;
+
+    Rectangle {
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        y: (parent.height - self.height) / 2;
+        x: root.checked ? parent.width - self.width - 3px : 3px;
+        background: Design.foreground;
+        animate x { duration: 120ms; }
+    }
+
+    focus-scope := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: true;
+
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") {
+                root.toggled(!root.checked);
+                return accept;
+            }
+            return reject;
+        }
+
+        touch := TouchArea {
+            enabled: root.enabled;
+            clicked => {
+                root.toggled(!root.checked);
+            }
+        }
+    }
+
+    // The focus ring, the same halo the buttons use.
+    Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: 14px;
+        border-width: 3px;
+        border-color: Design.ring;
+        opacity: 0.5;
+        visible: focus-scope.has-focus;
+    }
+}
+
+// A combo box. The list opens inline below the field, which keeps the layout
+// predictable inside a scroll view.
+component ChoiceField inherits VerticalLayout {
+    in property <[string]> choices;
+    in property <int> selected-index: 0;
+    in property <bool> enabled: true;
+    callback picked(int);
+
+    private property <bool> expanded: false;
+    spacing: Design.space-xs;
+
+    Field {
+        kind: FieldKind.combo;
+        width: 180px;
+        choices: root.choices;
+        selected-index: root.selected-index;
+        enabled: root.enabled;
+
+        selected(i) => {
+            root.expanded = !root.expanded;
+        }
+    }
+
+    if (root.expanded) : Rectangle {
+        width: 180px;
+        height: root.choices.length * 30px + 8px;
+        background: Design.card;
+        border-radius: Design.radius-md;
+        border-width: 1px;
+        border-color: Design.input;
+
+        VerticalLayout {
+            padding: 4px;
+            spacing: 2px;
+
+            for choice[i] in root.choices : Rectangle {
+                height: 28px;
+                border-radius: Design.radius-sm;
+                background: i == root.selected-index ? Design.secondary
+                    : row-touch.has-hover ? Design.muted
+                    : transparent;
+
+                Text {
+                    x: Design.space-sm;
+                    height: parent.height;
+                    text: choice;
+                    color: Design.foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-sm;
+                    vertical-alignment: center;
+                }
+
+                row-touch := TouchArea {
+                    clicked => {
+                        root.picked(i);
+                        root.expanded = false;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The page
+// ---------------------------------------------------------------------------
+
+export component SettingsPage inherits VerticalLayout {
+    padding: Design.space-xl;
+    spacing: Design.space-lg;
+    alignment: start;
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
+
+    // The editable copy. It starts as a binding to Bridge.settings. The first
+    // edit breaks that binding, and "Discard" or a fresh push from Rust
+    // re-syncs it.
+    private property <SettingsModel> draft: Bridge.settings;
+
+    // The text in the number fields. Text is kept separately so that a value
+    // which is not a number can be shown and flagged without being stored.
+    private property <string> t-mixed: Bridge.settings.mixed-port;
+    private property <string> t-socks: Bridge.settings.socks-port;
+    private property <string> t-http: Bridge.settings.http-port;
+    private property <string> t-mtu: Bridge.settings.tun-mtu;
+    private property <string> t-refresh: Bridge.settings.auto-refresh-minutes;
+
+    // A private mirror of Bridge.settings. Its `changed` handler fires when
+    // Rust pushes new settings, for example after a successful save.
+    private property <SettingsModel> pushed: Bridge.settings;
+
+    private property <bool> confirm-clear: false;
+
+    private property <[string]> mode-choices: ["rule", "global", "direct"];
+    private property <[string]> log-choices: ["silent", "error", "warning", "info", "debug"];
+
+    // --- checks ---------------------------------------------------------------
+
+    function valid-int(s: string, lo: int, hi: int) -> bool {
+        return s != "" && s.is-float() && s.to-float() == round(s.to-float())
+            && s.to-float() >= lo && s.to-float() <= hi;
+    }
+
+    function mode-index(m: string) -> int {
+        if (m == "global") { return 1; }
+        if (m == "direct") { return 2; }
+        return 0;
+    }
+
+    function log-index(l: string) -> int {
+        if (l == "silent") { return 0; }
+        if (l == "error") { return 1; }
+        if (l == "warning") { return 2; }
+        if (l == "debug") { return 4; }
+        return 3;
+    }
+
+    private property <bool> ok-mixed: root.valid-int(root.t-mixed, 0, 65535);
+    private property <bool> ok-socks: root.valid-int(root.t-socks, 0, 65535);
+    private property <bool> ok-http: root.valid-int(root.t-http, 0, 65535);
+    private property <bool> ok-mtu: root.valid-int(root.t-mtu, 576, 9000);
+    private property <bool> ok-refresh: root.valid-int(root.t-refresh, 0, 10080);
+
+    private property <bool> mixed-clash: root.draft.mixed-port != 0
+        && (root.draft.mixed-port == root.draft.socks-port || root.draft.mixed-port == root.draft.http-port);
+    private property <bool> socks-clash: root.draft.socks-port != 0
+        && (root.draft.socks-port == root.draft.mixed-port || root.draft.socks-port == root.draft.http-port);
+    private property <bool> http-clash: root.draft.http-port != 0
+        && (root.draft.http-port == root.draft.mixed-port || root.draft.http-port == root.draft.socks-port);
+
+    private property <bool> bind-ok: root.draft.bind-address != "";
+    private property <bool> tun-name-ok: !root.draft.tun-enabled || root.draft.tun-device != "";
+
+    private property <bool> inputs-ok: root.ok-mixed && root.ok-socks && root.ok-http
+        && root.ok-mtu && root.ok-refresh
+        && !root.mixed-clash && !root.socks-clash && !root.http-clash
+        && root.bind-ok && root.tun-name-ok;
+
+    private property <bool> dirty: root.draft != Bridge.settings;
+    private property <bool> can-save: root.dirty && root.inputs-ok && !Bridge.busy;
+    private property <string> save-blocker: !root.dirty ? "There are no changes to save."
+        : Bridge.busy ? "Another operation is running. Wait for it to finish."
+        : !root.inputs-ok ? "Fix the highlighted fields first."
+        : "";
+
+    // --- actions --------------------------------------------------------------
+
+    function resync() {
+        root.draft = Bridge.settings;
+        root.t-mixed = Bridge.settings.mixed-port;
+        root.t-socks = Bridge.settings.socks-port;
+        root.t-http = Bridge.settings.http-port;
+        root.t-mtu = Bridge.settings.tun-mtu;
+        root.t-refresh = Bridge.settings.auto-refresh-minutes;
+    }
+
+    function edit-mixed(text: string) {
+        root.t-mixed = text;
+        if (root.valid-int(text, 0, 65535)) { root.draft.mixed-port = round(text.to-float()); }
+    }
+
+    function edit-socks(text: string) {
+        root.t-socks = text;
+        if (root.valid-int(text, 0, 65535)) { root.draft.socks-port = round(text.to-float()); }
+    }
+
+    function edit-http(text: string) {
+        root.t-http = text;
+        if (root.valid-int(text, 0, 65535)) { root.draft.http-port = round(text.to-float()); }
+    }
+
+    function edit-mtu(text: string) {
+        root.t-mtu = text;
+        if (root.valid-int(text, 576, 9000)) { root.draft.tun-mtu = round(text.to-float()); }
+    }
+
+    function edit-refresh(text: string) {
+        root.t-refresh = text;
+        if (root.valid-int(text, 0, 10080)) { root.draft.auto-refresh-minutes = round(text.to-float()); }
+    }
+
+    changed pushed => {
+        root.resync();
+    }
+
+    // --- layout ---------------------------------------------------------------
+
+    SectionHeading {
+        eyebrow: "Configuration";
+        title: "Settings";
+        description: "Ports, network exposure, logging, TUN and the engine.";
+    }
+
+    if (!Bridge.loaded) : LoadingState {
+        vertical-stretch: 1;
+        message: "Waiting for the proxy engine to report its settings…";
+    }
+
+    if (Bridge.loaded) : ScrollView {
+        vertical-stretch: 1;
+
+        VerticalLayout {
+            spacing: Design.space-lg;
+            padding-right: Design.space-md;
+
+            // --- Proxy ----------------------------------------------------------
+            Card {
+                title: "Proxy";
+                description: "Local listeners. A port set to 0 is disabled.";
+
+                ControlRow {
+                    label: "Mixed port";
+                    description: "HTTP and SOCKS5 on one port. 0 disables it.";
+
+                    Field {
+                        kind: FieldKind.number;
+                        width: 160px;
+                        placeholder: "0";
+                        value: root.t-mixed;
+                        error: !root.ok-mixed ? "Enter a whole number from 0 to 65535."
+                            : root.mixed-clash ? "Another listener already uses this port." : "";
+                        edited(text) => {
+                            root.edit-mixed(text);
+                        }
+                    }
+                }
+
+                ControlRow {
+                    label: "SOCKS5 port";
+                    description: "SOCKS5 only. 0 disables it.";
+
+                    Field {
+                        kind: FieldKind.number;
+                        width: 160px;
+                        placeholder: "0";
+                        value: root.t-socks;
+                        error: !root.ok-socks ? "Enter a whole number from 0 to 65535."
+                            : root.socks-clash ? "Another listener already uses this port." : "";
+                        edited(text) => {
+                            root.edit-socks(text);
+                        }
+                    }
+                }
+
+                ControlRow {
+                    label: "HTTP port";
+                    description: "HTTP only. 0 disables it.";
+
+                    Field {
+                        kind: FieldKind.number;
+                        width: 160px;
+                        placeholder: "0";
+                        value: root.t-http;
+                        error: !root.ok-http ? "Enter a whole number from 0 to 65535."
+                            : root.http-clash ? "Another listener already uses this port." : "";
+                        edited(text) => {
+                            root.edit-http(text);
+                        }
+                    }
+                }
+
+                ControlRow {
+                    label: "Bind address";
+                    description: "The address the listeners bind to.";
+
+                    Field {
+                        kind: FieldKind.text;
+                        width: 180px;
+                        placeholder: "127.0.0.1";
+                        value: root.draft.bind-address;
+                        error: root.bind-ok ? "" : "The bind address cannot be empty.";
+                        edited(text) => {
+                            root.draft.bind-address = text;
+                        }
+                    }
+                }
+
+                ControlRow {
+                    label: "Allow LAN";
+                    description: root.draft.allow-lan
+                        ? "Exposes the proxy to your local network. Any device on that network can use it."
+                        : "Only this computer can use the proxy.";
+
+                    HorizontalLayout {
+                        spacing: Design.space-sm;
+                        alignment: end;
+
+                        if (root.draft.allow-lan) : Badge {
+                            text: "Exposed";
+                            variant: BadgeVariant.warning;
+                            width: 72px;
+                        }
+
+                        ToggleSwitch {
+                            checked: root.draft.allow-lan;
+                            toggled(v) => {
+                                root.draft.allow-lan = v;
+                            }
+                        }
+                    }
+                }
+
+                ControlRow {
+                    label: "Routing mode";
+                    description: "Rule follows your rules, Global sends everything through the proxy, Direct bypasses it.";
+
+                    ChoiceField {
+                        choices: root.mode-choices;
+                        selected-index: root.mode-index(root.draft.mode);
+                        picked(i) => {
+                            root.draft.mode = root.mode-choices[i];
+                        }
+                    }
+                }
+
+                ControlRow {
+                    label: "Log level";
+                    description: "How much the engine writes to the Logs screen.";
+
+                    ChoiceField {
+                        choices: root.log-choices;
+                        selected-index: root.log-index(root.draft.log-level);
+                        picked(i) => {
+                            root.draft.log-level = root.log-choices[i];
+                        }
+                    }
+                }
+            }
+
+            // --- TUN ------------------------------------------------------------
+            Card {
+                title: "TUN";
+                description: "A virtual network adapter that sends all device traffic through the proxy.";
+
+                HorizontalLayout {
+                    spacing: Design.space-sm;
+
+                    IconTriangleAlert {
+                        width: 16px;
+                        height: 16px;
+                        y: 2px;
+                        stroke: Design.warning;
+                        stroke-width: 2px;
+                    }
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "TUN needs administrator rights on Windows, or root on Linux and macOS. Starpod asks for elevation when TUN starts.";
+                        color: Design.warning;
+                        font-family: Design.font-family;
+                        font-size: Design.font-xs;
+                        wrap: word-wrap;
+                    }
+                }
+
+                ControlRow {
+                    label: "Enable TUN";
+                    description: "Off by default. Turning it on triggers the elevation prompt.";
+
+                    ToggleSwitch {
+                        checked: root.draft.tun-enabled;
+                        toggled(v) => {
+                            root.draft.tun-enabled = v;
+                        }
+                    }
+                }
+
+                ControlRow {
+                    label: "Device name";
+                    description: "The name of the adapter. Required while TUN is enabled.";
+
+                    Field {
+                        kind: FieldKind.text;
+                        width: 180px;
+                        placeholder: "starpod-tun";
+                        value: root.draft.tun-device;
+                        error: root.tun-name-ok ? "" : "Enter a device name, or turn TUN off.";
+                        edited(text) => {
+                            root.draft.tun-device = text;
+                        }
+                    }
+                }
+
+                ControlRow {
+                    label: "MTU";
+                    description: "Maximum packet size in bytes, from 576 to 9000.";
+
+                    Field {
+                        kind: FieldKind.number;
+                        width: 160px;
+                        placeholder: "1500";
+                        value: root.t-mtu;
+                        error: root.ok-mtu ? "" : "Enter a whole number from 576 to 9000.";
+                        edited(text) => {
+                            root.edit-mtu(text);
+                        }
+                    }
+                }
+            }
+
+            // --- Subscriptions --------------------------------------------------
+            Card {
+                title: "Subscriptions";
+                description: "How subscriptions are kept up to date.";
+
+                ControlRow {
+                    label: "Auto refresh (minutes)";
+                    description: "0 means manual refresh only. The maximum is one week.";
+
+                    Field {
+                        kind: FieldKind.number;
+                        width: 160px;
+                        placeholder: "0";
+                        value: root.t-refresh;
+                        error: root.ok-refresh ? "" : "Enter a whole number from 0 to 10080.";
+                        edited(text) => {
+                            root.edit-refresh(text);
+                        }
+                    }
+                }
+            }
+
+            // --- Storage and security (read-only) -------------------------------
+            Card {
+                title: "Storage and security";
+                description: "Read-only. These come from the running app.";
+
+                if (!Bridge.secrets-encrypted) : Rectangle {
+                    border-radius: Design.radius-md;
+                    border-width: 1px;
+                    border-color: Design.warning;
+
+                    HorizontalLayout {
+                        padding: Design.space-md;
+                        spacing: Design.space-sm;
+
+                        IconTriangleAlert {
+                            width: 16px;
+                            height: 16px;
+                            y: 2px;
+                            stroke: Design.warning;
+                            stroke-width: 2px;
+                        }
+
+                        Text {
+                            horizontal-stretch: 1;
+                            text: "Secrets are stored in a plain file because no OS keyring is available. Anyone who can read your user profile can read them.";
+                            color: Design.foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-sm;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                SettingRow {
+                    label: "Secret storage";
+                    description: Bridge.secret-backend != "" ? Bridge.secret-backend : "Not reported yet";
+                }
+
+                VerticalLayout {
+                    spacing: 2px;
+
+                    Text {
+                        text: "Data directory";
+                        color: Design.foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-sm;
+                        font-weight: 500;
+                    }
+
+                    Text {
+                        text: Bridge.data-dir != "" ? Bridge.data-dir : "Not reported yet";
+                        color: Design.muted-foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-xs;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if (Bridge.secret-backend == "" && Bridge.data-dir == "") : EmptyState {
+                    title: "Storage details not reported yet";
+                    description: "The secret backend and data directory appear once the app has finished starting.";
+                }
+
+                ControlRow {
+                    label: "Proxy engine";
+                    description: Bridge.engine-installed
+                        ? (Bridge.engine-version != "" ? "Installed, version " + Bridge.engine-version : "Installed")
+                        : "Not installed yet.";
+
+                    AppButton {
+                        text: Bridge.engine-installed ? "Update engine" : "Install engine";
+                        size: ButtonSize.lg;
+                        busy: Bridge.busy;
+                        busy-text: Bridge.busy-message;
+                        enabled: !Bridge.busy;
+                        disabled-reason: "Another operation is running. Wait for it to finish.";
+                        clicked => {
+                            Bridge.install-engine();
+                        }
+                    }
+                }
+
+                // Two-step clear: the first press asks, the second deletes.
+                ControlRow {
+                    label: "Cached subscription data";
+                    description: root.confirm-clear
+                        ? "This deletes the downloaded subscription content. Your subscriptions stay configured."
+                        : "Removes downloaded subscription content. It is fetched again on the next refresh.";
+
+                    HorizontalLayout {
+                        spacing: Design.space-sm;
+                        alignment: end;
+
+                        if (!root.confirm-clear) : AppButton {
+                            text: "Clear cache";
+                            variant: ButtonVariant.outline;
+                            size: ButtonSize.lg;
+                            enabled: !Bridge.busy;
+                            disabled-reason: "Another operation is running. Wait for it to finish.";
+                            clicked => {
+                                root.confirm-clear = true;
+                            }
+                        }
+
+                        if (root.confirm-clear) : AppButton {
+                            text: "Cancel";
+                            variant: ButtonVariant.ghost;
+                            clicked => {
+                                root.confirm-clear = false;
+                            }
+                        }
+
+                        if (root.confirm-clear) : AppButton {
+                            text: "Delete cache";
+                            variant: ButtonVariant.destructive;
+                            size: ButtonSize.lg;
+                            enabled: !Bridge.busy;
+                            disabled-reason: "Another operation is running. Wait for it to finish.";
+                            clicked => {
+                                root.confirm-clear = false;
+                                Bridge.clear-cache();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- footer: errors, the unsaved hint, Discard and Save -------------------
+
+    if (Bridge.loaded) : VerticalLayout {
+        spacing: Design.space-xs;
+
+        if (Bridge.settings-error != "") : Text {
+            text: Bridge.settings-error;
+            color: Design.destructive;
+            font-family: Design.font-family;
+            font-size: Design.font-sm;
+            font-weight: 500;
+            wrap: word-wrap;
+        }
+
+        if (root.dirty) : Text {
+            text: "You have unsaved changes.";
+            color: Design.warning;
+            font-family: Design.font-family;
+            font-size: Design.font-xs;
+        }
+
+        HorizontalLayout {
+            spacing: Design.space-sm;
+            alignment: end;
+
+            AppButton {
+                text: "Discard";
+                variant: ButtonVariant.secondary;
+                enabled: root.dirty && !Bridge.busy;
+                disabled-reason: Bridge.busy ? "Another operation is running. Wait for it to finish." : "There are no changes to discard.";
+                clicked => {
+                    root.resync();
+                }
+            }
+
+            AppButton {
+                text: "Save";
+                variant: ButtonVariant.default;
+                enabled: root.can-save;
+                disabled-reason: root.save-blocker;
+                clicked => {
+                    Bridge.save-settings(root.draft);
+                }
+            }
+        }
+    }
+}

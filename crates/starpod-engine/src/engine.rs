@@ -180,6 +180,18 @@ pub trait ProxyEngine: Send + Sync {
     /// Turn the TUN inbound on or off, live.
     async fn set_tun(&self, tun: &TunSettings) -> Result<(), EngineError>;
 
+    /// Choose `member` in the `select` group `group`, on the running engine.
+    ///
+    /// Unlike a reload, this closes no connections. It fails with
+    /// [`EngineError::EngineDown`] when the engine is not running.
+    async fn select(&self, group: &str, member: &str) -> Result<(), EngineError>;
+
+    /// Measure the latency of `proxy` against `url`, in milliseconds.
+    ///
+    /// `timeout_ms` bounds the probe. It fails with
+    /// [`EngineError::EngineDown`] when the engine is not running.
+    async fn delay(&self, proxy: &str, url: &str, timeout_ms: u32) -> Result<u32, EngineError>;
+
     /// The engine's log stream.
     fn logs(&self) -> LogStream;
 }

@@ -353,9 +353,7 @@ fn extract_tar_gz(bytes: &[u8], staging: &Path) -> EngineResult<PathBuf> {
         let out = staging.join(binary_name());
         let mut file =
             std::fs::File::create(&out).map_err(|e| EngineError::Install(e.to_string()))?;
-        entry
-            .read_to_end(&mut file)
-            .map_err(|e| EngineError::Install(e.to_string()))?;
+        std::io::copy(&mut entry, &mut file).map_err(|e| EngineError::Install(e.to_string()))?;
         extracted = Some(out);
     }
 

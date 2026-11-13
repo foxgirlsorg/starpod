@@ -116,6 +116,31 @@ fn the_default_port_is_used_when_nobody_set_one() {
     assert_eq!(config.mixed_port, Some(crate::config::DEFAULT_MIXED_PORT));
 }
 
+// Regression: `UserPreferences::default()` used to pin the ports to 7890 and
+// 7891, which the merge read as the user's explicit choice, so a new user's
+// subscription ports never applied. A new user has chosen nothing.
+#[test]
+fn a_new_users_subscription_ports_apply_because_the_default_pins_none() {
+    let mut input = base_input();
+    let mut sub = payload("s1", Vec::new(), Vec::new());
+    sub.settings.mixed_port = Some(7899);
+    sub.settings.socks_port = Some(7898);
+    input.subscriptions.push(sub);
+
+    let config = build(&input).config.expect("the build should succeed");
+    assert_eq!(config.mixed_port, Some(7899));
+    assert_eq!(config.socks_port, Some(7898));
+}
+
+#[test]
+fn a_new_user_with_no_subscription_port_gets_the_documented_defaults() {
+    let config = build(&base_input())
+        .config
+        .expect("the build should succeed");
+    assert_eq!(config.mixed_port, Some(crate::config::DEFAULT_MIXED_PORT));
+    assert_eq!(config.socks_port, Some(crate::config::DEFAULT_SOCKS_PORT));
+}
+
 #[test]
 fn the_users_allow_lan_choice_is_never_overridden_by_a_subscription() {
     let mut input = base_input();
@@ -407,6 +432,56 @@ fn a_rule_targeting_a_missing_group_is_an_error() {
     );
 }
 
+/// A logic rule as the user would write it, with the given target.
+fn logic_rule(id: &str, target: &str) -> StoredRule {
+    StoredRule {
+        id: id.to_string(),
+        spec: crate::rules::parse_line(&format!(
+            "AND,((DOMAIN,a.example.com),(DST-PORT,443)),{target}"
+        ))
+        .expect("the logic rule parses"),
+        enabled: true,
+        order: 0,
+    }
+}
+
+// Regression: the target of a logic rule was read with a naive comma split,
+// so `AND,((DOMAIN,a.example.com),(DST-PORT,443)),Auto` yielded the target
+// `a.example.com)` and the build rejected a perfectly valid rule.
+#[test]
+fn a_logic_rule_targeting_an_existing_group_is_accepted() {
+    let mut input = base_input();
+    input.user_nodes.push(node("n1"));
+    input.user_groups.push(group("Auto", &["n1"]));
+    input.user_rules.push(logic_rule("u1", "Auto"));
+
+    let outcome = build(&input);
+    assert!(outcome.config.is_some(), "{:?}", outcome.findings);
+}
+
+#[test]
+fn a_logic_rule_targeting_a_missing_group_is_an_error_naming_that_group() {
+    let mut input = base_input();
+    input.user_rules.push(logic_rule("u1", "Nowhere"));
+
+    let outcome = build(&input);
+    assert!(outcome.config.is_none(), "the build must not succeed");
+    assert!(
+        outcome.errors().any(|f| f.message.contains("“Nowhere”")),
+        "the missing target should be reported by name: {:?}",
+        outcome.findings
+    );
+}
+
+#[test]
+fn a_logic_rule_targeting_a_builtin_outbound_is_accepted() {
+    let mut input = base_input();
+    input.user_rules.push(logic_rule("u1", "DIRECT"));
+
+    let outcome = build(&input);
+    assert!(outcome.config.is_some(), "{:?}", outcome.findings);
+}
+
 #[test]
 fn a_rule_targeting_a_builtin_outbound_is_accepted() {
     let mut input = base_input();
@@ -586,5 +661,29 @@ fn an_engine_managed_subscription_is_declared_but_not_merged() {
     assert!(
         config.proxies.is_empty(),
         "an engine-managed subscription contributes no nodes to the app's pipeline"
+    );
+}
+
+// --- P1a: LAN exposure is the user's decision alone ---------------------------
+
+#[test]
+fn a_subscription_cannot_expose_the_proxy_when_the_user_never_chose() {
+    let mut input = base_input();
+    assert_eq!(input.preferences.allow_lan, None);
+    let mut sub = payload("s1", Vec::new(), Vec::new());
+    sub.settings.allow_lan = Some(true);
+    sub.settings.bind_address = Some("0.0.0.0".to_string());
+    input.subscriptions.push(sub);
+
+    let outcome = build(&input);
+    let config = outcome.config.expect("the build should succeed");
+    assert!(
+        !config.allow_lan,
+        "an unset preference must fall back to the safe default, not to the subscription"
+    );
+    assert_ne!(
+        config.bind_address.as_deref(),
+        Some("0.0.0.0"),
+        "a subscription must not choose the listen address"
     );
 }

@@ -5,6 +5,31 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "placeholder"
+description = "The UI-free application service layer for Starpod"
 
 [dependencies]
+starpod-core = { workspace = true }
+starpod-subscription = { workspace = true }
+starpod-store = { workspace = true }
+starpod-engine = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+time = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+slint = { workspace = true }
+starpod-ui = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# Slint 1.18 has no clipboard API for applications, so the Logs screen's
+# copy action uses arboard, which Slint's own winit backend already depends on.
+arboard = "3.7"
+
+[[bin]]
+name = "starpod"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -208,13 +208,9 @@ mod tests {
     async fn a_missing_engine_binary_is_a_spawn_error() {
         let dir = tempfile::tempdir().unwrap();
         let live = dir.path().join("runtime-config.yaml");
-        let error = validate_config(
-            Path::new("this-binary-does-not-exist"),
-            &config(),
-            &live,
-        )
-        .await
-        .expect_err("the binary does not exist");
+        let error = validate_config(Path::new("this-binary-does-not-exist"), &config(), &live)
+            .await
+            .expect_err("the binary does not exist");
         assert!(matches!(error, EngineError::Spawn(_)), "{error:?}");
     }
 
@@ -222,13 +218,11 @@ mod tests {
     async fn a_failed_validation_leaves_no_candidate_behind() {
         let dir = tempfile::tempdir().unwrap();
         let live = dir.path().join("runtime-config.yaml");
-        let _ = validate_config(
-            Path::new("this-binary-does-not-exist"),
-            &config(),
-            &live,
-        )
-        .await;
-        assert!(!candidate_path(&live).exists(), "the candidate was left behind");
+        let _ = validate_config(Path::new("this-binary-does-not-exist"), &config(), &live).await;
+        assert!(
+            !candidate_path(&live).exists(),
+            "the candidate was left behind"
+        );
     }
 
     #[tokio::test]
@@ -236,12 +230,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let live = dir.path().join("runtime-config.yaml");
         tokio::fs::write(&live, b"mode: global\n").await.unwrap();
-        let _ = validate_config(
-            Path::new("this-binary-does-not-exist"),
-            &config(),
-            &live,
-        )
-        .await;
+        let _ = validate_config(Path::new("this-binary-does-not-exist"), &config(), &live).await;
         assert_eq!(
             tokio::fs::read(&live).await.unwrap(),
             b"mode: global\n",

@@ -1,5 +1,17 @@
 # Starpod — Handover
 
+> **Status update (2026-11-13, later session).** Steps 1–6 of §8 are done:
+> `starpod-ui` compiles (single `ui/app.slint` entry, `bridge.slint` contract,
+> five screens, `AppTray`); `starpod-app` holds `AppService` (the central path,
+> UI-free) plus `main.rs` and `src/ui/` (Slint wiring, tray, lifecycle);
+> `tests/central_path.rs` verifies subscription → build → `meow -t` → start/reload
+> against a fake engine; CI workflow, README and `docs/{USER_GUIDE,DEVELOPMENT}.md`
+> exist. Builds run in Docker (`docker compose run --rm dev cargo test --workspace`);
+> rust is not required on the host. Workspace: fmt clean, clippy `-D warnings` clean,
+> 415 tests pass. Allow-LAN/bind-address are now user-only (P1a). Open items are
+> listed in `docs/DEVELOPMENT.md` "Known limitations". Sections below describe the
+> earlier state and are kept for their verified API facts.
+
 **Date:** 2026-11-13
 **Repo root:** `L:\Coding\starpod`
 **Branch:** `main`, 2 commits ahead of `origin/main`, nothing pushed.

@@ -1,0 +1,157 @@
+// The Rust <-> UI contract.
+//
+// This file holds data and callbacks only. Rust owns the state: it pushes
+// every property here and handles every callback. Nothing in this file
+// decides anything (ARCHITECTURE §6.3).
+//
+// Enumerated values are plain strings, so the Rust side can map them from
+// its domain enums without a second set of Slint enums.
+
+export struct SubscriptionItem {
+    id: string,
+    label: string,
+    // "app-managed" | "engine-managed"
+    mode: string,
+    // "ok" | "error" | "syncing" | "never"
+    status: string,
+    last-updated: string,
+    error: string,
+    node-count: int,
+    has-quota: bool,
+    quota-used-fraction: float,
+    quota-text: string,
+    expires: string,
+}
+
+export struct NodeItem {
+    id: string,
+    name: string,
+    protocol: string,
+    group: string,
+    // -1 = untested
+    latency-ms: int,
+    selected: bool,
+}
+
+export struct RuleItem {
+    index: int,
+    kind: string,
+    payload: string,
+    target: string,
+    line: string,
+    from-subscription: bool,
+    error: string,
+}
+
+export struct LogItem {
+    time: string,
+    level: string,
+    source: string,
+    message: string,
+}
+
+export struct SettingsModel {
+    mixed-port: int,
+    socks-port: int,
+    http-port: int,
+    allow-lan: bool,
+    bind-address: string,
+    log-level: string,
+    mode: string,
+    tun-enabled: bool,
+    tun-device: string,
+    tun-mtu: int,
+    auto-refresh-minutes: int,
+}
+
+export global Bridge {
+    // --- navigation ---------------------------------------------------------
+    // 0 Dashboard, 1 Servers, 2 Rules, 3 Settings, 4 Logs
+    in-out property <int> active-page: 0;
+
+    // --- engine -------------------------------------------------------------
+    // "stopped" | "starting" | "running" | "stopping" | "failed"
+    in-out property <string> engine-phase: "stopped";
+    in-out property <string> engine-error: "";
+    in-out property <bool> engine-installed: false;
+    in-out property <string> engine-version: "";
+    in-out property <bool> busy: false;
+    in-out property <string> busy-message: "";
+    // "info" | "success" | "error"
+    in-out property <string> banner-message: "";
+    in-out property <string> banner-kind: "info";
+    // The routing mode as the engine reports it, for example "rule", "global" or "direct"
+    in-out property <string> mode: "";
+    in-out property <string> current-node: "";
+    in-out property <string> uptime: "";
+    in-out property <string> listen-address: "";
+    // false until the first state push; screens show LoadingState until then
+    in-out property <bool> loaded: false;
+
+    // --- servers ------------------------------------------------------------
+    in-out property <[SubscriptionItem]> subscriptions: [];
+    in-out property <[NodeItem]> nodes: [];
+    in-out property <string> node-filter: "";
+
+    // --- rules --------------------------------------------------------------
+    in-out property <[RuleItem]> user-rules: [];
+    in-out property <[RuleItem]> subscription-rules: [];
+    in-out property <[string]> rule-kinds: [];
+    in-out property <[string]> rule-targets: [];
+    in-out property <string> rules-raw-text: "";
+    in-out property <string> rules-error: "";
+
+    // --- logs ---------------------------------------------------------------
+    in-out property <[LogItem]> logs: [];
+    in-out property <string> log-level-filter: "all";
+
+    // --- settings -----------------------------------------------------------
+    in-out property <SettingsModel> settings;
+    in-out property <string> settings-error: "";
+    in-out property <string> secret-backend: "";
+    in-out property <bool> secrets-encrypted: false;
+    in-out property <string> data-dir: "";
+
+    // --- shell --------------------------------------------------------------
+    in-out property <bool> tray-available: false;
+
+    // --- callbacks: engine --------------------------------------------------
+    callback connect();
+    callback disconnect();
+    callback restart();
+    callback set-mode(string);
+    callback install-engine();
+
+    // --- callbacks: subscriptions and nodes ---------------------------------
+    // label, url, auth header, mode
+    callback add-subscription(string, string, string, string);
+    callback remove-subscription(string);
+    callback refresh-subscription(string);
+    callback refresh-all();
+    // subscription id, mode
+    callback set-subscription-mode(string, string);
+    callback select-node(string);
+    callback test-latency();
+
+    // --- callbacks: rules ---------------------------------------------------
+    // kind, payload, target
+    callback add-rule(string, string, string);
+    // index, kind, payload, target
+    callback update-rule(int, string, string, string);
+    callback delete-rule(int);
+    // index, delta
+    callback move-rule(int, int);
+    callback apply-raw-rules(string);
+
+    // --- callbacks: settings and logs ---------------------------------------
+    callback save-settings(SettingsModel);
+    callback clear-cache();
+    callback copy-logs();
+    callback clear-logs();
+
+    // --- callbacks: shell ---------------------------------------------------
+    callback dismiss-banner();
+    callback show-window();
+    callback hide-window();
+    callback quit();
+}

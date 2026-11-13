@@ -1,0 +1,290 @@
+// The Logs screen (ARCHITECTURE §6.2).
+//
+// A level filter, Copy and Clear, and a scrolling list of log lines. The
+// filter is applied by Rust: this file only writes `Bridge.log-level-filter`
+// and displays whatever `Bridge.logs` holds.
+
+import { ListView } from "std-widgets.slint";
+import { Design } from "../design.slint";
+import { Bridge, LogItem } from "../bridge.slint";
+import {
+    AppButton, ButtonVariant, Badge, BadgeVariant, Card,
+    EmptyState, LoadingState, SectionHeading
+} from "../primitives.slint";
+
+// ---------------------------------------------------------------------------
+// One segment of the level filter.
+// ---------------------------------------------------------------------------
+
+component LevelSegment inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected: false;
+    callback picked();
+
+    min-width: 64px;
+    height: 26px;
+    horizontal-stretch: 1;
+    border-radius: Design.radius-md;
+    background: root.selected ? Design.background : transparent;
+
+    // The focus ring, the same halo AppButton uses.
+    Rectangle {
+        x: -2px;
+        y: -2px;
+        width: parent.width + 4px;
+        height: parent.height + 4px;
+        border-radius: Design.radius-md + 2px;
+        border-width: 2px;
+        border-color: Design.ring;
+        opacity: 0.5;
+        visible: focus-scope.has-focus;
+    }
+
+    Text {
+        text: root.text;
+        color: root.selected ? Design.foreground : Design.muted-foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        font-weight: root.selected ? 500 : 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+
+    focus-scope := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        focus-on-click: true;
+
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.picked();
+                return accept;
+            }
+            reject
+        }
+
+        touch := TouchArea {
+            width: parent.width;
+            height: parent.height;
+            clicked => {
+                root.picked();
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One log line: time, level, source, message.
+// ---------------------------------------------------------------------------
+
+component LogRow inherits VerticalLayout {
+    in property <LogItem> entry;
+    in property <string> mono;
+
+    HorizontalLayout {
+        padding-top: Design.space-xs;
+        padding-bottom: Design.space-xs;
+        padding-left: Design.space-sm;
+        padding-right: Design.space-sm;
+        spacing: Design.space-sm;
+        alignment: start;
+
+        Text {
+            text: root.entry.time;
+            width: 88px;
+            color: Design.muted-foreground;
+            font-family: root.mono;
+            font-size: Design.font-xs;
+            vertical-alignment: top;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+
+        Badge {
+            width: 64px;
+            text: root.entry.level;
+            variant: root.entry.level == "error" ? BadgeVariant.destructive
+                : root.entry.level == "warning" ? BadgeVariant.warning
+                : root.entry.level == "info" ? BadgeVariant.secondary
+                : BadgeVariant.outline;
+        }
+
+        // The source, as a muted outlined tag.
+        Rectangle {
+            width: 104px;
+            height: 20px;
+            border-radius: Design.radius-sm;
+            border-width: 1px;
+            border-color: Design.input;
+
+            Text {
+                x: 6px;
+                width: parent.width - 12px;
+                height: parent.height;
+                text: root.entry.source;
+                color: Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-xs;
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+        }
+
+        Text {
+            text: root.entry.message;
+            horizontal-stretch: 1;
+            color: root.entry.level == "error" ? Design.destructive : Design.foreground;
+            font-family: root.mono;
+            font-size: Design.font-sm;
+            vertical-alignment: top;
+            wrap: word-wrap;
+        }
+    }
+
+    Rectangle {
+        height: 1px;
+        background: Design.border;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The page.
+// ---------------------------------------------------------------------------
+
+export component LogsPage inherits VerticalLayout {
+    padding: Design.space-xl;
+    spacing: Design.space-lg;
+    alignment: start;
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
+
+    // Windows ships Consolas. Where the family is missing Slint falls back
+    // to the default face, so the page still lays out.
+    private property <string> mono: "Consolas";
+
+    SectionHeading {
+        eyebrow: "Diagnostics";
+        title: "Recent messages";
+        description: "App and engine messages, newest last.";
+    }
+
+    if (!Bridge.loaded) : LoadingState {
+        vertical-stretch: 1;
+        message: "Waiting for the proxy engine to report its state…";
+    }
+
+    if (Bridge.loaded) : VerticalLayout {
+        vertical-stretch: 1;
+        spacing: Design.space-md;
+
+        // Toolbar: the level filter on the left, Copy and Clear on the right.
+        HorizontalLayout {
+            spacing: Design.space-md;
+            alignment: start;
+
+            Rectangle {
+                width: 340px;
+                height: 32px;
+                background: Design.muted;
+                border-radius: Design.radius-lg;
+
+                HorizontalLayout {
+                    padding: 3px;
+                    spacing: 2px;
+
+                    LevelSegment {
+                        text: "All";
+                        selected: Bridge.log-level-filter == "all";
+                        picked => { Bridge.log-level-filter = "all"; }
+                    }
+                    LevelSegment {
+                        text: "Error";
+                        selected: Bridge.log-level-filter == "error";
+                        picked => { Bridge.log-level-filter = "error"; }
+                    }
+                    LevelSegment {
+                        text: "Warning";
+                        selected: Bridge.log-level-filter == "warning";
+                        picked => { Bridge.log-level-filter = "warning"; }
+                    }
+                    LevelSegment {
+                        text: "Info";
+                        selected: Bridge.log-level-filter == "info";
+                        picked => { Bridge.log-level-filter = "info"; }
+                    }
+                    LevelSegment {
+                        text: "Debug";
+                        selected: Bridge.log-level-filter == "debug";
+                        picked => { Bridge.log-level-filter = "debug"; }
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            AppButton {
+                text: "Copy";
+                variant: ButtonVariant.outline;
+                enabled: Bridge.logs.length > 0;
+                disabled-reason: "There are no log lines to copy yet.";
+                clicked => { Bridge.copy-logs(); }
+            }
+
+            AppButton {
+                text: "Clear";
+                variant: ButtonVariant.ghost;
+                enabled: Bridge.logs.length > 0;
+                disabled-reason: "There are no log lines to clear.";
+                clicked => { Bridge.clear-logs(); }
+            }
+        }
+
+        if (Bridge.engine-error != "") : Text {
+            text: "Engine error: " + Bridge.engine-error;
+            color: Design.destructive;
+            font-family: Design.font-family;
+            font-size: Design.font-sm;
+            wrap: word-wrap;
+        }
+
+        // Empty state. The filter can hide every line, so when it is not
+        // "all" the page says so.
+        if (Bridge.logs.length == 0) : VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            spacing: Design.space-md;
+
+            EmptyState {
+                title: "No log lines yet";
+                description: "Engine startup and shutdown, validation failures and subscription errors appear here as they happen.";
+            }
+
+            if (Bridge.log-level-filter != "all") : Text {
+                text: "The level filter may be hiding lines. Choose All to see every level.";
+                color: Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-xs;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        if (Bridge.logs.length > 0) : Card {
+            vertical-stretch: 1;
+
+            ListView {
+                vertical-stretch: 1;
+                horizontal-stretch: 1;
+
+                for log in Bridge.logs : LogRow {
+                    entry: log;
+                    mono: root.mono;
+                }
+            }
+        }
+    }
+}

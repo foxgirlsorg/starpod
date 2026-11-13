@@ -44,8 +44,8 @@ pub fn is_elevated() -> bool {
 /// Whether this process is running as root.
 #[cfg(unix)]
 fn is_elevated_unix() -> bool {
-    // SAFETY: `geteuid` has no preconditions and cannot fail.
-    unsafe { nix::unistd::geteuid().is_root() }
+    // `geteuid` is a safe wrapper in `nix`: POSIX guarantees it cannot fail.
+    nix::unistd::geteuid().is_root()
 }
 
 /// Whether this process is running elevated.

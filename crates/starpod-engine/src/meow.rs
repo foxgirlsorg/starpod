@@ -76,13 +76,14 @@ impl MeowEngine {
     /// and the engine is started on. It is required, because a file the
     /// app does not know the path of is a file the app cannot validate
     /// against and cannot keep consistent with its own state.
+    ///
+    /// The engine's controller file goes wherever the engine chooses unless
+    /// [`MeowEngine::with_controller_dir`] says otherwise. An application
+    /// should always say otherwise: the default directory is shared with any
+    /// other meow on the machine.
     pub fn new(binary: PathBuf, config_path: PathBuf) -> Self {
         Self {
-            supervisor: Arc::new(
-                Supervisor::new()
-                    .with_config_path(config_path.clone())
-                    .with_controller_dir(crate::supervisor::controller_file_dir().unwrap_or_default()),
-            ),
+            supervisor: Arc::new(Supervisor::new().with_config_path(config_path.clone())),
             binary,
             config_path,
             client: Arc::new(std::sync::RwLock::new(None)),
@@ -96,6 +97,22 @@ impl MeowEngine {
     /// configuration to `config_path`.
     pub fn installed(config_path: PathBuf) -> Self {
         Self::new(crate::download::installed_binary_path(), config_path)
+    }
+
+    /// Point the engine's controller file at `dir`, which the application
+    /// owns.
+    ///
+    /// The engine is started with `MEOW_RUNTIME_DIR` set to `dir`, and its
+    /// address is read back from there, so the app never collides with
+    /// another meow installation. Call this before the engine starts.
+    #[must_use]
+    pub fn with_controller_dir(mut self, dir: PathBuf) -> Self {
+        self.supervisor = Arc::new(
+            Supervisor::new()
+                .with_config_path(self.config_path.clone())
+                .with_controller_dir(dir),
+        );
+        self
     }
 
     /// The binary this engine runs.
@@ -216,23 +233,37 @@ impl ProxyEngine for MeowEngine {
             return Err(error);
         };
 
-        // The candidate is applied as a *payload*, not as a path. That way
-        // the engine commits exactly the bytes that were validated, and
-        // the file on disk stays the app's own until the app rewrites it.
+        // Order matters here. The live file is written first, so the file
+        // the engine reloads from is the one the app keeps, and a restart
+        // later comes back with the same configuration. The engine is asked
+        // to reload from that path only once the file is in place.
         //
-        // The file *is* still written first, so that a later `PUT
-        // /configs/save` or a restart sees the same configuration.
-        let document = crate::config::EngineDocument::build(cfg);
-        let yaml = document
-            .to_yaml()
-            .map_err(|e| EngineError::Internal(e.to_string()))?;
+        // If the engine refuses the reload, the previous file goes back, so
+        // the file and the running engine keep agreeing.
+        let yaml = crate::supervisor::live_document(cfg).inspect_err(|e| self.remember_error(e))?;
+        let previous = tokio::fs::read(&self.config_path).await.ok();
+        if let Err(error) =
+            crate::supervisor::write_live_config(&self.config_path, yaml.as_bytes()).await
+        {
+            self.remember_error(&error);
+            return Err(error);
+        }
 
-        match client.reload_from_payload(&yaml).await {
+        match client.reload_from_file(&self.config_path).await {
             Ok(()) => {
                 self.forget_error();
                 Ok(())
             }
             Err(error) => {
+                match previous {
+                    Some(bytes) => {
+                        let _ =
+                            crate::supervisor::write_live_config(&self.config_path, &bytes).await;
+                    }
+                    None => {
+                        let _ = tokio::fs::remove_file(&self.config_path).await;
+                    }
+                }
                 self.remember_error(&error);
                 Err(error)
             }
@@ -303,6 +334,33 @@ impl ProxyEngine for MeowEngine {
                 Err(error)
             }
         }
+    }
+
+    async fn select(&self, group: &str, member: &str) -> Result<(), EngineError> {
+        let Some(client) = self.client() else {
+            let error = EngineError::EngineDown;
+            self.remember_error(&error);
+            return Err(error);
+        };
+        match client.select(group, member).await {
+            Ok(()) => {
+                self.forget_error();
+                Ok(())
+            }
+            Err(error) => {
+                self.remember_error(&error);
+                Err(error)
+            }
+        }
+    }
+
+    async fn delay(&self, proxy: &str, url: &str, timeout_ms: u32) -> Result<u32, EngineError> {
+        // A latency probe that fails is a fact about the node, not about the
+        // engine, so it does not become the engine's last error.
+        let Some(client) = self.client() else {
+            return Err(EngineError::EngineDown);
+        };
+        client.delay(proxy, url, timeout_ms).await
     }
 
     fn logs(&self) -> LogStream {
@@ -403,5 +461,143 @@ mod tests {
         let status = engine.status().await.expect("status");
         assert_eq!(status.phase, EnginePhase::Stopped);
         assert!(!status.controller_ready);
+    }
+
+    #[test]
+    fn the_controller_directory_is_the_applications_own() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let wanted = dir.path().join("controllers");
+        let engine = MeowEngine::new(
+            PathBuf::from("meow"),
+            dir.path().join("runtime-config.yaml"),
+        )
+        .with_controller_dir(wanted.clone());
+        assert_eq!(engine.supervisor.controller_dir(), Some(wanted.as_path()));
+    }
+
+    #[test]
+    fn a_fresh_engine_does_not_pick_the_shared_controller_directory() {
+        let engine = MeowEngine::new(PathBuf::from("meow"), PathBuf::from("/tmp/runtime.yaml"));
+        assert_eq!(engine.supervisor.controller_dir(), None);
+    }
+
+    #[tokio::test]
+    async fn select_and_delay_refuse_when_the_engine_is_not_running() {
+        let engine = MeowEngine::new(PathBuf::from("meow"), PathBuf::from("/tmp/runtime.yaml"));
+        assert!(matches!(
+            engine.select("Auto", "Node B").await,
+            Err(EngineError::EngineDown)
+        ));
+        assert!(matches!(
+            engine.delay("Node B", "https://example.com", 5000).await,
+            Err(EngineError::EngineDown)
+        ));
+    }
+
+    // Regression: the doc promised the live file is written before the
+    // reload, but no code wrote it. A failed validation must leave the live
+    // file and the running engine untouched.
+    #[tokio::test]
+    async fn a_failed_validation_leaves_the_live_file_and_the_engine_untouched() {
+        use wiremock::matchers::any;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let live = dir.path().join("runtime-config.yaml");
+        std::fs::write(&live, "old: true\n").unwrap();
+        let engine = MeowEngine::new(PathBuf::from("no-such-engine-binary"), live.clone());
+
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+        *engine.client.write().unwrap() = Some(ControllerClient::new(server.uri(), "s"));
+
+        let error = engine
+            .reload(&config())
+            .await
+            .expect_err("a candidate that cannot be validated is not applied");
+        assert!(matches!(error, EngineError::Spawn(_)), "{error:?}");
+        assert_eq!(std::fs::read_to_string(&live).unwrap(), "old: true\n");
+        assert!(!dir.path().join("runtime-config.yaml.candidate").exists());
+    }
+
+    /// A stand-in for the engine's `-t` check: exits with `code`.
+    #[cfg(unix)]
+    fn fake_validator(dir: &std::path::Path, code: i32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-meow");
+        std::fs::write(&path, format!("#!/bin/sh\nexit {code}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_valid_candidate_is_written_to_the_live_file_and_reloaded_by_path() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let live = dir.path().join("runtime-config.yaml");
+        std::fs::write(&live, "old: true\n").unwrap();
+        let engine = MeowEngine::new(fake_validator(dir.path(), 0), live.clone());
+
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/configs"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        *engine.client.write().unwrap() = Some(ControllerClient::new(server.uri(), "s"));
+
+        let mut candidate = config();
+        candidate.mixed_port = Some(1080);
+        engine
+            .reload(&candidate)
+            .await
+            .expect("the reload is applied");
+
+        let written = std::fs::read_to_string(&live).unwrap();
+        assert!(written.contains("mixed-port: 1080"), "{written}");
+        assert!(!dir.path().join("runtime-config.yaml.candidate").exists());
+        assert!(!dir.path().join("runtime-config.yaml.tmp").exists());
+
+        let requests = server.received_requests().await.unwrap_or_default();
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body, serde_json::json!({ "path": live.to_string_lossy() }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_refused_reload_puts_the_previous_live_file_back() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let live = dir.path().join("runtime-config.yaml");
+        std::fs::write(&live, "old: true\n").unwrap();
+        let engine = MeowEngine::new(fake_validator(dir.path(), 0), live.clone());
+
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/configs"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_json(serde_json::json!({ "message": "boom" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        *engine.client.write().unwrap() = Some(ControllerClient::new(server.uri(), "s"));
+
+        let error = engine
+            .reload(&config())
+            .await
+            .expect_err("the engine refused the reload");
+        assert!(matches!(error, EngineError::BadRequest(_)), "{error:?}");
+        assert_eq!(std::fs::read_to_string(&live).unwrap(), "old: true\n");
     }
 }

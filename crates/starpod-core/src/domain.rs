@@ -166,13 +166,26 @@ pub struct UserPreferences {
     /// The node the user picked inside the selected group, by node id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_node_id: Option<String>,
+    /// How often subscriptions refresh automatically, in minutes.
+    ///
+    /// `None` means the user has not chosen, and the app's default interval
+    /// applies. `Some(0)` means manual refresh only. Files written before this
+    /// field existed load with `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_refresh_minutes: Option<u32>,
 }
 
 impl Default for UserPreferences {
+    /// A new user has chosen nothing. The ports are left unset on purpose:
+    /// setting them here would make them the user's explicit choice, and a
+    /// subscription's own ports could then never apply. The merge supplies
+    /// [`DEFAULT_MIXED_PORT`](crate::config::DEFAULT_MIXED_PORT) and
+    /// [`DEFAULT_SOCKS_PORT`](crate::config::DEFAULT_SOCKS_PORT) when neither
+    /// the user nor a subscription sets them.
     fn default() -> Self {
         Self {
-            mixed_port: Some(7890),
-            socks_port: Some(7891),
+            mixed_port: None,
+            socks_port: None,
             port: None,
             allow_lan: None,
             bind_address: None,
@@ -181,6 +194,7 @@ impl Default for UserPreferences {
             tun: TunSettings::default(),
             selected_group: None,
             selected_node_id: None,
+            auto_refresh_minutes: None,
         }
     }
 }
@@ -612,5 +626,44 @@ pub fn payload_hint(kind: RuleKind) -> &'static str {
         RuleKind::SubRule => "my-block",
         RuleKind::And | RuleKind::Or | RuleKind::Not => "((DOMAIN,a.com),(DST-PORT,443))",
         RuleKind::Match => "",
+    }
+}
+
+#[cfg(test)]
+mod preference_tests {
+    use super::*;
+
+    #[test]
+    fn a_new_user_has_chosen_no_ports() {
+        let prefs = UserPreferences::default();
+        assert_eq!(prefs.mixed_port, None);
+        assert_eq!(prefs.socks_port, None);
+    }
+
+    #[test]
+    fn a_preferences_file_written_before_the_refresh_setting_still_loads() {
+        let old = r#"{"mixed_port":1080}"#;
+        let prefs: UserPreferences = serde_json::from_str(old).expect("the old file loads");
+        assert_eq!(prefs.mixed_port, Some(1080));
+        assert_eq!(prefs.auto_refresh_minutes, None);
+    }
+
+    #[test]
+    fn an_unset_refresh_setting_is_not_written() {
+        let text = serde_json::to_string(&UserPreferences::default()).expect("serialises");
+        assert!(!text.contains("auto_refresh_minutes"), "{text}");
+    }
+
+    #[test]
+    fn the_refresh_setting_round_trips_including_manual_only() {
+        for minutes in [Some(0), Some(30), None] {
+            let prefs = UserPreferences {
+                auto_refresh_minutes: minutes,
+                ..UserPreferences::default()
+            };
+            let text = serde_json::to_string(&prefs).expect("serialises");
+            let back: UserPreferences = serde_json::from_str(&text).expect("deserialises");
+            assert_eq!(back.auto_refresh_minutes, minutes);
+        }
     }
 }

@@ -23,13 +23,10 @@ url = { workspace = true }
 # build never compiles the Keychain bindings and a macOS build never compiles
 # the Secret Service D-Bus client.
 [target.'cfg(target_os = "windows")'.dependencies]
-# `Win32_Security_Authorization` for `SetNamedSecurityInfoW` (the DACL),
-# `Win32_Security_Cryptography` for DPAPI, and `Win32_Storage_FileSystem` for
-# `MoveFileExW` (the atomic rename).
-windows = { workspace = true, features = [
-    "Win32_Security_Authorization",
-    "Win32_Storage_FileSystem",
-] }
+# DPAPI, the DACL (`SetNamedSecurityInfoW`) and the atomic rename (`MoveFileExW`)
+# use the workspace `windows` crate; its features are declared once in the root
+# Cargo.toml.
+windows = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { workspace = true }

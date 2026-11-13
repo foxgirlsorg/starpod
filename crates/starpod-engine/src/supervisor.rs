@@ -108,10 +108,11 @@ pub fn controller_file_dir() -> Option<PathBuf> {
 
 /// The controller's address, read from the engine's controller file.
 ///
-/// The file is written by the engine once its controller is bound, and
-/// removed when it exits.
-pub fn read_controller_address(pid: u32) -> Option<String> {
-    let dir = controller_file_dir()?;
+/// `dir` is the directory the child was pointed at with `MEOW_RUNTIME_DIR`.
+/// It must be the same one: the file is written there, not in the global
+/// default. The file is written by the engine once its controller is bound,
+/// and removed when it exits.
+pub fn read_controller_address(dir: &Path, pid: u32) -> Option<String> {
     let path = dir.join(format!("{pid}.json"));
     let text = std::fs::read_to_string(path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -136,6 +137,9 @@ pub struct EngineProcess {
     secret: String,
     /// The engine's process id, for the controller file.
     pid: u32,
+    /// The directory the engine was told to publish its controller file in.
+    /// `None` means the engine chose its own, which is the global default.
+    controller_dir: Option<PathBuf>,
 }
 
 impl EngineProcess {
@@ -157,19 +161,8 @@ impl EngineProcess {
         logs: &LogBuffer,
         redactor: &Redactor,
     ) -> EngineResult<Self> {
-        let document = EngineDocument::build(config).with_controller(CONTROLLER_ADDRESS);
-        let yaml = document
-            .to_yaml()
-            .map_err(|e| EngineError::Internal(e.to_string()))?;
-
-        if let Some(parent) = config_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| EngineError::Io(e.to_string()))?;
-        }
-        write_private_file(config_path, yaml.as_bytes())
-            .await
-            .map_err(|e| EngineError::Io(e.to_string()))?;
+        let yaml = live_document(config)?;
+        write_live_config(config_path, yaml.as_bytes()).await?;
 
         let mut command = Command::new(binary);
         command
@@ -225,6 +218,7 @@ impl EngineProcess {
             pid: child.id().unwrap_or(0),
             child,
             secret: secret.to_string(),
+            controller_dir: controller_dir.map(Path::to_path_buf),
         })
     }
 
@@ -235,7 +229,11 @@ impl EngineProcess {
 
     /// The controller's address, once the engine has published it.
     pub fn controller_address(&self) -> Option<String> {
-        read_controller_address(self.pid)
+        let dir = match &self.controller_dir {
+            Some(dir) => dir.clone(),
+            None => controller_file_dir()?,
+        };
+        read_controller_address(&dir, self.pid)
     }
 
     /// The controller's secret.
@@ -270,16 +268,15 @@ impl EngineProcess {
 
         #[cfg(unix)]
         {
-            // SAFETY: `id()` is the child's pid, which the engine owns.
-            // The signal is sent to the process, which is what SIGTERM is
-            // for; a pid that has already exited is a no-op.
-            unsafe {
-                nix::sys::signal::kill(
-                    nix::unistd::Pid::from_raw(self.child.id().unwrap_or(0) as i32),
-                    nix::sys::signal::Signal::SIGTERM,
-                )
-                .ok();
-            }
+            // `id()` is the child's pid, which the engine owns. The signal is
+            // sent to the process, which is what SIGTERM is for; a pid that
+            // has already exited is a no-op. `nix::sys::signal::kill` is a
+            // safe wrapper, so no `unsafe` is needed here.
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(self.child.id().unwrap_or(0) as i32),
+                nix::sys::signal::Signal::SIGTERM,
+            )
+            .ok();
         }
 
         #[cfg(windows)]
@@ -339,6 +336,43 @@ where
     });
 }
 
+/// The YAML the live configuration file holds.
+///
+/// It names the controller address, because the controller is bound once at
+/// startup and a reload must not drop the address the file was started with.
+/// The secret is never written here.
+pub(crate) fn live_document(config: &RuntimeConfig) -> EngineResult<String> {
+    EngineDocument::build(config)
+        .with_controller(CONTROLLER_ADDRESS)
+        .to_yaml()
+        .map_err(|e| EngineError::Internal(e.to_string()))
+}
+
+/// Replace the live configuration file with `bytes`, atomically.
+///
+/// The bytes go to a sibling temporary file, which is then renamed over the
+/// live one. A reader sees either the old file or the new one, never a
+/// half-written file, and a failure part-way leaves the old file in place.
+pub(crate) async fn write_live_config(path: &Path, bytes: &[u8]) -> EngineResult<()> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| EngineError::Io(e.to_string()))?;
+    }
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".tmp");
+    let temporary = PathBuf::from(temporary);
+
+    if let Err(error) = write_private_file(&temporary, bytes).await {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        return Err(EngineError::Io(error.to_string()));
+    }
+    tokio::fs::rename(&temporary, path).await.map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        EngineError::Io(error.to_string())
+    })
+}
+
 /// Write a file that only its owner can read.
 ///
 /// The configuration file holds subscription URLs, which carry tokens. It
@@ -346,7 +380,8 @@ where
 async fn write_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt as _;
+        // `mode` is an inherent method on `tokio::fs::OpenOptions` on Unix,
+        // so no `OpenOptionsExt` import is needed.
         let mut file = tokio::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -439,6 +474,12 @@ impl Supervisor {
     pub fn with_controller_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.controller_dir = Some(dir.into());
         self
+    }
+
+    /// The directory the engine is told to publish its controller file in,
+    /// if one was set.
+    pub fn controller_dir(&self) -> Option<&Path> {
+        self.controller_dir.as_deref()
     }
 
     /// The controller's address.

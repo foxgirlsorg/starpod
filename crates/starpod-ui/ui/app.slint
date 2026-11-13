@@ -1,0 +1,283 @@
+// The application entry file.
+//
+// Everything the Rust side needs is exported from here: the window, the
+// tray, the Bridge global and the structs the Bridge carries. Rust code is
+// generated only for what this file exports (ARCHITECTURE §6.3).
+
+import { Design } from "design.slint";
+import { IconLayoutDashboard, IconServer, IconRoute, IconSettings, IconScrollText } from "icons.slint";
+import { FoxMarkFill, FoxMarkOutline } from "logo.slint";
+import { StatusDot, StatusKind, ErrorBanner, BannerKind } from "primitives.slint";
+import { Bridge } from "bridge.slint";
+import { DashboardPage } from "screens/dashboard.slint";
+import { ServersPage } from "screens/servers.slint";
+import { RulesPage } from "screens/rules.slint";
+import { SettingsPage } from "screens/settings.slint";
+import { LogsPage } from "screens/logs.slint";
+
+export { Bridge, SubscriptionItem, NodeItem, RuleItem, LogItem, SettingsModel } from "bridge.slint";
+export { AppTray } from "tray.slint";
+
+// One row in the sidebar. The icon is passed as a child so each nav item is
+// a plain row; the active state comes from the caller.
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    callback activated();
+
+    height: 36px;
+    border-radius: Design.radius-lg;
+    background: root.active ? Design.primary
+        : touch.has-hover ? Design.secondary
+        : transparent;
+
+    HorizontalLayout {
+        padding-left: Design.space-md;
+        padding-right: Design.space-md;
+        spacing: Design.space-md;
+        alignment: start;
+
+        @children
+
+        Text {
+            text: root.label;
+            color: root.active ? Design.primary-foreground : Design.foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-sm;
+            font-weight: 500;
+            vertical-alignment: center;
+            wrap: no-wrap;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.activated();
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Starpod";
+    min-width: 900px;
+    min-height: 600px;
+    preferred-width: 1100px;
+    preferred-height: 720px;
+    background: Design.background;
+
+    private property <string> page-title: Bridge.active-page == 0 ? "Dashboard"
+        : Bridge.active-page == 1 ? "Servers"
+        : Bridge.active-page == 2 ? "Rules"
+        : Bridge.active-page == 3 ? "Settings"
+        : "Logs";
+
+    private property <StatusKind> engine-kind: Bridge.engine-phase == "running" ? StatusKind.running
+        : Bridge.engine-phase == "failed" ? StatusKind.error
+        : (Bridge.engine-phase == "starting" || Bridge.engine-phase == "stopping") ? StatusKind.syncing
+        : StatusKind.stopped;
+
+    private property <BannerKind> banner-kind: Bridge.banner-kind == "success" ? BannerKind.success
+        : Bridge.banner-kind == "error" ? BannerKind.error
+        : BannerKind.info;
+
+    HorizontalLayout {
+        // The sidebar.
+        Rectangle {
+            width: 220px;
+            background: Design.card;
+
+            VerticalLayout {
+                padding: Design.space-lg;
+                padding-top: Design.space-xl;
+                spacing: Design.space-xs;
+
+                HorizontalLayout {
+                    spacing: Design.space-sm;
+                    alignment: start;
+                    padding-bottom: Design.space-lg;
+
+                    Rectangle {
+                        width: 36px;
+                        height: 34px;
+
+                        FoxMarkFill {
+                            width: parent.width;
+                            height: parent.height;
+                            viewbox-x: -10;
+                            viewbox-y: 0;
+                            viewbox-width: 230;
+                            viewbox-height: 220;
+                        }
+
+                        FoxMarkOutline {
+                            width: parent.width;
+                            height: parent.height;
+                            viewbox-x: -10;
+                            viewbox-y: 0;
+                            viewbox-width: 230;
+                            viewbox-height: 220;
+                        }
+                    }
+
+                    Text {
+                        text: "Starpod";
+                        color: Design.foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-lg;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+
+                NavItem {
+                    label: "Dashboard";
+                    active: Bridge.active-page == 0;
+                    activated => {
+                        Bridge.active-page = 0;
+                    }
+
+                    IconLayoutDashboard {
+                        width: 16px;
+                        height: 16px;
+                        stroke: Bridge.active-page == 0 ? Design.primary-foreground : Design.muted-foreground;
+                        stroke-width: 2px;
+                    }
+                }
+
+                NavItem {
+                    label: "Servers";
+                    active: Bridge.active-page == 1;
+                    activated => {
+                        Bridge.active-page = 1;
+                    }
+
+                    IconServer {
+                        width: 16px;
+                        height: 16px;
+                        stroke: Bridge.active-page == 1 ? Design.primary-foreground : Design.muted-foreground;
+                        stroke-width: 2px;
+                    }
+                }
+
+                NavItem {
+                    label: "Rules";
+                    active: Bridge.active-page == 2;
+                    activated => {
+                        Bridge.active-page = 2;
+                    }
+
+                    IconRoute {
+                        width: 16px;
+                        height: 16px;
+                        stroke: Bridge.active-page == 2 ? Design.primary-foreground : Design.muted-foreground;
+                        stroke-width: 2px;
+                    }
+                }
+
+                NavItem {
+                    label: "Settings";
+                    active: Bridge.active-page == 3;
+                    activated => {
+                        Bridge.active-page = 3;
+                    }
+
+                    IconSettings {
+                        width: 16px;
+                        height: 16px;
+                        stroke: Bridge.active-page == 3 ? Design.primary-foreground : Design.muted-foreground;
+                        stroke-width: 2px;
+                    }
+                }
+
+                NavItem {
+                    label: "Logs";
+                    active: Bridge.active-page == 4;
+                    activated => {
+                        Bridge.active-page = 4;
+                    }
+
+                    IconScrollText {
+                        width: 16px;
+                        height: 16px;
+                        stroke: Bridge.active-page == 4 ? Design.primary-foreground : Design.muted-foreground;
+                        stroke-width: 2px;
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                // The engine phase, at the foot of the sidebar.
+                HorizontalLayout {
+                    padding-left: Design.space-md;
+                    spacing: Design.space-sm;
+                    alignment: start;
+                    height: 28px;
+
+                    StatusDot {
+                        kind: engine-kind;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Text {
+                        text: Bridge.engine-phase;
+                        color: Design.muted-foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-xs;
+                        vertical-alignment: center;
+                        wrap: no-wrap;
+                    }
+                }
+            }
+        }
+
+        // The hairline between the sidebar and the content.
+        Rectangle {
+            width: 1px;
+            background: Design.border;
+        }
+
+        // The content area: a header, the banner, then the active page.
+        VerticalLayout {
+            horizontal-stretch: 1;
+
+            HorizontalLayout {
+                padding-left: Design.space-xl;
+                padding-right: Design.space-xl;
+                padding-top: Design.space-xl;
+                height: 72px;
+
+                Text {
+                    text: root.page-title;
+                    color: Design.foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-xl;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                }
+            }
+
+            if (Bridge.banner-message != "") : HorizontalLayout {
+                padding-left: Design.space-xl;
+                padding-right: Design.space-xl;
+
+                ErrorBanner {
+                    horizontal-stretch: 1;
+                    message: Bridge.banner-message;
+                    kind: root.banner-kind;
+                    dismissed => {
+                        Bridge.dismiss-banner();
+                    }
+                }
+            }
+
+            if (Bridge.active-page == 0) : DashboardPage {}
+            if (Bridge.active-page == 1) : ServersPage {}
+            if (Bridge.active-page == 2) : RulesPage {}
+            if (Bridge.active-page == 3) : SettingsPage {}
+            if (Bridge.active-page == 4) : LogsPage {}
+        }
+    }
+}

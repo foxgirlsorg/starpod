@@ -18,7 +18,7 @@
 //   wrapper. `TooltipArea` is the compiler's internal machinery.
 
 import { Design } from "design.slint";
-import { IconChevronDown, IconRefreshCw, IconTriangleAlert } from "icons.slint";
+import { IconChevronDown, IconRefreshCw, IconTriangleAlert, IconX } from "icons.slint";
 
 // ---------------------------------------------------------------------------
 // Button
@@ -79,7 +79,7 @@ export component AppButton inherits Rectangle {
         border-width: 3px;
         border-color: Design.ring;
         opacity: 0.5;
-        visible: root.focus.has-focus;
+        visible: focus-scope.has-focus;
     }
 
     // The label.
@@ -116,7 +116,7 @@ export component AppButton inherits Rectangle {
     // The focus scope and the touch area. They are separate elements
     // because `has-focus` belongs to the `FocusScope`, not to the
     // rectangle the button is drawn with.
-    focus := FocusScope {
+    focus-scope := FocusScope {
         focus-on-click: true;
 
         touch := TouchArea {
@@ -473,33 +473,49 @@ export component EmptyState inherits VerticalLayout {
 // Error banner
 // ---------------------------------------------------------------------------
 
+export enum BannerKind {
+    info,
+    success,
+    error,
+}
+
 export component ErrorBanner inherits Rectangle {
     in property <string> message;
     in property <string> detail;
+    in property <BannerKind> kind: BannerKind.error;
     callback dismissed();
 
-    background: Design.destructive;
+    private property <color> ink: root.kind == BannerKind.error ? Design.primary-foreground : Design.foreground;
+
+    background: root.kind == BannerKind.error ? Design.destructive
+        : root.kind == BannerKind.success ? Design.success
+        : Design.secondary;
     border-radius: Design.radius-md;
-    height: 48px;
+    border-width: root.kind == BannerKind.info ? 1px : 0px;
+    border-color: Design.input;
+    min-height: 44px;
 
     HorizontalLayout {
+        padding: Design.space-sm;
         padding-left: Design.space-md;
-        padding-right: Design.space-sm;
         spacing: Design.space-sm;
 
         IconTriangleAlert {
             width: 18px;
             height: 18px;
-            stroke: Design.primary-foreground;
+            y: (parent.height - self.height) / 2;
+            stroke: root.ink;
             stroke-width: 2px;
+            visible: root.kind == BannerKind.error;
         }
 
         VerticalLayout {
             spacing: 0px;
+            alignment: center;
 
             Text {
                 text: root.message;
-                color: Design.primary-foreground;
+                color: root.ink;
                 font-family: Design.font-family;
                 font-size: Design.font-sm;
                 font-weight: 500;
@@ -508,7 +524,7 @@ export component ErrorBanner inherits Rectangle {
 
             if (root.detail != "") : Text {
                 text: root.detail;
-                color: Design.primary-foreground;
+                color: root.ink;
                 font-family: Design.font-family;
                 font-size: Design.font-xs;
                 opacity: 0.85;
@@ -516,12 +532,27 @@ export component ErrorBanner inherits Rectangle {
             }
         }
 
-        AppButton {
-            text: "✕";
-            variant: ButtonVariant.ghost;
-            size: ButtonSize.sm;
-            clicked => {
-                root.dismissed();
+        // The dismiss control: an icon with a hit area, not a glyph in a
+        // text label.
+        Rectangle {
+            width: 28px;
+            height: 28px;
+            y: (parent.height - self.height) / 2;
+            border-radius: Design.radius-sm;
+
+            IconX {
+                width: 14px;
+                height: 14px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                stroke: root.ink;
+                stroke-width: 2px;
+            }
+
+            TouchArea {
+                clicked => {
+                    root.dismissed();
+                }
             }
         }
     }

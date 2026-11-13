@@ -558,7 +558,10 @@ mod tests {
     fn full_config() -> RuntimeConfig {
         let mut raw = Map::new();
         raw.insert("type".to_string(), Value::String("ss".to_string()));
-        raw.insert("server".to_string(), Value::String("example.invalid".to_string()));
+        raw.insert(
+            "server".to_string(),
+            Value::String("example.invalid".to_string()),
+        );
         raw.insert("port".to_string(), Value::from(443));
         raw.insert("password".to_string(), Value::String("pw".to_string()));
 

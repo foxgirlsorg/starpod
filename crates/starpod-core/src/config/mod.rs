@@ -11,7 +11,8 @@
 //!
 //! | # | Field | Precedence |
 //! |---|-------|------------|
-//! | P1 | ports, `allow_lan`, `bind_address` | user > subscription > default |
+//! | P1 | ports | user > subscription > default |
+//! | P1a | `allow_lan`, `bind_address` | user > default (off / loopback); a subscription is never consulted |
 //! | P2 | `mode`, `log_level`, `tun`, `dns` | user > subscription > default |
 //! | P3 | nodes | union; the user wins on a name collision |
 //! | P4 | proxy groups | user > subscription, per group name |
@@ -260,8 +261,8 @@ fn merge(normalized: &Normalized, findings: &mut Vec<Finding>) -> RuntimeConfig 
     let mut mixed_port = prefs.mixed_port;
     let mut socks_port = prefs.socks_port;
     let mut port = prefs.port;
-    let mut allow_lan = prefs.allow_lan;
-    let mut bind_address = prefs.bind_address.clone();
+    let allow_lan = prefs.allow_lan;
+    let bind_address = prefs.bind_address.clone();
     let mut mode = prefs.mode;
     let mut log_level = prefs.log_level;
 
@@ -276,12 +277,9 @@ fn merge(normalized: &Normalized, findings: &mut Vec<Finding>) -> RuntimeConfig 
         if port.is_none() {
             port = settings.port;
         }
-        if allow_lan.is_none() {
-            allow_lan = settings.allow_lan;
-        }
-        if bind_address.is_none() {
-            bind_address = settings.bind_address.clone();
-        }
+        // `allow_lan` and `bind_address` are deliberately absent: whether the
+        // proxy is reachable from the network is the user's decision alone
+        // (P1a). A remote subscription must never be able to expose it.
         if mode.is_none() {
             mode = settings.mode;
         }
@@ -553,10 +551,10 @@ fn validate(config: &RuntimeConfig, findings: &mut Vec<Finding>) -> RuntimeConfi
         let Some(target) = rule_target(rule) else {
             continue;
         };
-        if builtins.iter().any(|b| b.as_str() == target) {
+        if builtins.iter().any(|b| b.as_str() == target.as_str()) {
             continue;
         }
-        if known.contains(target) {
+        if known.contains(target.as_str()) {
             continue;
         }
         findings.push(Finding {
@@ -623,19 +621,14 @@ fn validate(config: &RuntimeConfig, findings: &mut Vec<Finding>) -> RuntimeConfi
 }
 
 /// The target of an engine rule line, when it has one.
-fn rule_target(rule: &str) -> Option<&str> {
-    let mut parts = rule.splitn(4, ',');
-    let kind = parts.next()?;
-    if kind == "MATCH" {
-        return parts.next().map(str::trim);
-    }
-    if kind == "RULE-SET" {
-        return parts.nth(1).map(str::trim);
-    }
-    if kind == "SUB-RULE" {
-        return None;
-    }
-    parts.nth(1).map(str::trim)
+///
+/// Read with the rule parser rather than a comma split. A logic rule's
+/// payload contains commas, so its target is the field after the balanced
+/// group list, and only the parser locates that correctly. A second splitter
+/// here would disagree with the parser on exactly those lines.
+fn rule_target(rule: &str) -> Option<String> {
+    let spec = crate::rules::parse_line(rule).ok()?;
+    spec.target().map(|target| target.as_str().to_string())
 }
 
 /// Find the group-reference cycles in a group list.

@@ -1,0 +1,468 @@
+// The Rules screen (ARCHITECTURE §6.2 Rules, §3.3.1).
+//
+// Two editors over the same rule list: a structured editor (the default) and
+// a raw-text editor where each line is one meow rule. The page holds no
+// business logic. Every change goes to a Bridge callback, and Rust validates
+// and pushes the result back through `rules-error` and the rule lists.
+
+import { Design } from "../design.slint";
+import { Bridge } from "../bridge.slint";
+import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, EmptyState, LoadingState, SectionHeading } from "../primitives.slint";
+import { IconChevronRight } from "../icons.slint";
+import { ScrollView, ComboBox, TextEdit } from "std-widgets.slint";
+
+export component RulesPage inherits VerticalLayout {
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
+
+    // UI state only. 0 = structured editor, 1 = raw text.
+    private property <int> mode: 0;
+    // The position of the rule the form is editing, or -1 when it adds one.
+    private property <int> editing-index: -1;
+    // The combos hold the chosen value itself (bound through `current-value`),
+    // so no index lookup is needed when a rule is loaded into the form.
+    private property <string> kind-draft: "";
+    private property <string> target-draft: "";
+    private property <string> payload-draft: "";
+    private property <string> raw-draft: Bridge.rules-raw-text;
+
+    private property <string> submit-reason: root.payload-draft == "" ? "Enter a payload to match first, for example example.com"
+        : (root.kind-draft == "" || root.target-draft == "") ? "Choose a kind and a target first"
+        : "";
+
+    function start-edit(index: int, kind: string, payload: string, target: string) {
+        root.editing-index = index;
+        root.kind-draft = kind;
+        root.target-draft = target;
+        root.payload-draft = payload;
+    }
+
+    function reset-form() {
+        root.editing-index = -1;
+        root.kind-draft = "";
+        root.target-draft = "";
+        root.payload-draft = "";
+    }
+
+    // Moving or deleting a rule shifts positions, so an open edit no longer
+    // refers to the row it started on. Drop it.
+    function rules-changed() {
+        if (root.editing-index >= 0) {
+            root.reset-form();
+        }
+    }
+
+    function submit-form() {
+        if (root.editing-index >= 0) {
+            Bridge.update-rule(root.editing-index, root.kind-draft, root.payload-draft, root.target-draft);
+        } else {
+            Bridge.add-rule(root.kind-draft, root.payload-draft, root.target-draft);
+        }
+    }
+
+    if (!Bridge.loaded) : LoadingState {
+        vertical-stretch: 1;
+        message: "Waiting for the proxy engine to report its rules…";
+    }
+
+    if (Bridge.loaded) : ScrollView {
+        VerticalLayout {
+            width: parent.width;
+            padding: Design.space-xl;
+            spacing: Design.space-lg;
+            alignment: start;
+
+            SectionHeading {
+                eyebrow: "Routing";
+                title: "Rules";
+                description: "The ordered rules that decide where each connection goes. The first matching rule wins.";
+            }
+
+            HorizontalLayout {
+                spacing: Design.space-sm;
+                alignment: start;
+
+                AppButton {
+                    text: "Structured";
+                    variant: root.mode == 0 ? ButtonVariant.default : ButtonVariant.secondary;
+                    clicked => {
+                        root.mode = 0;
+                    }
+                }
+
+                AppButton {
+                    text: "Raw text";
+                    variant: root.mode == 1 ? ButtonVariant.default : ButtonVariant.secondary;
+                    clicked => {
+                        root.mode = 1;
+                    }
+                }
+            }
+
+            if (Bridge.rules-error != "") : Text {
+                text: Bridge.rules-error;
+                color: Design.destructive;
+                font-family: Design.font-family;
+                font-size: Design.font-sm;
+                wrap: word-wrap;
+            }
+
+            // ----------------------------------------------------------------
+            // Structured mode
+            // ----------------------------------------------------------------
+            if (root.mode == 0) : VerticalLayout {
+                spacing: Design.space-lg;
+
+                Card {
+                    title: "Your rules";
+                    description: "Evaluated in order. These come before the subscription rules below.";
+
+                    if (Bridge.user-rules.length == 0) : EmptyState {
+                        title: "No rules of your own yet";
+                        description: "Add one below. Until then only the subscription rules apply.";
+                    }
+
+                    for rule[i] in Bridge.user-rules : Rectangle {
+                        background: root.editing-index == rule.index ? Design.muted : transparent;
+                        border-radius: Design.radius-md;
+
+                        VerticalLayout {
+                            padding: Design.space-sm;
+                            spacing: Design.space-xs;
+
+                            HorizontalLayout {
+                                spacing: Design.space-sm;
+
+                                Text {
+                                    text: "\{i + 1}";
+                                    width: 24px;
+                                    color: Design.muted-foreground;
+                                    font-family: Design.font-family;
+                                    font-size: Design.font-sm;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+
+                                Badge {
+                                    text: rule.kind;
+                                    variant: BadgeVariant.secondary;
+                                    width: 152px;
+                                }
+
+                                Text {
+                                    text: rule.payload;
+                                    color: Design.foreground;
+                                    font-family: Design.font-family;
+                                    font-size: Design.font-sm;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                    wrap: word-wrap;
+                                }
+
+                                IconChevronRight {
+                                    width: 14px;
+                                    height: 14px;
+                                    y: (parent.height - self.height) / 2;
+                                    stroke: Design.muted-foreground;
+                                    stroke-width: 2px;
+                                }
+
+                                Text {
+                                    text: rule.target;
+                                    color: Design.foreground;
+                                    font-family: Design.font-family;
+                                    font-size: Design.font-sm;
+                                    font-weight: 500;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: end;
+                                spacing: Design.space-sm;
+
+                                AppButton {
+                                    text: "Up";
+                                    variant: ButtonVariant.ghost;
+                                    size: ButtonSize.sm;
+                                    enabled: i > 0;
+                                    disabled-reason: "This rule is already first";
+                                    clicked => {
+                                        Bridge.move-rule(rule.index, -1);
+                                        root.rules-changed();
+                                    }
+                                }
+
+                                AppButton {
+                                    text: "Down";
+                                    variant: ButtonVariant.ghost;
+                                    size: ButtonSize.sm;
+                                    enabled: i < Bridge.user-rules.length - 1;
+                                    disabled-reason: "This rule is already last";
+                                    clicked => {
+                                        Bridge.move-rule(rule.index, 1);
+                                        root.rules-changed();
+                                    }
+                                }
+
+                                AppButton {
+                                    text: "Edit";
+                                    variant: ButtonVariant.ghost;
+                                    size: ButtonSize.sm;
+                                    clicked => {
+                                        root.start-edit(rule.index, rule.kind, rule.payload, rule.target);
+                                    }
+                                }
+
+                                AppButton {
+                                    text: "Delete";
+                                    variant: ButtonVariant.destructive;
+                                    size: ButtonSize.sm;
+                                    clicked => {
+                                        Bridge.delete-rule(rule.index);
+                                        root.rules-changed();
+                                    }
+                                }
+                            }
+
+                            if (rule.error != "") : Text {
+                                text: rule.error;
+                                color: Design.destructive;
+                                font-family: Design.font-family;
+                                font-size: Design.font-xs;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+
+                Card {
+                    title: root.editing-index >= 0 ? "Edit rule \{root.editing-index + 1}" : "Add a rule";
+                    description: root.editing-index >= 0
+                        ? "Save replaces this rule in place. Cancel leaves it unchanged."
+                        : "New rules go to the end of your list.";
+
+                    HorizontalLayout {
+                        spacing: Design.space-md;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: Design.space-xs;
+
+                            Text {
+                                text: "Kind";
+                                color: Design.muted-foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-xs;
+                            }
+
+                            ComboBox {
+                                model: Bridge.rule-kinds;
+                                current-value <=> root.kind-draft;
+                            }
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: Design.space-xs;
+
+                            Text {
+                                text: "Target";
+                                color: Design.muted-foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-xs;
+                            }
+
+                            ComboBox {
+                                model: Bridge.rule-targets;
+                                current-value <=> root.target-draft;
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: Design.space-xs;
+
+                        Text {
+                            text: "Payload";
+                            color: Design.muted-foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-xs;
+                        }
+
+                        Rectangle {
+                            height: 36px;
+                            background: Design.background;
+                            border-radius: Design.radius-md;
+                            border-width: 1px;
+                            border-color: Design.input;
+
+                            // TextInput has no placeholder property in 1.18,
+                            // so the hint is shown only while the value is empty.
+                            if (root.payload-draft == "") : Text {
+                                x: Design.space-sm;
+                                width: parent.width - 2 * Design.space-sm;
+                                height: parent.height;
+                                text: "example.com, 10.0.0.0/8, 443";
+                                color: Design.muted-foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-sm;
+                                vertical-alignment: center;
+                            }
+
+                            TextInput {
+                                x: Design.space-sm;
+                                width: parent.width - 2 * Design.space-sm;
+                                height: parent.height;
+                                color: Design.foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-sm;
+                                vertical-alignment: center;
+                                text <=> root.payload-draft;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "Rust checks the rest when you save. Any problem is shown above.";
+                        color: Design.muted-foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-xs;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: Design.space-sm;
+
+                        if (root.editing-index >= 0) : AppButton {
+                            text: "Cancel";
+                            variant: ButtonVariant.secondary;
+                            clicked => {
+                                root.reset-form();
+                            }
+                        }
+
+                        AppButton {
+                            text: root.editing-index >= 0 ? "Save" : "Add rule";
+                            variant: ButtonVariant.default;
+                            enabled: root.submit-reason == "";
+                            disabled-reason: root.submit-reason;
+                            clicked => {
+                                root.submit-form();
+                            }
+                        }
+                    }
+                }
+
+                Card {
+                    title: "From subscriptions";
+                    description: "Read-only. Your rules above are evaluated first; these follow, in the order the subscription supplies them.";
+
+                    if (Bridge.subscription-rules.length == 0) : EmptyState {
+                        title: "No subscription rules";
+                        description: "Rules that come with a subscription are listed here once it has been fetched.";
+                    }
+
+                    for rule in Bridge.subscription-rules : HorizontalLayout {
+                        spacing: Design.space-sm;
+
+                        Badge {
+                            text: "subscription";
+                            variant: BadgeVariant.outline;
+                            width: 112px;
+                        }
+
+                        Badge {
+                            text: rule.kind;
+                            variant: BadgeVariant.secondary;
+                            width: 152px;
+                        }
+
+                        Text {
+                            text: rule.payload;
+                            color: Design.foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-sm;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                        }
+
+                        Text {
+                            text: rule.target;
+                            color: Design.muted-foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-sm;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Raw text mode
+            // ----------------------------------------------------------------
+            if (root.mode == 1) : Card {
+                title: "Raw rules";
+                description: "Advanced. Each line is one complete meow rule, checked when you apply it.";
+
+                Text {
+                    text: "One rule per line, e.g. DOMAIN-SUFFIX,example.com,DIRECT";
+                    color: Design.muted-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-xs;
+                    wrap: word-wrap;
+                }
+
+                Rectangle {
+                    height: 280px;
+                    background: Design.background;
+                    border-radius: Design.radius-md;
+                    border-width: 1px;
+                    border-color: Design.input;
+
+                    TextEdit {
+                        x: 0;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                        // Monospace for rule lines. Design has no mono token.
+                        font-family: "Consolas";
+                        font-size: Design.font-sm;
+                        wrap: no-wrap;
+                        placeholder-text: "DOMAIN-SUFFIX,example.com,DIRECT";
+                        text <=> root.raw-draft;
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Design.space-sm;
+
+                    AppButton {
+                        text: "Revert";
+                        variant: ButtonVariant.secondary;
+                        enabled: root.raw-draft != Bridge.rules-raw-text;
+                        disabled-reason: "No changes to revert";
+                        clicked => {
+                            root.raw-draft = Bridge.rules-raw-text;
+                        }
+                    }
+
+                    AppButton {
+                        text: "Apply";
+                        variant: ButtonVariant.default;
+                        clicked => {
+                            Bridge.apply-raw-rules(root.raw-draft);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

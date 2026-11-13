@@ -230,7 +230,10 @@ mod tests {
     #[test]
     fn the_controller_directory_is_inside_the_data_directory() {
         let paths = AppPaths::from_roots("/cfg", "/data", "/cache");
-        assert_eq!(paths.controller_dir(), Path::new("/data/Starpod/controllers"));
+        assert_eq!(
+            paths.controller_dir(),
+            Path::new("/data/Starpod/controllers")
+        );
     }
 
     #[test]

@@ -1,0 +1,418 @@
+// The Dashboard screen.
+//
+// A large status word says what the engine is doing, then the routing mode,
+// the quick actions and a few information cards. This file holds layout and
+// display expressions only: every action calls a Bridge callback, and the
+// Rust side decides what happens.
+
+import { ScrollView } from "std-widgets.slint";
+import { Design } from "../design.slint";
+import { Bridge } from "../bridge.slint";
+import { AppButton, ButtonSize, ButtonVariant, Card, EmptyState, LoadingState, SectionHeading, StatusDot, StatusKind } from "../primitives.slint";
+import { IconRefreshCw } from "../icons.slint";
+
+// One routing mode in the segmented control.
+component ModeSegment inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    in property <bool> enabled: true;
+    in property <string> disabled-reason;
+    callback clicked();
+
+    horizontal-stretch: 1;
+    height: 28px;
+    border-radius: Design.radius-md;
+    background: root.selected ? Design.primary : transparent;
+    opacity: root.enabled ? 1 : 0.5;
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.label;
+        color: root.selected ? Design.primary-foreground : Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+
+    if (!root.enabled && root.disabled-reason != "") : Tooltip {
+        text: @markdown("\{root.disabled-reason}");
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// One label-and-value card in the information grid.
+component InfoCard inherits Card {
+    in property <string> value;
+
+    Text {
+        text: root.value;
+        color: Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-md;
+        font-weight: 500;
+        wrap: word-wrap;
+    }
+}
+
+export component DashboardPage inherits Rectangle {
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
+
+    // The engine phase, read once here for the expressions below.
+    private property <bool> running: Bridge.engine-phase == "running";
+    private property <bool> failed: Bridge.engine-phase == "failed";
+    private property <bool> transitioning: Bridge.engine-phase == "starting" || Bridge.engine-phase == "stopping";
+
+    private property <string> hero-word: Bridge.engine-phase == "running" ? "CONNECTED"
+        : Bridge.engine-phase == "starting" ? "STARTING"
+        : Bridge.engine-phase == "stopping" ? "STOPPING"
+        : Bridge.engine-phase == "failed" ? "FAILED"
+        : "STOPPED";
+
+    private property <StatusKind> engine-kind: Bridge.engine-phase == "running" ? StatusKind.running
+        : Bridge.engine-phase == "failed" ? StatusKind.error
+        : (Bridge.engine-phase == "starting" || Bridge.engine-phase == "stopping") ? StatusKind.syncing
+        : StatusKind.stopped;
+
+    ScrollView {
+        width: root.width;
+        height: root.height;
+
+        VerticalLayout {
+            width: parent.width;
+            padding: Design.space-xl;
+            spacing: Design.space-lg;
+            alignment: start;
+
+            SectionHeading {
+                eyebrow: "Overview";
+                title: "Proxy status";
+                description: "Whether the proxy is running, the mode it routes in and the node it uses.";
+            }
+
+            if (!Bridge.loaded) : LoadingState {
+                message: "Waiting for the proxy engine to report its state…";
+            }
+
+            if (Bridge.loaded) : VerticalLayout {
+                spacing: Design.space-lg;
+
+                // Busy line: shown while a Rust-side task is running.
+                if (Bridge.busy) : HorizontalLayout {
+                    spacing: Design.space-sm;
+                    alignment: start;
+
+                    IconRefreshCw {
+                        width: 14px;
+                        height: 14px;
+                        y: (parent.height - self.height) / 2;
+                        stroke: Design.muted-foreground;
+                        stroke-width: 2px;
+                    }
+
+                    Text {
+                        text: Bridge.busy-message != "" ? Bridge.busy-message : "Working…";
+                        color: Design.muted-foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-sm;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // The hero status word.
+                HorizontalLayout {
+                    spacing: Design.space-md;
+                    alignment: start;
+
+                    StatusDot {
+                        kind: root.engine-kind;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Text {
+                        text: root.hero-word;
+                        color: root.running ? Design.primary : Design.muted-foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-hero;
+                        font-weight: 700;
+                        wrap: no-wrap;
+                    }
+                }
+
+                // The last engine error, if there is one.
+                if (Bridge.engine-error != "") : Rectangle {
+                    background: Design.destructive;
+                    border-radius: Design.radius-xl;
+
+                    VerticalLayout {
+                        padding: Design.space-lg;
+                        spacing: Design.space-xs;
+
+                        Text {
+                            text: "Engine error";
+                            color: Design.primary-foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-md;
+                            font-weight: 600;
+                        }
+
+                        Text {
+                            text: Bridge.engine-error;
+                            color: Design.primary-foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-sm;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                // The engine is missing: explain it and offer the install.
+                if (!Bridge.engine-installed) : Card {
+                    title: "Engine not installed";
+                    description: "The proxy engine is not on this machine yet. Install it before you connect.";
+
+                    AppButton {
+                        text: "Install engine";
+                        variant: ButtonVariant.default;
+                        size: ButtonSize.lg;
+                        enabled: !Bridge.busy;
+                        disabled-reason: "Another task is running.";
+                        clicked => {
+                            Bridge.install-engine();
+                        }
+                    }
+                }
+
+                // Quick actions.
+                HorizontalLayout {
+                    spacing: Design.space-sm;
+                    alignment: start;
+
+                    AppButton {
+                        text: "Connect";
+                        variant: ButtonVariant.default;
+                        size: ButtonSize.lg;
+                        enabled: !root.running && !root.transitioning && Bridge.engine-installed && !Bridge.busy;
+                        disabled-reason: root.running ? "The engine is already running."
+                            : root.transitioning ? "The engine is changing state."
+                            : !Bridge.engine-installed ? "Install the engine first."
+                            : "Another task is running.";
+                        clicked => {
+                            Bridge.connect();
+                        }
+                    }
+
+                    AppButton {
+                        text: "Disconnect";
+                        variant: ButtonVariant.outline;
+                        size: ButtonSize.lg;
+                        enabled: root.running && !Bridge.busy;
+                        disabled-reason: !root.running ? "The engine is not running."
+                            : "Another task is running.";
+                        clicked => {
+                            Bridge.disconnect();
+                        }
+                    }
+
+                    AppButton {
+                        text: "Restart";
+                        variant: ButtonVariant.secondary;
+                        size: ButtonSize.lg;
+                        enabled: (root.running || root.failed) && !Bridge.busy;
+                        disabled-reason: root.transitioning ? "The engine is changing state."
+                            : !(root.running || root.failed) ? "Restart is available once the engine is running or has failed."
+                            : "Another task is running.";
+                        clicked => {
+                            Bridge.restart();
+                        }
+                    }
+                }
+
+                // Routing mode.
+                VerticalLayout {
+                    spacing: Design.space-sm;
+
+                    Text {
+                        text: "Routing mode";
+                        color: Design.muted-foreground;
+                        font-family: Design.font-family;
+                        font-size: Design.font-xs;
+                        font-weight: 500;
+                    }
+
+                    Rectangle {
+                        height: 36px;
+                        background: Design.secondary;
+                        border-radius: Design.radius-lg;
+
+                        HorizontalLayout {
+                            padding: Design.space-xs;
+                            spacing: Design.space-xs;
+
+                            ModeSegment {
+                                label: "Rule";
+                                selected: Bridge.mode == "rule";
+                                enabled: !Bridge.busy;
+                                disabled-reason: "Another task is running.";
+                                clicked => {
+                                    Bridge.set-mode("rule");
+                                }
+                            }
+
+                            ModeSegment {
+                                label: "Global";
+                                selected: Bridge.mode == "global";
+                                enabled: !Bridge.busy;
+                                disabled-reason: "Another task is running.";
+                                clicked => {
+                                    Bridge.set-mode("global");
+                                }
+                            }
+
+                            ModeSegment {
+                                label: "Direct";
+                                selected: Bridge.mode == "direct";
+                                enabled: !Bridge.busy;
+                                disabled-reason: "Another task is running.";
+                                clicked => {
+                                    Bridge.set-mode("direct");
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Information cards, two to a row.
+                GridLayout {
+                    spacing: Design.space-md;
+
+                    Row {
+                        InfoCard {
+                            title: "Current node";
+                            value: Bridge.current-node != "" ? Bridge.current-node : "No node selected";
+                        }
+
+                        InfoCard {
+                            title: "Listen address";
+                            value: Bridge.listen-address != "" ? Bridge.listen-address : "Not reported";
+                        }
+                    }
+
+                    Row {
+                        InfoCard {
+                            title: "Uptime";
+                            value: Bridge.uptime != "" ? Bridge.uptime : "Not running";
+                        }
+
+                        InfoCard {
+                            title: "Engine version";
+                            value: Bridge.engine-version != "" ? Bridge.engine-version
+                                : Bridge.engine-installed ? "Unknown" : "Not installed";
+                        }
+                    }
+                }
+
+                // Subscription summary.
+                Card {
+                    title: "Subscriptions";
+                    description: Bridge.subscriptions.length == 0 ? "No subscriptions added"
+                        : "\{Bridge.subscriptions.length} subscription(s)";
+
+                    if (Bridge.subscriptions.length == 0) : EmptyState {
+                        title: "No subscriptions yet";
+                        description: "Add a subscription on the Servers page to load its nodes.";
+                        action-text: "Go to Servers";
+                        action => {
+                            Bridge.active-page = 1;
+                        }
+                    }
+
+                    if (Bridge.subscriptions.length > 0) : VerticalLayout {
+                        spacing: 0px;
+
+                        // Rows past the fourth collapse to zero height, so the
+                        // list shows the first four. Each row has a fixed height
+                        // and elides its text, which keeps the rows uniform.
+                        for sub[i] in Bridge.subscriptions : Rectangle {
+                            height: i < 4 ? 44px : 0px;
+                            clip: true;
+
+                            HorizontalLayout {
+                                spacing: Design.space-sm;
+                                alignment: start;
+
+                                StatusDot {
+                                    kind: sub.status == "ok" ? StatusKind.running
+                                        : sub.status == "error" ? StatusKind.error
+                                        : sub.status == "syncing" ? StatusKind.syncing
+                                        : StatusKind.stopped;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: 0px;
+
+                                    Text {
+                                        text: sub.label;
+                                        color: Design.foreground;
+                                        font-family: Design.font-family;
+                                        font-size: Design.font-sm;
+                                        font-weight: 500;
+                                        wrap: no-wrap;
+                                        overflow: elide;
+                                    }
+
+                                    Text {
+                                        text: sub.error != "" ? sub.error
+                                            : sub.last-updated != "" ? "Last fetch " + sub.last-updated
+                                            : "Never fetched";
+                                        color: sub.error != "" ? Design.destructive : Design.muted-foreground;
+                                        font-family: Design.font-family;
+                                        font-size: Design.font-xs;
+                                        wrap: no-wrap;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (Bridge.subscriptions.length > 4) : Text {
+                            text: "\{Bridge.subscriptions.length - 4} more on the Servers page";
+                            color: Design.muted-foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-xs;
+                        }
+
+                        HorizontalLayout {
+                            alignment: end;
+
+                            AppButton {
+                                text: "Refresh all";
+                                variant: ButtonVariant.outline;
+                                size: ButtonSize.md;
+                                enabled: !Bridge.busy;
+                                disabled-reason: "Another task is running.";
+                                clicked => {
+                                    Bridge.refresh-all();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

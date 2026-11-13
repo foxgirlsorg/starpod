@@ -1,0 +1,58 @@
+// The system tray icon and its menu (ARCHITECTURE §6.4).
+//
+// A `SystemTrayIcon` is a top-level component with no window. Its globals
+// are its own copy, not shared with `AppWindow` (builtin_elements.rs:4037),
+// so Rust must push engine state to, and wire callbacks on, the tray's own
+// `Bridge` instance as well as the window's.
+
+import { Bridge } from "bridge.slint";
+
+export component AppTray inherits SystemTrayIcon {
+    icon: Bridge.engine-phase == "running"
+        ? @image-url("assets/tray-running.png")
+        : @image-url("assets/tray-stopped.png");
+    tooltip: "Starpod - " + Bridge.engine-phase;
+    title: "Starpod";
+
+    // A left-click restores the window (on platforms that report it; macOS
+    // opens the menu instead while a menu is attached).
+    clicked => {
+        Bridge.show-window();
+    }
+
+    Menu {
+        MenuItem {
+            title: "Show Starpod";
+            activated => {
+                Bridge.show-window();
+            }
+        }
+
+        MenuSeparator {}
+
+        MenuItem {
+            title: "Connect";
+            enabled: Bridge.engine-phase == "stopped" || Bridge.engine-phase == "failed";
+            activated => {
+                Bridge.connect();
+            }
+        }
+
+        MenuItem {
+            title: "Disconnect";
+            enabled: Bridge.engine-phase == "running";
+            activated => {
+                Bridge.disconnect();
+            }
+        }
+
+        MenuSeparator {}
+
+        MenuItem {
+            title: "Quit";
+            activated => {
+                Bridge.quit();
+            }
+        }
+    }
+}

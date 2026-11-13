@@ -129,6 +129,26 @@ impl ControllerClient {
         Ok(())
     }
 
+    /// Measure a proxy's latency against `url`, in milliseconds.
+    ///
+    /// The route is `GET /proxies/{name}/delay` (ARCHITECTURE §1.3). Its
+    /// query parameters `url` and `timeout` follow the mihomo API the engine
+    /// mirrors; the contract document does not spell them out, so the
+    /// integration test below pins what the app sends.
+    pub async fn delay(&self, proxy: &str, url: &str, timeout_ms: u32) -> EngineResult<u32> {
+        let path = format!(
+            "/proxies/{}/delay?url={}&timeout={timeout_ms}",
+            encode_path_segment(proxy),
+            encode_path_segment(url),
+        );
+        let value = self.get(&path).await?;
+        value
+            .get("delay")
+            .and_then(Value::as_u64)
+            .and_then(|delay| u32::try_from(delay).ok())
+            .ok_or_else(|| EngineError::Internal("the engine returned no delay".to_string()))
+    }
+
     /// Reload the configuration from a file the engine can read.
     ///
     /// The engine closes its open connections as part of a reload, so the
@@ -285,5 +305,72 @@ mod tests {
     fn a_client_without_a_secret_says_so() {
         assert!(!ControllerClient::new("http://127.0.0.1:9090", "").has_secret());
         assert!(ControllerClient::new("http://127.0.0.1:9090", "s").has_secret());
+    }
+
+    #[tokio::test]
+    async fn a_selection_is_a_put_that_carries_the_secret_in_the_header() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/proxies/Auto"))
+            .and(header("authorization", "Bearer s3cret"))
+            .and(body_json(serde_json::json!({ "name": "Node B" })))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = ControllerClient::new(server.uri(), "s3cret");
+        client
+            .select("Auto", "Node B")
+            .await
+            .expect("the selection is accepted");
+    }
+
+    #[tokio::test]
+    async fn a_delay_probe_sends_the_url_and_timeout_and_reads_the_delay() {
+        use wiremock::matchers::{method, path_regex, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/proxies/.+/delay$"))
+            .and(query_param("timeout", "5000"))
+            .and(query_param("url", "https://www.gstatic.com/generate_204"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "delay": 123 })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = ControllerClient::new(server.uri(), "s");
+        let delay = client
+            .delay("Node B", "https://www.gstatic.com/generate_204", 5000)
+            .await
+            .expect("the probe answers");
+        assert_eq!(delay, 123);
+    }
+
+    #[tokio::test]
+    async fn a_delay_answer_without_a_delay_is_an_error_not_zero() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let client = ControllerClient::new(server.uri(), "s");
+        assert!(
+            client
+                .delay("Node B", "https://example.com", 5000)
+                .await
+                .is_err()
+        );
     }
 }
