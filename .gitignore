@@ -4,6 +4,8 @@
 
 # Rust build artifacts
 /target/
+# Windows release output from `docker compose run --rm windows`
+/dist/
 **/*.rs.bk
 
 # Editor / OS noise

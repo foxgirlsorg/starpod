@@ -9,6 +9,9 @@ description = "The proxy core abstraction and the meow engine implementation for
 
 [dependencies]
 starpod-core = { workspace = true }
+# Owner-only permissions for the ownership marker (`starpod_store::permissions`).
+# The store depends only on starpod-core, so this does not form a cycle.
+starpod-store = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde-saphyr = { workspace = true }

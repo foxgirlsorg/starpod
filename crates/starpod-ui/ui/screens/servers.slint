@@ -8,71 +8,9 @@
 
 import { Design } from "../design.slint";
 import { Bridge } from "../bridge.slint";
-import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, StatusDot, StatusKind, SectionHeading, EmptyState, LoadingState } from "../primitives.slint";
+import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, Field, FieldKind, StatusDot, StatusKind, SectionHeading, EmptyState, LoadingState } from "../primitives.slint";
 import { IconCheck } from "../icons.slint";
 import { ScrollView } from "std-widgets.slint";
-
-// A text input with the Field chrome. `Field` in primitives takes its value
-// one way only, so it cannot be cleared after an add or bound two-way to the
-// node search. This copy holds the value as `in-out` and binds the TextInput
-// to it with `<=>`, so the parent can read and reset it.
-component FormField inherits Rectangle {
-    in property <string> label;
-    in property <string> placeholder;
-    in-out property <string> value;
-    in property <bool> password: false;
-    in property <bool> enabled: true;
-
-    height: 58px;
-
-    background: Design.background;
-    border-radius: Design.radius-md;
-    border-width: 1px;
-    border-color: Design.input;
-    opacity: root.enabled ? 1 : 0.5;
-
-    VerticalLayout {
-        padding-left: Design.space-sm;
-        padding-right: Design.space-sm;
-        padding-top: Design.space-xs;
-        padding-bottom: Design.space-xs;
-        spacing: 0px;
-
-        if (root.label != "") : Text {
-            text: root.label;
-            color: Design.muted-foreground;
-            font-family: Design.font-family;
-            font-size: Design.font-xs;
-        }
-
-        Rectangle {
-            height: 24px;
-
-            // TextInput has no placeholder property in Slint 1.18, so the
-            // hint is a Text that is shown only while the value is empty.
-            if (root.value == "") : Text {
-                text: root.placeholder;
-                color: Design.muted-foreground;
-                font-family: Design.font-family;
-                font-size: Design.font-sm;
-                vertical-alignment: center;
-            }
-
-            TextInput {
-                width: parent.width;
-                height: parent.height;
-                text <=> root.value;
-                color: root.enabled ? Design.foreground : Design.muted-foreground;
-                font-family: Design.font-family;
-                font-size: Design.font-sm;
-                vertical-alignment: center;
-                single-line: true;
-                input-type: root.password ? InputType.password : InputType.text;
-                enabled: root.enabled;
-            }
-        }
-    }
-}
 
 export component ServersPage inherits ScrollView {
     // Add-subscription form (UI state only).
@@ -326,26 +264,26 @@ export component ServersPage inherits ScrollView {
                 font-weight: 500;
             }
 
-            FormField {
+            Field {
                 label: "Label";
                 placeholder: "For example: Work proxies";
                 value <=> form-label;
             }
 
             // The URL carries a token, so it is masked like a password.
-            FormField {
+            Field {
                 label: "Subscription URL";
                 placeholder: "https://";
-                password: true;
+                kind: FieldKind.password;
                 value <=> form-url;
             }
 
             // The engine cannot send this header, so the field is disabled in
             // engine-managed mode and is never passed to Bridge.
-            FormField {
+            Field {
                 label: "Authorization header (optional)";
                 placeholder: "Bearer …";
-                password: true;
+                kind: FieldKind.password;
                 enabled: form-mode == "app-managed";
                 value <=> form-header;
             }
@@ -449,7 +387,7 @@ export component ServersPage inherits ScrollView {
                 }
             }
 
-            FormField {
+            Field {
                 placeholder: "Search nodes by name or group";
                 value <=> Bridge.node-filter;
             }

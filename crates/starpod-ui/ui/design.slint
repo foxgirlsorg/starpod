@@ -52,6 +52,10 @@ export global Design {
 
     // --- type ---------------------------------------------------------------
     in property <string> font-family: "Inter Variable";
+    // Monospace, for rule lines and log text. Consolas ships with Windows.
+    // Slint takes one family name, not a list, and falls back to its default
+    // face where the family is missing, so the text still lays out.
+    in property <string> font-mono: "Consolas";
     in property <length> font-xs: 12px;
     in property <length> font-sm: 14px;
     in property <length> font-md: 16px;

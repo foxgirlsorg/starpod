@@ -222,37 +222,27 @@ CI does not run the ignored real-engine test, does not build a release, and does
 
 ## 5. Known limitations and remaining work
 
-Each item below was checked against the code at this commit.
+**TUN.** Enabling TUN starts the *engine* elevated (never the GUI): `ShellExecuteExW` with `runas` on Windows, `pkexec` on Linux, `osascript ... with administrator privileges` on macOS (`starpod-engine/src/elevate.rs`). If elevation is refused or fails, the engine starts without TUN and the status says so. Command construction and quoting are unit-tested; the privileged path itself has not been run on any platform. An elevated engine runs the binary from the user-writable data directory, so anything that can write there can run code as administrator/root once TUN is enabled. On Windows, an adopted *elevated* engine cannot be stopped from an unelevated app (TUN is turned off first; the process must be ended by an administrator). Logs of an elevated Windows engine are not captured.
 
-**Application shell.** The `starpod` binary and the Slint screens are being written. The window's close-to-tray behaviour and the Quit path depend on that work. The intended behaviour is in the user guide, section 8.
+**Adoption of an orphaned engine.** An ownership marker (`engine-owner.json`, owner-only) is written to the app's controller directory. On start, if the controller answers with the marker's secret, the running engine is adopted instead of starting a second one; a stale marker is deleted (`starpod-engine/src/adopt.rs`).
 
-**TUN.** `tun::needs_elevation` and `tun::elevation_command` exist, but nothing calls them. The app does not start the engine elevated. Enabling TUN sends `PATCH /configs` to a running engine, which works only if that engine already has the privileges. The elevated helper from ARCHITECTURE section 4.5 is not implemented. TUN is not verified on any platform.
+**Windows shutdown.** The engine is spawned with `CREATE_NO_WINDOW`; graceful stop attaches to its console and sends `CTRL_C_EVENT` (tokio's `ctrl_c()` does not fire on `CTRL_BREAK_EVENT`), then `TerminateProcess` after the grace period. Compile-checked; not yet exercised against a real meow on Windows. `meow-integration-contract.md` §7's claim that `ctrl_c` fires on CTRL_BREAK is wrong.
 
-**Adoption of an orphaned engine.** Not implemented. The app's engine status comes from the process handle it holds. If the app dies without stopping the engine (for example a kill or power loss; the panic hook covers only panics), the engine keeps running. The next start can then fail to bind the proxy ports the old engine still holds, and the app does not detect or stop the old engine. There is no ownership marker and no adoption path.
+**Engine-managed subscriptions.** Rule order is re-asserted every 30 s after an engine refresh (`GET /rules` → reorder → `POST /rules` only when it differs). Name shadowing of a user node is reported as a warning when the engine reports a different server/port. The response envelopes of `/api/subscriptions`, `/rules` and `/proxies` are not documented in the contract and are parsed defensively (assumptions are commented in `rest.rs`). The Authorization header cannot be sent for engine-managed subscriptions (the engine's declaration has no header field).
 
-**Subscription rule order and node shadowing.** ARCHITECTURE sections 4.6 and R12 call for re-asserting rule order after an engine-managed refresh and detecting name shadowing. Neither is implemented. Engine-managed subscriptions are excluded from the app's merge, so their rules and nodes are not checked.
+**RULE-SET / SUB-RULE.** Not offered and rejected with a clear message: the app supplies no rule providers or sub-rule blocks.
 
-**Engine-managed authorization header.** The header is stored when given, but `compose` passes only the URL to the engine, and the engine's subscription declaration has no header field. The header is not sent for engine-managed subscriptions. The UI should say so, or reject the combination.
+**Latency probe.** `GET /proxies/{name}/delay?url=...&timeout=...` follows the mihomo convention; not checked against a live meow instance.
 
-**Allow LAN is user-only (P1a).** `core::config` never reads `allow-lan` or `bind-address` from a subscription, so a remote subscription cannot expose the proxy to the network. Covered by `a_subscription_cannot_expose_the_proxy_when_the_user_never_chose`.
+**Tray on Linux.** Requires a StatusNotifierItem host. Tray availability is judged from creation errors only; a desktop without a host may report success and show nothing.
 
-**RULE-SET.** The grammar supports it, but `compose` supplies no rule providers, so any `RULE-SET` rule fails validation.
-
-**Latency probe.** `GET /proxies/{name}/delay?url=...&timeout=...` follows the mihomo convention. It is not checked against a live meow instance. Run the ignored test, or a manual probe, before relying on it.
-
-**Autostart.** Not implemented. No login item or service registration exists.
-
-**Release packaging and signing.** Not implemented. There is no release workflow, no installer, no code signing, and no notarisation. The engine download is checked against the release's SHA-256 file only (ARCHITECTURE R3).
+**Autostart, release packaging, signing.** Not implemented. `docker compose run --rm windows` produces an unsigned `dist/starpod.exe` (x86_64-pc-windows-gnu). The engine download is checked against the release's SHA-256 file only (ARCHITECTURE R3).
 
 **Secret fallback.** On a machine with no platform store, subscription addresses and headers are kept in `secrets.json` without encryption (owner-only file permissions).
 
-**Engine targets.** `download.rs` maps Linux arm64, Windows arm64 and macOS x86_64 as well. None of these are in CI or in the supported scope.
+**Documentation and code disagreements.**
 
-**Documentation and code disagreements to fix.**
+- `crates/starpod-store/src/paths.rs` documents the Windows cache as `%LOCALAPPDATA%\Starpod\cache`; the code gives `%LOCALAPPDATA%\Starpod\subscriptions`.
+- On macOS the config and data directories are the same folder (`dirs` maps both to `~/Library/Application Support/Starpod`); the "never overwrite" guarantee rests on separate files.
 
-- `crates/starpod-store/src/paths.rs` documents the Windows cache as `%LOCALAPPDATA%\Starpod\cache`. The code gives `%LOCALAPPDATA%\Starpod\subscriptions`, because the cache root is the local data directory.
-- The same module says the config and data directories are separate for the "never overwrite" guarantee. On macOS they are the same folder (`~/Library/Application Support/Starpod`), because the `dirs` crate maps both to it. The guarantee there rests on separate files.
-- `download.rs` installs the engine under `starpod/engine/` in lowercase, while every other path uses `Starpod`. On Linux these are different folders.
-- ARCHITECTURE section 4.2 describes the engine being started with `--ext-ctl 127.0.0.1:{port}`. The code instead sets `external-controller` in the generated YAML and reads the address from the controller file under `data/controllers/`. The code is the reference.
-
-**Verification gaps.** No automated visual check of the UI, no privileged test, no test of the three-platform release artifacts, and the real-engine test is opt-in.
+**Verification gaps.** No automated visual check of the UI, no privileged test, no test of macOS/Linux release artifacts, and the real-engine test is opt-in.

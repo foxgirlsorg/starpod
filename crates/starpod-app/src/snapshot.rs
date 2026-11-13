@@ -9,9 +9,48 @@ use std::path::PathBuf;
 
 use starpod_core::rules::{BuiltinTarget, RuleKind, translate};
 use starpod_core::{
-    ProxyMode, RuleSpec, SubscriptionMode, SubscriptionQuota, UserPreferences, domain::payload_hint,
+    ProxyMode, RuleSpec, Subscription, SubscriptionMode, SubscriptionQuota, UserPreferences,
+    domain::payload_hint,
 };
 use starpod_engine::EnginePhase;
+
+/// Why Connect is blocked when the engine is not installed.
+pub const ENGINE_MISSING_REASON: &str = "Install the engine first.";
+/// Why Connect is blocked when there is no subscription at all.
+pub const NO_SUBSCRIPTION_REASON: &str = "Add a subscription first";
+/// Why Connect is blocked when subscriptions exist but none supplies servers.
+pub const NO_SERVERS_REASON: &str = "Refresh your subscription — it has no servers yet";
+
+/// The one rule for connecting, and the reason it blocks, if it does.
+///
+/// Connecting needs at least one subscription that supplies servers. An
+/// engine-managed subscription counts: the engine holds its nodes. An
+/// app-managed one counts only with a cached payload that has at least one
+/// node, so a subscription that never fetched successfully does not. Without
+/// this rule the generated configuration has no nodes and the engine runs a
+/// proxy that sends everything direct.
+///
+/// Each subscription is paired with the node count of its cached payload,
+/// `None` when it has no cached payload. The service enforces this rule for
+/// connect and restart; the snapshot reports it so the UI can show it.
+pub(crate) fn connect_blocked_reason(
+    engine_installed: bool,
+    subscriptions: &[(&Subscription, Option<usize>)],
+) -> Option<String> {
+    if !engine_installed {
+        return Some(ENGINE_MISSING_REASON.to_string());
+    }
+    if subscriptions.is_empty() {
+        return Some(NO_SUBSCRIPTION_REASON.to_string());
+    }
+    let usable = subscriptions
+        .iter()
+        .any(|(subscription, cached_nodes)| match subscription.mode {
+            SubscriptionMode::EngineManaged => true,
+            SubscriptionMode::AppManaged => cached_nodes.is_some_and(|count| count > 0),
+        });
+    (!usable).then(|| NO_SERVERS_REASON.to_string())
+}
 
 /// How serious a banner is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +106,9 @@ pub struct AppSnapshot {
     pub data_dir: PathBuf,
     /// A banner for the user, if there is one.
     pub notice: Option<(NoticeKind, String)>,
+    /// Why connecting is not allowed, or `None` when it is. The service
+    /// refuses connect and restart while this is set.
+    pub connect_blocked: Option<String>,
 }
 
 /// The state of the proxy engine.
@@ -216,9 +258,14 @@ pub(crate) fn rule_view(
 }
 
 /// Every rule kind the editor offers, in the order the grammar lists them.
+///
+/// `RULE-SET` and `SUB-RULE` are left out. Each names something the app
+/// cannot supply (a rule provider, a rule block), so a rule of either kind
+/// can never validate. See `compose::unsupported_rule`.
 pub(crate) fn rule_kind_views() -> Vec<RuleKindView> {
     RuleKind::ALL
         .iter()
+        .filter(|kind| !matches!(kind, RuleKind::RuleSet | RuleKind::SubRule))
         .map(|kind| RuleKindView {
             token: kind.as_str().to_string(),
             payload_hint: payload_hint(*kind).to_string(),
@@ -232,4 +279,99 @@ pub(crate) fn builtin_target_names() -> Vec<String> {
         .iter()
         .map(|target| target.as_str().to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn subscription(mode: SubscriptionMode) -> Subscription {
+        Subscription {
+            id: "sub-1".to_string(),
+            label: "Airport".to_string(),
+            mode,
+            interval_secs: 3600,
+            has_auth_header: false,
+            last_updated: None,
+            quota: None,
+            node_count: 0,
+            group_count: 0,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn connecting_needs_an_installed_engine_first() {
+        let app = subscription(SubscriptionMode::AppManaged);
+        assert_eq!(
+            connect_blocked_reason(false, &[(&app, Some(3))]).as_deref(),
+            Some(ENGINE_MISSING_REASON)
+        );
+    }
+
+    #[test]
+    fn no_subscription_says_to_add_one() {
+        assert_eq!(
+            connect_blocked_reason(true, &[]).as_deref(),
+            Some(NO_SUBSCRIPTION_REASON)
+        );
+    }
+
+    #[test]
+    fn an_app_managed_subscription_without_a_payload_or_nodes_says_to_refresh() {
+        let app = subscription(SubscriptionMode::AppManaged);
+        assert_eq!(
+            connect_blocked_reason(true, &[(&app, None)]).as_deref(),
+            Some(NO_SERVERS_REASON),
+            "a subscription that never fetched successfully"
+        );
+        assert_eq!(
+            connect_blocked_reason(true, &[(&app, Some(0))]).as_deref(),
+            Some(NO_SERVERS_REASON),
+            "a payload with no nodes"
+        );
+    }
+
+    #[test]
+    fn an_app_managed_subscription_with_nodes_allows_connecting() {
+        let app = subscription(SubscriptionMode::AppManaged);
+        assert_eq!(connect_blocked_reason(true, &[(&app, Some(2))]), None);
+    }
+
+    #[test]
+    fn an_engine_managed_subscription_allows_connecting_without_a_payload() {
+        let engine = subscription(SubscriptionMode::EngineManaged);
+        assert_eq!(connect_blocked_reason(true, &[(&engine, None)]), None);
+    }
+
+    #[test]
+    fn one_usable_subscription_is_enough_beside_unusable_ones() {
+        let empty = subscription(SubscriptionMode::AppManaged);
+        let engine = subscription(SubscriptionMode::EngineManaged);
+        assert_eq!(
+            connect_blocked_reason(true, &[(&empty, None), (&engine, None)]),
+            None
+        );
+    }
+
+    #[test]
+    fn the_editor_offers_no_kind_the_app_cannot_supply() {
+        let tokens: Vec<String> = rule_kind_views()
+            .into_iter()
+            .map(|kind| kind.token)
+            .collect();
+        assert!(
+            !tokens.iter().any(|token| token == "RULE-SET"),
+            "{tokens:?}"
+        );
+        assert!(
+            !tokens.iter().any(|token| token == "SUB-RULE"),
+            "{tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|token| token == "DOMAIN-SUFFIX"),
+            "{tokens:?}"
+        );
+        assert!(tokens.iter().any(|token| token == "MATCH"), "{tokens:?}");
+    }
 }

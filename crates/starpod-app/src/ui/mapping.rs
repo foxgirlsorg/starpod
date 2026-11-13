@@ -6,6 +6,7 @@
 //! touches a `Bridge`, and it only sets properties. The rest is testable
 //! without a display.
 
+use crate::compose::unsupported_rule;
 use crate::{
     AppError, AppSnapshot, NodeView, NoticeKind, RuleView, SubscriptionStatus, SubscriptionView,
 };
@@ -23,8 +24,18 @@ use starpod_ui::{Bridge, LogItem, NodeItem, RuleItem, SettingsModel, Subscriptio
 pub const LOG_LINE_LIMIT: usize = 2000;
 /// The auto-refresh interval used when the user has not chosen one.
 pub const DEFAULT_REFRESH_MINUTES: u32 = (DEFAULT_INTERVAL_SECS / 60) as u32;
-/// The smallest TUN MTU the engine accepts.
+/// The smallest TUN MTU the app accepts: the IPv6 minimum (RFC 8200). TUN
+/// carries IPv6 as well as IPv4, and an IPv6 packet cannot be fragmented by
+/// a router, so a smaller MTU breaks IPv6 traffic. The Settings screen uses
+/// the same bound; keep the two in step.
 const MIN_TUN_MTU: u16 = 1280;
+/// The largest TUN MTU the app accepts. The Settings screen uses the same bound.
+const MAX_TUN_MTU: u16 = 9000;
+/// How the settings form shows a number that is not set: `-1`, which shows as
+/// an empty field. Every optional number on the form uses it. `0` is a real
+/// value for the auto refresh (manual only), and an invalid port or MTU, so
+/// it cannot stand for "not set".
+pub const NOT_SET: i32 = -1;
 
 /// A banner the shell shows above the active page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,6 +241,7 @@ pub fn rule_item(rule: &RuleView) -> RuleItem {
         payload: rule.payload.as_str().into(),
         target: rule.target.as_str().into(),
         line: rule.line.as_str().into(),
+        enabled: rule.enabled,
         from_subscription: rule.from_subscription,
         error: SharedString::default(),
     }
@@ -244,35 +256,33 @@ pub fn rules_raw_text(rules: &[RuleView]) -> String {
         .join("\n")
 }
 
-/// The settings form, from the saved preferences. A port that is off is `0`.
+/// The settings form, from the saved preferences. A value that is not set is
+/// [`NOT_SET`]; the form shows it as an empty field with the default as its
+/// placeholder.
 pub fn settings_model(prefs: &UserPreferences) -> SettingsModel {
     SettingsModel {
-        mixed_port: prefs.mixed_port.map_or(0, i32::from),
-        socks_port: prefs.socks_port.map_or(0, i32::from),
-        http_port: prefs.port.map_or(0, i32::from),
+        mixed_port: prefs.mixed_port.map_or(NOT_SET, i32::from),
+        socks_port: prefs.socks_port.map_or(NOT_SET, i32::from),
+        http_port: prefs.port.map_or(NOT_SET, i32::from),
         allow_lan: prefs.allow_lan.unwrap_or(false),
         bind_address: prefs.bind_address.clone().unwrap_or_default().into(),
         log_level: prefs.log_level.unwrap_or_default().as_str().into(),
         mode: prefs.mode.unwrap_or_default().as_str().into(),
         tun_enabled: prefs.tun.enabled,
         tun_device: prefs.tun.device.clone().unwrap_or_default().into(),
-        tun_mtu: prefs.tun.mtu.map_or(0, i32::from),
-        auto_refresh_minutes: prefs
-            .auto_refresh_minutes
-            .unwrap_or(DEFAULT_REFRESH_MINUTES)
-            .try_into()
-            .unwrap_or(i32::MAX),
+        tun_mtu: prefs.tun.mtu.map_or(NOT_SET, i32::from),
+        auto_refresh_minutes: prefs.auto_refresh_minutes.map_or(NOT_SET, saturating_i32),
     }
 }
 
 /// The settings form as plain Rust values, so it can cross into a task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsInput {
-    /// `0` turns the port off.
+    /// [`NOT_SET`] uses the default; `1` to `65535` is a port.
     pub mixed_port: i32,
-    /// `0` turns the port off.
+    /// [`NOT_SET`] uses the default; `1` to `65535` is a port.
     pub socks_port: i32,
-    /// `0` turns the port off.
+    /// [`NOT_SET`] turns HTTP off; `1` to `65535` is a port.
     pub http_port: i32,
     /// Whether the proxy listens on the LAN.
     pub allow_lan: bool,
@@ -286,9 +296,9 @@ pub struct SettingsInput {
     pub tun_enabled: bool,
     /// Empty means the engine's default device.
     pub tun_device: String,
-    /// `0` means the engine default.
+    /// [`NOT_SET`] means the engine default; otherwise `1280` to `9000`.
     pub tun_mtu: i32,
-    /// `0` turns automatic refresh off.
+    /// [`NOT_SET`] means the app default; `0` is manual refresh only.
     pub auto_refresh_minutes: i32,
 }
 
@@ -315,30 +325,34 @@ fn invalid(message: impl Into<String>) -> AppError {
     AppError::Invalid(message.into())
 }
 
+/// A port from the form. [`NOT_SET`] is `None`; `0` is refused, because the
+/// engine and the port checks treat `0` as a real port, not as "off".
 fn port_field(name: &str, value: i32) -> Result<Option<u16>, AppError> {
-    match value {
-        0 => Ok(None),
-        _ => u16::try_from(value).map(Some).map_err(|_| {
-            invalid(format!(
-                "the {name} must be between 1 and 65535, or 0 to turn it off"
-            ))
-        }),
+    if value == NOT_SET {
+        return Ok(None);
     }
+    u16::try_from(value)
+        .ok()
+        .filter(|port| *port >= 1)
+        .map(Some)
+        .ok_or_else(|| invalid(format!("the {name} must be between 1 and 65535, or empty")))
 }
 
+/// A TUN MTU from the form. Only a value in range is accepted; [`NOT_SET`]
+/// means the engine default.
 fn mtu_field(value: i32) -> Result<Option<u16>, AppError> {
-    match value {
-        0 => Ok(None),
-        _ => u16::try_from(value)
-            .ok()
-            .filter(|mtu| *mtu >= MIN_TUN_MTU)
-            .map(Some)
-            .ok_or_else(|| {
-                invalid(format!(
-                    "the TUN MTU must be {MIN_TUN_MTU} or more, or 0 for the engine default"
-                ))
-            }),
+    if value == NOT_SET {
+        return Ok(None);
     }
+    u16::try_from(value)
+        .ok()
+        .filter(|mtu| (MIN_TUN_MTU..=MAX_TUN_MTU).contains(mtu))
+        .map(Some)
+        .ok_or_else(|| {
+            invalid(format!(
+                "the TUN MTU must be from {MIN_TUN_MTU} to {MAX_TUN_MTU}, or empty for the engine default"
+            ))
+        })
 }
 
 fn non_empty(text: &str) -> Option<String> {
@@ -368,17 +382,17 @@ pub fn build_preferences(
 ) -> Result<UserPreferences, AppError> {
     let mixed_port = keep_unless_edited(
         current.mixed_port,
-        |value| input.mixed_port == value.map_or(0, i32::from),
+        |value| input.mixed_port == value.map_or(NOT_SET, i32::from),
         || port_field("mixed port", input.mixed_port),
     )?;
     let socks_port = keep_unless_edited(
         current.socks_port,
-        |value| input.socks_port == value.map_or(0, i32::from),
+        |value| input.socks_port == value.map_or(NOT_SET, i32::from),
         || port_field("SOCKS port", input.socks_port),
     )?;
     let port = keep_unless_edited(
         current.port,
-        |value| input.http_port == value.map_or(0, i32::from),
+        |value| input.http_port == value.map_or(NOT_SET, i32::from),
         || port_field("HTTP port", input.http_port),
     )?;
     let allow_lan = keep_unless_edited(
@@ -407,7 +421,7 @@ pub fn build_preferences(
     )?;
     let mtu = keep_unless_edited(
         current.tun.mtu,
-        |value| input.tun_mtu == value.map_or(0, i32::from),
+        |value| input.tun_mtu == value.map_or(NOT_SET, i32::from),
         || mtu_field(input.tun_mtu),
     )?;
     let device = keep_unless_edited(
@@ -417,11 +431,11 @@ pub fn build_preferences(
     )?;
     let auto_refresh_minutes = keep_unless_edited(
         current.auto_refresh_minutes,
-        |value| {
-            input.auto_refresh_minutes
-                == i32::try_from(value.unwrap_or(DEFAULT_REFRESH_MINUTES)).unwrap_or(i32::MAX)
-        },
+        |value| input.auto_refresh_minutes == value.map_or(NOT_SET, saturating_i32),
         || {
+            if input.auto_refresh_minutes == NOT_SET {
+                return Ok(None);
+            }
             u32::try_from(input.auto_refresh_minutes)
                 .map(Some)
                 .map_err(|_| invalid("the automatic refresh interval cannot be negative"))
@@ -476,8 +490,16 @@ pub fn rule_line(kind: &str, payload: &str, target: &str) -> String {
 }
 
 /// Parse one engine rule line. A rejected line is reported as the reason.
+///
+/// A line the grammar accepts but the app cannot supply the target of
+/// (`RULE-SET`, `SUB-RULE`) is rejected here with the reason, so the editor
+/// shows it at once rather than after a save.
 pub fn parse_rule_line(line: &str) -> Result<RuleSpec, AppError> {
-    parse_line(line).map_err(AppError::Invalid)
+    let spec = parse_line(line).map_err(AppError::Invalid)?;
+    match unsupported_rule(&spec) {
+        Some(reason) => Err(invalid(reason)),
+        None => Ok(spec),
+    }
 }
 
 /// The position a rule lands on after moving by `delta`, clamped to the list.
@@ -705,11 +727,17 @@ pub fn apply_snapshot(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState)
     set_shell(bridge, snap);
 }
 
+/// The text the Bridge shows when Connect is blocked. Empty when it is allowed.
+pub fn connect_blocked_text(snap: &AppSnapshot) -> String {
+    snap.connect_blocked.clone().unwrap_or_default()
+}
+
 fn set_engine(bridge: &Bridge<'_>, snap: &AppSnapshot) {
     bridge.set_loaded(true);
     bridge.set_engine_phase(phase_str(snap.engine.phase).into());
     bridge.set_engine_error(snap.engine.error.clone().unwrap_or_default().into());
     bridge.set_engine_installed(snap.engine.installed);
+    bridge.set_connect_blocked_reason(connect_blocked_text(snap).into());
     bridge.set_engine_version(snap.engine.version.clone().unwrap_or_default().into());
     bridge.set_mode(snap.mode.as_str().into());
     bridge.set_current_node(
@@ -792,7 +820,21 @@ fn set_settings(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
 fn set_shell(bridge: &Bridge<'_>, snap: &AppSnapshot) {
     bridge.set_secret_backend(snap.secret_backend.as_str().into());
     bridge.set_secrets_encrypted(snap.secret_encrypted);
+    bridge.set_secret_fallback_reason(
+        snap.secret_fallback_reason
+            .clone()
+            .unwrap_or_default()
+            .into(),
+    );
     bridge.set_data_dir(snap.data_dir.display().to_string().into());
+    let warnings: Vec<SharedString> = snap
+        .warnings
+        .iter()
+        .map(|warning| SharedString::from(warning.as_str()))
+        .collect();
+    if let Some(model) = changed_model(bridge.get_warnings(), warnings) {
+        bridge.set_warnings(model);
+    }
 }
 
 #[cfg(test)]
@@ -828,6 +870,16 @@ mod tests {
 
     fn lines(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn a_blocked_connect_reaches_the_bridge_as_its_reason_and_an_allowed_one_as_empty() {
+        let blocked = AppSnapshot {
+            connect_blocked: Some(crate::snapshot::NO_SUBSCRIPTION_REASON.to_string()),
+            ..AppSnapshot::default()
+        };
+        assert_eq!(connect_blocked_text(&blocked), "Add a subscription first");
+        assert_eq!(connect_blocked_text(&AppSnapshot::default()), "");
     }
 
     #[test]
@@ -936,19 +988,117 @@ mod tests {
     }
 
     #[test]
-    fn settings_show_zero_for_ports_that_are_off() {
+    fn unset_values_show_as_not_set_and_chosen_values_as_numbers() {
         let prefs = UserPreferences {
             mixed_port: None,
             socks_port: Some(7891),
             port: None,
+            auto_refresh_minutes: Some(0),
             ..UserPreferences::default()
         };
         let model = settings_model(&prefs);
-        assert_eq!(model.mixed_port, 0);
+        assert_eq!(model.mixed_port, NOT_SET);
         assert_eq!(model.socks_port, 7891);
-        assert_eq!(model.http_port, 0);
-        assert_eq!(model.auto_refresh_minutes, 60);
+        assert_eq!(model.http_port, NOT_SET);
+        assert_eq!(model.tun_mtu, NOT_SET);
+        assert_eq!(model.auto_refresh_minutes, 0);
+        assert_eq!(model.bind_address, "");
         assert_eq!(model.log_level, "info");
+
+        let unset = settings_model(&UserPreferences::default());
+        assert_eq!(unset.auto_refresh_minutes, NOT_SET);
+    }
+
+    #[test]
+    fn default_preferences_round_trip_to_identity() {
+        let current = UserPreferences::default();
+        let saved = build_preferences(&current, &input_from(&current)).unwrap();
+        assert_eq!(saved, current);
+    }
+
+    #[test]
+    fn populated_preferences_round_trip_to_identity() {
+        let current = UserPreferences {
+            mixed_port: Some(7890),
+            socks_port: Some(1080),
+            port: Some(8080),
+            allow_lan: Some(true),
+            bind_address: Some("0.0.0.0".to_string()),
+            mode: Some(ProxyMode::Global),
+            log_level: Some(LogLevel::Debug),
+            tun: TunSettings {
+                enabled: true,
+                device: Some("starpod-tun".to_string()),
+                mtu: Some(1500),
+                ..TunSettings::default()
+            },
+            auto_refresh_minutes: Some(0),
+            ..UserPreferences::default()
+        };
+        let saved = build_preferences(&current, &input_from(&current)).unwrap();
+        assert_eq!(saved, current);
+    }
+
+    #[test]
+    fn cleared_fields_save_as_not_set() {
+        let current = UserPreferences {
+            mixed_port: Some(7890),
+            socks_port: Some(1080),
+            port: Some(8080),
+            bind_address: Some("127.0.0.1".to_string()),
+            tun: TunSettings {
+                mtu: Some(1500),
+                device: Some("starpod-tun".to_string()),
+                ..TunSettings::default()
+            },
+            auto_refresh_minutes: Some(30),
+            ..UserPreferences::default()
+        };
+        let mut input = input_from(&current);
+        input.mixed_port = NOT_SET;
+        input.socks_port = NOT_SET;
+        input.http_port = NOT_SET;
+        input.bind_address = String::new();
+        input.tun_device = String::new();
+        input.tun_mtu = NOT_SET;
+        input.auto_refresh_minutes = NOT_SET;
+        let saved = build_preferences(&current, &input).unwrap();
+        assert_eq!(saved.mixed_port, None);
+        assert_eq!(saved.socks_port, None);
+        assert_eq!(saved.port, None);
+        assert_eq!(saved.bind_address, None);
+        assert_eq!(saved.tun.device, None);
+        assert_eq!(saved.tun.mtu, None);
+        assert_eq!(saved.auto_refresh_minutes, None);
+    }
+
+    #[test]
+    fn an_explicit_refresh_of_sixty_is_saved_not_dropped() {
+        let current = UserPreferences::default();
+        let mut input = input_from(&current);
+        input.auto_refresh_minutes = 60;
+        let saved = build_preferences(&current, &input).unwrap();
+        assert_eq!(saved.auto_refresh_minutes, Some(60));
+    }
+
+    #[test]
+    fn the_tun_mtu_is_checked_only_when_a_value_is_entered() {
+        let current = UserPreferences::default();
+        let mut input = input_from(&current);
+        input.tun_mtu = NOT_SET;
+        assert_eq!(build_preferences(&current, &input).unwrap().tun.mtu, None);
+
+        for (mtu, ok) in [
+            (1279, false),
+            (1280, true),
+            (9000, true),
+            (9001, false),
+            (0, false),
+        ] {
+            let mut input = input_from(&current);
+            input.tun_mtu = mtu;
+            assert_eq!(build_preferences(&current, &input).is_ok(), ok, "mtu {mtu}");
+        }
     }
 
     fn input_from(prefs: &UserPreferences) -> SettingsInput {
@@ -987,15 +1137,21 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_port_saves_as_off() {
+    fn an_empty_port_is_not_set_and_an_explicit_zero_is_refused() {
         let current = UserPreferences {
             socks_port: Some(7891),
             ..UserPreferences::default()
         };
         let mut input = input_from(&current);
-        input.socks_port = 0;
+        input.socks_port = NOT_SET;
         let saved = build_preferences(&current, &input).unwrap();
         assert_eq!(saved.socks_port, None);
+
+        // 0 is not "off": the engine would listen on it, so the form refuses it.
+        let mut input = input_from(&current);
+        input.socks_port = 0;
+        let error = build_preferences(&current, &input).unwrap_err();
+        assert!(error.to_string().contains("SOCKS port"));
     }
 
     #[test]
@@ -1010,6 +1166,16 @@ mod tests {
         let mut input = input_from(&current);
         input.tun_mtu = 900;
         assert!(build_preferences(&current, &input).is_err());
+
+        // 1279 is below the IPv6 minimum and is refused; 1280 is the floor.
+        let mut input = input_from(&current);
+        input.tun_mtu = 1279;
+        assert!(build_preferences(&current, &input).is_err());
+        input.tun_mtu = 1280;
+        assert_eq!(
+            build_preferences(&current, &input).unwrap().tun.mtu,
+            Some(1280)
+        );
 
         let mut input = input_from(&current);
         input.log_level = "verbose".to_string();
@@ -1039,6 +1205,31 @@ mod tests {
             Err(AppError::Invalid(_))
         ));
         assert!(parse_rule_line("").is_err());
+    }
+
+    #[test]
+    fn a_rule_that_needs_a_provider_or_block_says_the_feature_is_missing() {
+        let set = parse_rule_line("RULE-SET,my-set,DIRECT").unwrap_err();
+        assert!(set.to_string().contains("rule providers"), "{set}");
+        let block = parse_rule_line("SUB-RULE,my-block").unwrap_err();
+        assert!(block.to_string().contains("not supported yet"), "{block}");
+    }
+
+    #[test]
+    fn the_rule_item_carries_the_enabled_flag() {
+        let rule = RuleView {
+            index: 2,
+            id: Some("r2".to_string()),
+            enabled: false,
+            kind: "DOMAIN".to_string(),
+            payload: "a.test".to_string(),
+            target: "DIRECT".to_string(),
+            line: "DOMAIN,a.test,DIRECT".to_string(),
+            from_subscription: false,
+        };
+        let item = rule_item(&rule);
+        assert!(!item.enabled);
+        assert_eq!(item.index, 2);
     }
 
     #[test]

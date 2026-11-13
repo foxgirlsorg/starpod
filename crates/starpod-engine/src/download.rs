@@ -117,34 +117,59 @@ fn target_triple() -> Option<(&'static str, &'static str)> {
     }
 }
 
-/// Where the engine is installed.
+/// The data directory the app uses when a caller does not pass one.
 ///
-/// The directory is per-user: the engine runs as the user who runs the app,
-/// and a machine-wide install would need privileges the app does not ask
-/// for.
-pub fn install_dir() -> PathBuf {
-    let base = dirs::data_local_dir()
+/// This is `AppPaths::resolve().data_dir()` in `starpod-store`: the platform
+/// local-data root with the `Starpod` application directory appended. The
+/// engine crate does not depend on the store, so the rule is repeated here;
+/// `crates/starpod-app/tests/engine_install_path.rs` fails if the two drift.
+pub fn default_data_dir() -> PathBuf {
+    dirs::data_local_dir()
         .or_else(dirs::cache_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("starpod").join("engine").join(ENGINE_VERSION)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Starpod")
 }
 
-/// The path of the installed engine binary.
+/// Where the engine is installed, under the app's data directory.
+///
+/// `<data>/engine/<version>`. The directory is per-user: the engine runs as
+/// the user who runs the app, and a machine-wide install would need
+/// privileges the app does not ask for.
+pub fn install_dir_in(data_dir: &Path) -> PathBuf {
+    data_dir.join("engine").join(ENGINE_VERSION)
+}
+
+/// The path of the installed engine binary, under `data_dir`.
+pub fn installed_binary_path_in(data_dir: &Path) -> PathBuf {
+    install_dir_in(data_dir).join(binary_name())
+}
+
+/// Whether an engine binary is installed under `data_dir`.
+pub fn is_installed_in(data_dir: &Path) -> bool {
+    installed_binary_path_in(data_dir).is_file()
+}
+
+/// The installed engine binary in the default data directory.
 pub fn installed_binary_path() -> PathBuf {
-    install_dir().join(binary_name())
+    installed_binary_path_in(&default_data_dir())
 }
 
-/// Whether an engine binary is already installed.
+/// Whether an engine binary is installed in the default data directory.
 pub fn is_installed() -> bool {
-    installed_binary_path().is_file()
+    is_installed_in(&default_data_dir())
 }
 
-/// Download, verify and install the engine.
+/// Download, verify and install the engine into the default data directory.
+pub async fn install() -> EngineResult<PathBuf> {
+    install_in(&default_data_dir()).await
+}
+
+/// Download, verify and install the engine under `data_dir`.
 ///
 /// The archive is written to a temporary file, verified against the
 /// published checksum, and only then extracted. A failed verification
 /// leaves nothing behind.
-pub async fn install() -> EngineResult<PathBuf> {
+pub async fn install_in(data_dir: &Path) -> EngineResult<PathBuf> {
     let asset = asset_for_current_platform().ok_or_else(|| {
         EngineError::NotInstalled(
             "no engine build is published for this platform; install one manually".to_string(),
@@ -166,8 +191,9 @@ pub async fn install() -> EngineResult<PathBuf> {
         )));
     }
 
-    let target = installed_binary_path();
-    let staging = install_dir().join(format!(".staging-{}", std::process::id()));
+    let target = installed_binary_path_in(data_dir);
+    let install_dir = install_dir_in(data_dir);
+    let staging = install_dir.join(format!(".staging-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| EngineError::Install(e.to_string()))?;
 
@@ -197,7 +223,7 @@ pub async fn install() -> EngineResult<PathBuf> {
     {
         let dll = staging.join("wintun.dll");
         if dll.is_file() {
-            let _ = std::fs::copy(&dll, install_dir().join("wintun.dll"));
+            let _ = std::fs::copy(&dll, install_dir.join("wintun.dll"));
         }
     }
     let _ = std::fs::remove_dir_all(&staging);
@@ -425,9 +451,33 @@ mod tests {
     }
 
     #[test]
-    fn the_install_directory_is_per_user() {
-        let path = install_dir();
-        assert!(path.ends_with(ENGINE_VERSION), "{path:?}");
-        assert!(path.parent().unwrap().ends_with("engine"), "{path:?}");
+    fn the_engine_installs_under_the_app_data_directory_and_version() {
+        let data = Path::new("/data/Starpod");
+        assert_eq!(
+            install_dir_in(data),
+            Path::new("/data/Starpod/engine").join(ENGINE_VERSION)
+        );
+        assert_eq!(
+            installed_binary_path_in(data),
+            install_dir_in(data).join(binary_name())
+        );
+    }
+
+    #[test]
+    fn the_default_data_directory_uses_the_app_directory_name() {
+        // The name is the one `AppPaths` uses. Lowercase `starpod` was the
+        // old, separate location and must not come back.
+        let path = default_data_dir();
+        assert!(path.ends_with("Starpod"), "{path:?}");
+        assert!(!path.ends_with("starpod"), "{path:?}");
+    }
+
+    #[test]
+    fn an_install_with_no_binary_is_not_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_installed_in(dir.path()));
+        std::fs::create_dir_all(install_dir_in(dir.path())).unwrap();
+        std::fs::write(installed_binary_path_in(dir.path()), b"not a real engine").unwrap();
+        assert!(is_installed_in(dir.path()));
     }
 }

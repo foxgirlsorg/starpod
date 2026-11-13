@@ -11,7 +11,7 @@ Starpod does not bundle the proxy engine. It downloads the engine the first time
 - **Source.** `https://github.com/meow-rs/meow-rs/releases/download/v0.29.0/` and the matching `.sha256` file from the same release. The asset is chosen for your platform: `x86_64-pc-windows-msvc` (zip), `aarch64-apple-darwin` (tar.gz), `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu` (tar.gz).
 - **Check.** The app computes the SHA-256 of the downloaded archive and compares it with the hash in the `.sha256` file from the same release. A mismatch deletes the download and installs nothing.
 - **What this does not check.** The release is not signed, and the app does not verify a signature. The check catches corruption and a mismatched download. It does not catch a compromised release, because the attacker could publish a matching hash too.
-- **Where it goes.** `<local data>/starpod/engine/0.29.0/` (on Windows, `%LOCALAPPDATA%\starpod\engine\0.29.0\`). On Windows the archive's `wintun.dll` is copied next to the engine.
+- **Where it goes.** `<data folder>/engine/0.29.0/`, where the data folder is the one in section 9 (on Windows, `%LOCALAPPDATA%\Starpod\engine\0.29.0\`). On Windows the archive's `wintun.dll` is copied next to the engine. An engine installed by an earlier build under a lowercase `starpod` folder is not found; install it again.
 
 The engine runs as your user. It is never installed system-wide.
 
@@ -47,7 +47,26 @@ If a refresh of an app-managed subscription fails, the app keeps the last payloa
 
 ### 2.2 Removing a subscription
 
-Removing a subscription deletes its cached payload and its stored address and header. Your own nodes, groups and rules are not affected.
+Removing a subscription deletes its cached payload and its stored address and header. Your own nodes, groups and rules are not affected. If the removal leaves no subscription with servers while the proxy is running, the proxy is stopped (section 2.3).
+
+### 2.3 Connecting needs a subscription with servers
+
+The proxy starts only when at least one subscription supplies servers. Without one, the generated configuration has no servers and every connection would go direct, so the app refuses to connect. A subscription counts this way:
+
+- **Engine-managed:** it counts. The engine holds its servers.
+- **App-managed:** it counts once a refresh has succeeded and the payload has at least one server. A subscription that has never fetched successfully does not count.
+- **Your own nodes:** they do not count on their own. You still need a subscription.
+
+While the rule blocks Connect, the Dashboard says why and offers a way to fix it:
+
+- "Add a subscription first", when there are no subscriptions. The card's button opens the Servers screen.
+- "Refresh your subscription — it has no servers yet", when subscriptions exist but none is usable.
+
+Connect, Restart and the tray's Connect item stay disabled while blocked. Connect is also blocked while the engine is not installed. Disconnect is never blocked.
+
+If the proxy is running and a change leaves no usable subscription (removing the last one, clearing the cache, or a refresh that returns no servers), the app stops the proxy and shows a notice saying why. It does not reload the proxy with no servers. Add or refresh a subscription, then connect again.
+
+A proxy that is already running when the app starts with no usable subscription (one an earlier run left running) is left running, so you can Disconnect it. Restart is refused until a subscription has servers.
 
 ## 3. Servers and node selection
 
@@ -78,6 +97,8 @@ Two guarantees follow from this:
 
 Allow-LAN and the bind address are never taken from a subscription. See section 6.
 
+**Warnings.** A build can succeed and still have things to look at, such as a geo rule that needs a database. These appear as a warning card on the Dashboard, listed under the current configuration. The card is shown only when there are warnings, and it does not stop the proxy. The warnings come from the last build that succeeded; a build that fails shows its error instead.
+
 ## 5. Rules
 
 Rules decide where each connection goes. The engine checks them from top to bottom and the first match wins. The order is:
@@ -89,13 +110,14 @@ Rules decide where each connection goes. The engine checks them from top to bott
 ### 5.1 Two editors
 
 - **Structured editor.** One rule per row: kind, payload, target, and flags. Changes are validated before they are saved.
+- **Disabling a rule.** Each of your rules has a Disable or Enable button. A disabled rule stays in your list, shown dimmed with a `disabled` badge, and takes no part in routing. Enable it again to bring it back in its place. Subscription rules have no toggle; they are read-only.
 - **Raw text.** One engine rule per line, in the engine's own syntax. Blank lines and lines starting with `#` are ignored. If any line is invalid, nothing is saved, and every bad line is reported with its line number.
 
 Raw text is parsed into the same rule model the structured editor edits, so a rule entered either way is stored the same way.
 
 ### 5.2 Rule kinds
 
-The app supports the 31 rule tokens of the meow grammar (`crates/starpod-core/src/rules/grammar.rs`):
+The meow grammar has 31 rule tokens (`crates/starpod-core/src/rules/grammar.rs`). The editor offers 29 of them. The app's list of kinds is the one the editor shows; the two left out are explained below.
 
 | Group | Kinds |
 |---|---|
@@ -105,15 +127,16 @@ The app supports the 31 rule tokens of the meow grammar (`crates/starpod-core/sr
 | Port and network | `SRC-PORT`, `DST-PORT`, `IN-PORT`, `NETWORK`, `DSCP` |
 | Process and user | `PROCESS-NAME`, `PROCESS-PATH`, `UID` |
 | Inbound | `IN-NAME`, `IN-TYPE`, `IN-USER` |
-| Logic and blocks | `AND`, `OR`, `NOT`, `SUB-RULE`, `RULE-SET` |
+| Logic | `AND`, `OR`, `NOT` |
 | Catch-all | `MATCH` (written by the app, not by you) |
+
+Not offered: `RULE-SET` and `SUB-RULE`. They name a rule provider and a named rule block. The app supplies neither, so a rule of either kind can never validate. A raw line with one is refused when you apply it, and the error says the feature is not supported yet.
 
 Things to know:
 
 - **Targets** are a proxy group or node name, or a built-in outbound: `DIRECT`, `REJECT`, `REJECT-DROP`, `COMPATIBLE`, `PASS`, `PASS-RULE`. A target that names nothing in the candidate configuration fails the build, and the error names the rule.
 - **Flags.** `no-resolve` stops the engine resolving a domain to an IP before matching. `src` matches the source address instead of the destination.
 - **Logic rules** (`AND`, `OR`, `NOT`) take their inner rules without a target. The enclosing rule owns the target.
-- **`RULE-SET` does not work yet.** It refers to a rule provider, and the app currently supplies no providers, so a `RULE-SET` rule fails validation with a message naming the missing provider.
 - **Geo rules.** `GEOIP`, `SRC-GEOIP`, `IP-ASN` and `SRC-IP-ASN` make the app show a warning. The engine downloads its geo database the first time it needs it, so the first match can be slow. `GEOSITE` needs no database check; if the database is absent, the rule simply never matches.
 
 ## 6. Settings
@@ -132,6 +155,8 @@ Things to know:
 **Allow LAN is off by default, and why.** When it is on, other machines on your network can use the proxy ports. You did not ask for that, so the default is off.
 
 **A subscription cannot turn Allow LAN on.** Whether the proxy is reachable from your network is your decision alone. A subscription's `allow-lan` and `bind-address` values are ignored, and the default stays off until you change it.
+
+**TUN MTU** is the largest packet size the adapter carries, from 1280 to 9000 bytes, or 0 for the engine's default. The floor is 1280 because that is the smallest MTU IPv6 allows, and TUN carries IPv6 traffic as well as IPv4. A smaller value is refused.
 
 **TUN** sends all system traffic through a virtual network interface. It needs administrator rights on Windows, root on macOS, and root or `CAP_NET_ADMIN` on Linux. The app does not start the engine with those rights. Turning TUN on sends the setting to the running engine, which works only if the engine already has the privileges. The elevation helper described in `docs/research/ARCHITECTURE.md` section 4.5 is not implemented. Treat TUN as not yet usable.
 
@@ -160,13 +185,13 @@ The paths follow each platform's own conventions. The table is taken from the `d
 | Settings and rules (`user-state.json`) | `%APPDATA%\Starpod` | `~/Library/Application Support/Starpod` | `~/.config/Starpod` |
 | Subscription metadata (`subscriptions.json`), generated config (`runtime-config.yaml`), fallback secrets, controller files (`controllers/`) | `%LOCALAPPDATA%\Starpod` | `~/Library/Application Support/Starpod` | `~/.local/share/Starpod` |
 | Cached subscription payloads (`subscriptions/`) | `%LOCALAPPDATA%\Starpod` | `~/Library/Caches/Starpod` | `~/.cache/Starpod` |
-| Engine binary | `%LOCALAPPDATA%\starpod\engine\0.29.0` | `~/Library/Application Support/starpod/engine/0.29.0` | `~/.local/share/starpod/engine/0.29.0` |
+| Engine binary | `%LOCALAPPDATA%\Starpod\engine\0.29.0` | `~/Library/Application Support/Starpod/engine/0.29.0` | `~/.local/share/Starpod/engine/0.29.0` |
 
 Notes on this table:
 
 - On macOS the settings and the data share one folder. They are still separate files, so a subscription refresh still cannot touch `user-state.json`. The separation is by file, not by folder, on that platform.
 - On Windows the cache shares the data folder. Its files are in a `subscriptions` subfolder, which does not collide with `subscriptions.json`.
-- The engine path uses lowercase `starpod`, while the other folders use `Starpod`. On Windows and macOS the file system ignores case, so both names are the same folder. On Linux they are different folders.
+- The engine sits in the data folder, under `engine/`, like every other file the app writes. Earlier builds used a lowercase `starpod` folder for it; on Linux that is a different folder, and the engine there must be installed again.
 
 The generated `runtime-config.yaml` can contain a subscription address with its token, so it is written with owner-only permissions: `0600` on Unix, and an owner-only ACL on Windows.
 

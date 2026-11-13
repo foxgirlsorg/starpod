@@ -1,0 +1,46 @@
+# Cross-compile environment: builds the Windows x86_64 release binary
+# (`starpod.exe`) from Linux using the mingw-w64 toolchain.
+# The Linux build environment lives in `Dockerfile`; this one is separate so
+# the two cannot disturb each other's toolchain or target directory.
+FROM rust:1.92-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CARGO_TERM_COLOR=always
+
+# mingw-w64 provides the Windows GNU linker, C/C++ compilers and binutils
+# (objdump is used by tools/build-windows.sh to list DLL dependencies).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        pkg-config \
+        gcc-mingw-w64-x86-64 \
+        g++-mingw-w64-x86-64 \
+        binutils-mingw-w64-x86-64 \
+        python3 \
+        git \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Bake the pinned toolchain (rust-toolchain.toml pins 1.92.0) with the Windows
+# target so cargo does not need to download it at build time.
+RUN rustup toolchain install 1.92.0 --profile minimal --component rustfmt --component clippy \
+    && rustup target add x86_64-pc-windows-gnu --toolchain 1.92.0 \
+    && rustup default 1.92.0
+
+RUN useradd --create-home --uid 1000 dev \
+    && chown -R dev:dev /usr/local/cargo /usr/local/rustup \
+    && mkdir -p /target-win && chown dev:dev /target-win \
+    && git config --system --add safe.directory '*'
+
+USER dev
+ENV HOME=/home/dev
+
+# Linker and C toolchain for the Windows GNU target (used by cargo and by any
+# build.rs that compiles C code, e.g. ring / aws-lc-sys).
+ENV CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
+    CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
+    CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++ \
+    AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar \
+    CARGO_TARGET_DIR=/target-win
+
+WORKDIR /work
+CMD ["bash", "/work/tools/build-windows.sh"]

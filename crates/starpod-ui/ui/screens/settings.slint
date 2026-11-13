@@ -182,7 +182,6 @@ component ChoiceField inherits VerticalLayout {
 export component SettingsPage inherits VerticalLayout {
     padding: Design.space-xl;
     spacing: Design.space-lg;
-    alignment: start;
     horizontal-stretch: 1;
     vertical-stretch: 1;
 
@@ -193,11 +192,16 @@ export component SettingsPage inherits VerticalLayout {
 
     // The text in the number fields. Text is kept separately so that a value
     // which is not a number can be shown and flagged without being stored.
-    private property <string> t-mixed: Bridge.settings.mixed-port;
-    private property <string> t-socks: Bridge.settings.socks-port;
-    private property <string> t-http: Bridge.settings.http-port;
-    private property <string> t-mtu: Bridge.settings.tun-mtu;
-    private property <string> t-refresh: Bridge.settings.auto-refresh-minutes;
+    // A number that is not set (-1 in the model) is shown as an empty field.
+    private property <string> t-mixed: root.num-text(Bridge.settings.mixed-port);
+    private property <string> t-socks: root.num-text(Bridge.settings.socks-port);
+    private property <string> t-http: root.num-text(Bridge.settings.http-port);
+    private property <string> t-mtu: root.num-text(Bridge.settings.tun-mtu);
+    private property <string> t-refresh: root.num-text(Bridge.settings.auto-refresh-minutes);
+    // The two text fields that edit the draft directly. Their own text is
+    // kept here too, so a Field that has been typed in still follows a resync.
+    private property <string> t-bind: Bridge.settings.bind-address;
+    private property <string> t-device: Bridge.settings.tun-device;
 
     // A private mirror of Bridge.settings. Its `changed` handler fires when
     // Rust pushes new settings, for example after a successful save.
@@ -215,6 +219,16 @@ export component SettingsPage inherits VerticalLayout {
             && s.to-float() >= lo && s.to-float() <= hi;
     }
 
+    // Empty is valid for an optional number: it means "not set".
+    function valid-optional(s: string, lo: int, hi: int) -> bool {
+        return s == "" || root.valid-int(s, lo, hi);
+    }
+
+    // -1 is "not set" in the model and shows as an empty field.
+    function num-text(v: int) -> string {
+        return v < 0 ? "" : "\{v}";
+    }
+
     function mode-index(m: string) -> int {
         if (m == "global") { return 1; }
         if (m == "direct") { return 2; }
@@ -229,26 +243,37 @@ export component SettingsPage inherits VerticalLayout {
         return 3;
     }
 
-    private property <bool> ok-mixed: root.valid-int(root.t-mixed, 0, 65535);
-    private property <bool> ok-socks: root.valid-int(root.t-socks, 0, 65535);
-    private property <bool> ok-http: root.valid-int(root.t-http, 0, 65535);
-    private property <bool> ok-mtu: root.valid-int(root.t-mtu, 576, 9000);
-    private property <bool> ok-refresh: root.valid-int(root.t-refresh, 0, 10080);
+    // A port is 1 to 65535. Empty uses the default (HTTP: off). 0 is refused:
+    // it is not a way to turn a listener off.
+    private property <bool> ok-mixed: root.valid-optional(root.t-mixed, 1, 65535);
+    private property <bool> ok-socks: root.valid-optional(root.t-socks, 1, 65535);
+    private property <bool> ok-http: root.valid-optional(root.t-http, 1, 65535);
+    // 1280 is the IPv6 minimum. TUN carries IPv6, and a smaller MTU breaks it.
+    // The app refuses anything outside 1280-9000 (MIN_TUN_MTU and MAX_TUN_MTU in
+    // ui/mapping.rs); keep both in step. Empty means the engine default.
+    private property <bool> ok-mtu: root.valid-optional(root.t-mtu, 1280, 9000);
+    // 0 is manual refresh only; empty means the app default.
+    private property <bool> ok-refresh: root.valid-optional(root.t-refresh, 0, 10080);
 
-    private property <bool> mixed-clash: root.draft.mixed-port != 0
+    // An unset port (-1) is not a listener, so it cannot clash.
+    private property <bool> mixed-clash: root.draft.mixed-port > 0
         && (root.draft.mixed-port == root.draft.socks-port || root.draft.mixed-port == root.draft.http-port);
-    private property <bool> socks-clash: root.draft.socks-port != 0
+    private property <bool> socks-clash: root.draft.socks-port > 0
         && (root.draft.socks-port == root.draft.mixed-port || root.draft.socks-port == root.draft.http-port);
-    private property <bool> http-clash: root.draft.http-port != 0
+    private property <bool> http-clash: root.draft.http-port > 0
         && (root.draft.http-port == root.draft.mixed-port || root.draft.http-port == root.draft.socks-port);
 
-    private property <bool> bind-ok: root.draft.bind-address != "";
+    // An empty bind address is the default (loopback). Any other text is
+    // passed to the engine as it is, as it was before.
+    // The TUN fields block Save only while TUN is on. A bad MTU with TUN off
+    // is still flagged, but the last valid value is kept and saved.
     private property <bool> tun-name-ok: !root.draft.tun-enabled || root.draft.tun-device != "";
+    private property <bool> tun-mtu-ok: !root.draft.tun-enabled || root.ok-mtu;
 
     private property <bool> inputs-ok: root.ok-mixed && root.ok-socks && root.ok-http
-        && root.ok-mtu && root.ok-refresh
+        && root.ok-refresh
         && !root.mixed-clash && !root.socks-clash && !root.http-clash
-        && root.bind-ok && root.tun-name-ok;
+        && root.tun-mtu-ok && root.tun-name-ok;
 
     private property <bool> dirty: root.draft != Bridge.settings;
     private property <bool> can-save: root.dirty && root.inputs-ok && !Bridge.busy;
@@ -261,36 +286,45 @@ export component SettingsPage inherits VerticalLayout {
 
     function resync() {
         root.draft = Bridge.settings;
-        root.t-mixed = Bridge.settings.mixed-port;
-        root.t-socks = Bridge.settings.socks-port;
-        root.t-http = Bridge.settings.http-port;
-        root.t-mtu = Bridge.settings.tun-mtu;
-        root.t-refresh = Bridge.settings.auto-refresh-minutes;
+        root.t-mixed = root.num-text(Bridge.settings.mixed-port);
+        root.t-socks = root.num-text(Bridge.settings.socks-port);
+        root.t-http = root.num-text(Bridge.settings.http-port);
+        root.t-mtu = root.num-text(Bridge.settings.tun-mtu);
+        root.t-refresh = root.num-text(Bridge.settings.auto-refresh-minutes);
+        root.t-bind = Bridge.settings.bind-address;
+        root.t-device = Bridge.settings.tun-device;
     }
 
+    // Empty stores "not set" (-1). A valid number is stored. Anything else
+    // leaves the draft as it was, and the field shows the error.
     function edit-mixed(text: string) {
         root.t-mixed = text;
-        if (root.valid-int(text, 0, 65535)) { root.draft.mixed-port = round(text.to-float()); }
+        if (text == "") { root.draft.mixed-port = -1; }
+        else if (root.valid-int(text, 1, 65535)) { root.draft.mixed-port = round(text.to-float()); }
     }
 
     function edit-socks(text: string) {
         root.t-socks = text;
-        if (root.valid-int(text, 0, 65535)) { root.draft.socks-port = round(text.to-float()); }
+        if (text == "") { root.draft.socks-port = -1; }
+        else if (root.valid-int(text, 1, 65535)) { root.draft.socks-port = round(text.to-float()); }
     }
 
     function edit-http(text: string) {
         root.t-http = text;
-        if (root.valid-int(text, 0, 65535)) { root.draft.http-port = round(text.to-float()); }
+        if (text == "") { root.draft.http-port = -1; }
+        else if (root.valid-int(text, 1, 65535)) { root.draft.http-port = round(text.to-float()); }
     }
 
     function edit-mtu(text: string) {
         root.t-mtu = text;
-        if (root.valid-int(text, 576, 9000)) { root.draft.tun-mtu = round(text.to-float()); }
+        if (text == "") { root.draft.tun-mtu = -1; }
+        else if (root.valid-int(text, 1280, 9000)) { root.draft.tun-mtu = round(text.to-float()); }
     }
 
     function edit-refresh(text: string) {
         root.t-refresh = text;
-        if (root.valid-int(text, 0, 10080)) { root.draft.auto-refresh-minutes = round(text.to-float()); }
+        if (text == "") { root.draft.auto-refresh-minutes = -1; }
+        else if (root.valid-int(text, 0, 10080)) { root.draft.auto-refresh-minutes = round(text.to-float()); }
     }
 
     changed pushed => {
@@ -303,6 +337,7 @@ export component SettingsPage inherits VerticalLayout {
         eyebrow: "Configuration";
         title: "Settings";
         description: "Ports, network exposure, logging, TUN and the engine.";
+        vertical-stretch: 0;
     }
 
     if (!Bridge.loaded) : LoadingState {
@@ -310,28 +345,36 @@ export component SettingsPage inherits VerticalLayout {
         message: "Waiting for the proxy engine to report its settings…";
     }
 
+    // The scroll area sits between the heading and the footer. The std
+    // ScrollView asks for 100% of its parent as its preferred height, and the
+    // parent here is this page, whose own height is built from its children.
+    // That request feeds back on itself, so the scroll area collapsed and the
+    // footer fell out of view. Ask for no preferred height and let the stretch
+    // give the scroll area the room the heading and footer leave.
     if (Bridge.loaded) : ScrollView {
+        preferred-height: 0px;
         vertical-stretch: 1;
 
         VerticalLayout {
+            width: parent.width;
             spacing: Design.space-lg;
             padding-right: Design.space-md;
 
             // --- Proxy ----------------------------------------------------------
             Card {
                 title: "Proxy";
-                description: "Local listeners. A port set to 0 is disabled.";
+                description: "Local listeners. An empty port uses its default. HTTP is off when empty.";
 
                 ControlRow {
                     label: "Mixed port";
-                    description: "HTTP and SOCKS5 on one port. 0 disables it.";
+                    description: "HTTP and SOCKS5 on one port. Empty uses the default.";
 
                     Field {
                         kind: FieldKind.number;
                         width: 160px;
-                        placeholder: "0";
-                        value: root.t-mixed;
-                        error: !root.ok-mixed ? "Enter a whole number from 0 to 65535."
+                        placeholder: "7890";
+                        value <=> root.t-mixed;
+                        error: !root.ok-mixed ? "Enter a port from 1 to 65535, or leave it empty."
                             : root.mixed-clash ? "Another listener already uses this port." : "";
                         edited(text) => {
                             root.edit-mixed(text);
@@ -341,14 +384,14 @@ export component SettingsPage inherits VerticalLayout {
 
                 ControlRow {
                     label: "SOCKS5 port";
-                    description: "SOCKS5 only. 0 disables it.";
+                    description: "SOCKS5 only. Empty uses the default.";
 
                     Field {
                         kind: FieldKind.number;
                         width: 160px;
-                        placeholder: "0";
-                        value: root.t-socks;
-                        error: !root.ok-socks ? "Enter a whole number from 0 to 65535."
+                        placeholder: "7891";
+                        value <=> root.t-socks;
+                        error: !root.ok-socks ? "Enter a port from 1 to 65535, or leave it empty."
                             : root.socks-clash ? "Another listener already uses this port." : "";
                         edited(text) => {
                             root.edit-socks(text);
@@ -358,14 +401,14 @@ export component SettingsPage inherits VerticalLayout {
 
                 ControlRow {
                     label: "HTTP port";
-                    description: "HTTP only. 0 disables it.";
+                    description: "HTTP only. Empty turns it off.";
 
                     Field {
                         kind: FieldKind.number;
                         width: 160px;
-                        placeholder: "0";
-                        value: root.t-http;
-                        error: !root.ok-http ? "Enter a whole number from 0 to 65535."
+                        placeholder: "off";
+                        value <=> root.t-http;
+                        error: !root.ok-http ? "Enter a port from 1 to 65535, or leave it empty."
                             : root.http-clash ? "Another listener already uses this port." : "";
                         edited(text) => {
                             root.edit-http(text);
@@ -375,14 +418,13 @@ export component SettingsPage inherits VerticalLayout {
 
                 ControlRow {
                     label: "Bind address";
-                    description: "The address the listeners bind to.";
+                    description: "The address the listeners bind to. Empty uses the default, loopback.";
 
                     Field {
                         kind: FieldKind.text;
                         width: 180px;
                         placeholder: "127.0.0.1";
-                        value: root.draft.bind-address;
-                        error: root.bind-ok ? "" : "The bind address cannot be empty.";
+                        value <=> root.t-bind;
                         edited(text) => {
                             root.draft.bind-address = text;
                         }
@@ -487,7 +529,7 @@ export component SettingsPage inherits VerticalLayout {
                         kind: FieldKind.text;
                         width: 180px;
                         placeholder: "starpod-tun";
-                        value: root.draft.tun-device;
+                        value <=> root.t-device;
                         error: root.tun-name-ok ? "" : "Enter a device name, or turn TUN off.";
                         edited(text) => {
                             root.draft.tun-device = text;
@@ -497,14 +539,14 @@ export component SettingsPage inherits VerticalLayout {
 
                 ControlRow {
                     label: "MTU";
-                    description: "Maximum packet size in bytes, from 576 to 9000.";
+                    description: "Maximum packet size in bytes, from 1280 to 9000. Empty uses the engine default. 1280 is the smallest size IPv6 allows.";
 
                     Field {
                         kind: FieldKind.number;
                         width: 160px;
-                        placeholder: "1500";
-                        value: root.t-mtu;
-                        error: root.ok-mtu ? "" : "Enter a whole number from 576 to 9000.";
+                        placeholder: "default";
+                        value <=> root.t-mtu;
+                        error: root.ok-mtu ? "" : "Enter a whole number from 1280 to 9000, or leave it empty.";
                         edited(text) => {
                             root.edit-mtu(text);
                         }
@@ -519,14 +561,14 @@ export component SettingsPage inherits VerticalLayout {
 
                 ControlRow {
                     label: "Auto refresh (minutes)";
-                    description: "0 means manual refresh only. The maximum is one week.";
+                    description: "0 means manual refresh only. Empty uses the default of 60. The maximum is one week.";
 
                     Field {
                         kind: FieldKind.number;
                         width: 160px;
-                        placeholder: "0";
-                        value: root.t-refresh;
-                        error: root.ok-refresh ? "" : "Enter a whole number from 0 to 10080.";
+                        placeholder: "60";
+                        value <=> root.t-refresh;
+                        error: root.ok-refresh ? "" : "Enter a whole number from 0 to 10080, or leave it empty.";
                         edited(text) => {
                             root.edit-refresh(text);
                         }
@@ -570,6 +612,14 @@ export component SettingsPage inherits VerticalLayout {
                 SettingRow {
                     label: "Secret storage";
                     description: Bridge.secret-backend != "" ? Bridge.secret-backend : "Not reported yet";
+                }
+
+                if (Bridge.secret-fallback-reason != "") : Text {
+                    text: "Why the OS keyring was not used: " + Bridge.secret-fallback-reason;
+                    color: Design.muted-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-xs;
+                    wrap: word-wrap;
                 }
 
                 VerticalLayout {
@@ -667,6 +717,7 @@ export component SettingsPage inherits VerticalLayout {
 
     if (Bridge.loaded) : VerticalLayout {
         spacing: Design.space-xs;
+        vertical-stretch: 0;
 
         if (Bridge.settings-error != "") : Text {
             text: Bridge.settings-error;

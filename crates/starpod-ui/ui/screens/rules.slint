@@ -21,9 +21,15 @@ export component RulesPage inherits VerticalLayout {
     private property <int> editing-index: -1;
     // The combos hold the chosen value itself (bound through `current-value`),
     // so no index lookup is needed when a rule is loaded into the form.
-    private property <string> kind-draft: "";
-    private property <string> target-draft: "";
+    // A ComboBox given a value that is not in its model shows nothing and
+    // selects nothing, so the drafts start on the first choice, not on "".
+    private property <string> kind-draft: root.default-kind();
+    private property <string> target-draft: root.default-target();
     private property <string> payload-draft: "";
+    // The number of user rules last time it was looked at. A rise means a
+    // rule was added, so the add form starts again.
+    private property <int> user-rule-count: Bridge.user-rules.length;
+    private property <int> seen-rule-count: Bridge.user-rules.length;
     private property <string> raw-draft: Bridge.rules-raw-text;
 
     private property <string> submit-reason: root.payload-draft == "" ? "Enter a payload to match first, for example example.com"
@@ -37,11 +43,29 @@ export component RulesPage inherits VerticalLayout {
         root.payload-draft = payload;
     }
 
+    // The first kind and the first target the engine offers, or "" when the
+    // list has not arrived yet.
+    pure function default-kind() -> string {
+        return Bridge.rule-kinds.length > 0 ? Bridge.rule-kinds[0] : "";
+    }
+
+    pure function default-target() -> string {
+        return Bridge.rule-targets.length > 0 ? Bridge.rule-targets[0] : "";
+    }
+
+    // Back to an empty add form: both combos on their first choice.
     function reset-form() {
         root.editing-index = -1;
-        root.kind-draft = "";
-        root.target-draft = "";
+        root.kind-draft = root.default-kind();
+        root.target-draft = root.default-target();
         root.payload-draft = "";
+    }
+
+    changed user-rule-count => {
+        if (root.user-rule-count > root.seen-rule-count && root.editing-index < 0) {
+            root.reset-form();
+        }
+        root.seen-rule-count = root.user-rule-count;
     }
 
     // Moving or deleting a rule shifts positions, so an open edit no longer
@@ -149,9 +173,16 @@ export component RulesPage inherits VerticalLayout {
                                     width: 152px;
                                 }
 
+                                // A disabled rule stays in the list but takes no part in routing.
+                                if (!rule.enabled) : Badge {
+                                    text: "disabled";
+                                    variant: BadgeVariant.outline;
+                                    width: 80px;
+                                }
+
                                 Text {
                                     text: rule.payload;
-                                    color: Design.foreground;
+                                    color: rule.enabled ? Design.foreground : Design.muted-foreground;
                                     font-family: Design.font-family;
                                     font-size: Design.font-sm;
                                     horizontal-stretch: 1;
@@ -169,7 +200,7 @@ export component RulesPage inherits VerticalLayout {
 
                                 Text {
                                     text: rule.target;
-                                    color: Design.foreground;
+                                    color: rule.enabled ? Design.foreground : Design.muted-foreground;
                                     font-family: Design.font-family;
                                     font-size: Design.font-sm;
                                     font-weight: 500;
@@ -182,6 +213,15 @@ export component RulesPage inherits VerticalLayout {
                             HorizontalLayout {
                                 alignment: end;
                                 spacing: Design.space-sm;
+
+                                AppButton {
+                                    text: rule.enabled ? "Disable" : "Enable";
+                                    variant: ButtonVariant.outline;
+                                    size: ButtonSize.sm;
+                                    clicked => {
+                                        Bridge.set-rule-enabled(rule.index, !rule.enabled);
+                                    }
+                                }
 
                                 AppButton {
                                     text: "Up";
@@ -431,8 +471,7 @@ export component RulesPage inherits VerticalLayout {
                         y: 0;
                         width: parent.width;
                         height: parent.height;
-                        // Monospace for rule lines. Design has no mono token.
-                        font-family: "Consolas";
+                        font-family: Design.font-mono;
                         font-size: Design.font-sm;
                         wrap: no-wrap;
                         placeholder-text: "DOMAIN-SUFFIX,example.com,DIRECT";

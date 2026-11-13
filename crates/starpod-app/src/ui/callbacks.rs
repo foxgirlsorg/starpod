@@ -9,6 +9,7 @@
 use std::future::Future;
 
 use crate::{AppError, AppService, SharedAppService};
+use starpod_core::RuleSpec;
 use starpod_ui::{AppWindow, Bridge, SettingsModel};
 use tracing::warn;
 
@@ -227,6 +228,20 @@ fn wire_rules(bridge: &Bridge<'_>, ctx: &Ctx) {
     });
 
     let c = ctx.clone();
+    bridge.on_set_rule_enabled(move |index, enabled| {
+        let busy = if enabled {
+            "Enabling the rule…"
+        } else {
+            "Disabling the rule…"
+        };
+        act(&c, busy, Sink::Rules, move |s| async move {
+            let mut svc = s.lock().await;
+            let (id, spec) = stored_rule_spec(&svc, index)?;
+            svc.update_rule(&id, spec, enabled).await
+        });
+    });
+
+    let c = ctx.clone();
     bridge.on_move_rule(move |index, delta| {
         act(&c, "Moving the rule…", Sink::Rules, move |s| async move {
             let mut svc = s.lock().await;
@@ -253,6 +268,15 @@ fn stored_rule(svc: &AppService, index: i32) -> Result<(String, bool), AppError>
         .ok()
         .and_then(|position| svc.user_state().rules.get(position))
         .map(|rule| (rule.id.clone(), rule.enabled))
+        .ok_or_else(|| AppError::NotFound("that rule".to_string()))
+}
+
+/// The id and shape of the user's rule at a list position.
+fn stored_rule_spec(svc: &AppService, index: i32) -> Result<(String, RuleSpec), AppError> {
+    usize::try_from(index)
+        .ok()
+        .and_then(|position| svc.user_state().rules.get(position))
+        .map(|rule| (rule.id.clone(), rule.spec.clone()))
         .ok_or_else(|| AppError::NotFound("that rule".to_string()))
 }
 

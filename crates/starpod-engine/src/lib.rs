@@ -17,17 +17,24 @@
 //! | [`log`] | the engine's output, redacted and bounded |
 //! | [`rest`] | the controller's REST API |
 //! | [`supervisor`] | the engine's process lifetime |
+//! | [`signal`] | asking an engine process to stop, by pid |
+//! | [`elevate`] | starting the engine elevated, for TUN |
+//! | [`adopt`] | finding an engine an earlier run left running |
 //! | [`tun`] | TUN mode and the elevation it needs |
 //! | [`engine`] | the trait the rest of the app sees |
 
+pub mod adopt;
 pub mod config;
 pub mod download;
+pub mod elevate;
 pub mod engine;
 pub mod error;
 pub mod log;
 pub mod meow;
+pub mod reassert;
 pub mod rest;
 pub mod secret;
+pub mod signal;
 pub mod supervisor;
 pub mod tun;
 pub mod validate;

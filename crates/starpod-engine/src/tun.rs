@@ -9,25 +9,17 @@
 //!
 //! # How elevation is handled
 //!
-//! The app does **not** elevate itself and does not run the whole
-//! application as root. Instead:
+//! The app does **not** elevate itself. Only the engine process is elevated,
+//! by [`crate::elevate`]: when TUN is wanted and the app is not elevated, the
+//! engine is started through the platform's own prompt (`runas`, `pkexec`,
+//! `osascript`). The user is told what that means, and the app never handles
+//! their password.
 //!
-//! - the app asks the user whether to enable TUN;
-//! - the user is told, in plain words, what elevation means;
-//! - the engine is started as an elevated child when the platform offers a
-//!   way to do that without the app itself becoming privileged.
-//!
-//! On unix the child is started through `sudo`, with the password prompt
-//! handled by the terminal the user is shown — never by the app, which must
-//! not handle the user's password. On Windows the child is started with
-//! `ShellExecute` and the `runas` verb, which shows the system's own
-//! elevation prompt.
-//!
-//! When elevation is refused or fails, the app falls back to running the
-//! engine unelevated with TUN off, and says so. A proxy that does not work
-//! is better than an app that quits.
+//! When elevation is refused or fails, the engine starts without TUN and the
+//! proxy keeps working. A proxy that does not work is better than an app that
+//! quits, and the user is told that TUN is off and why.
 
-use starpod_core::domain::TunSettings;
+use starpod_core::domain::{RuntimeConfig, TunSettings};
 
 /// Whether this process is running elevated.
 pub fn is_elevated() -> bool {
@@ -80,55 +72,6 @@ fn is_elevated_windows() -> bool {
     }
 }
 
-/// The command that runs the engine elevated on this platform.
-///
-/// `None` when the platform has no way to elevate a child process without
-/// the app itself becoming privileged.
-pub fn elevation_command(binary: &std::path::Path) -> Option<ElevationCommand> {
-    #[cfg(unix)]
-    {
-        Some(ElevationCommand {
-            program: std::path::PathBuf::from("sudo"),
-            leading_args: vec!["--".to_string()],
-            target: binary.to_path_buf(),
-        })
-    }
-    #[cfg(windows)]
-    {
-        Some(ElevationCommand {
-            program: std::path::PathBuf::from("powershell.exe"),
-            leading_args: vec![
-                "-NoProfile".to_string(),
-                "-NonInteractive".to_string(),
-                "-Command".to_string(),
-                "Start-Process".to_string(),
-            ],
-            target: binary.to_path_buf(),
-        })
-    }
-}
-
-/// How to launch the engine elevated.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ElevationCommand {
-    /// The program to run.
-    pub program: std::path::PathBuf,
-    /// The arguments that come before the engine's own.
-    pub leading_args: Vec<String>,
-    /// The engine's path.
-    pub target: std::path::PathBuf,
-}
-
-impl ElevationCommand {
-    /// The full argument list, with the engine's path in place.
-    pub fn args(&self, engine_args: &[String]) -> Vec<String> {
-        let mut all = self.leading_args.clone();
-        all.push(self.target.to_string_lossy().to_string());
-        all.extend(engine_args.iter().cloned());
-        all
-    }
-}
-
 /// Whether TUN can be enabled at all on this platform.
 ///
 /// The engine's release builds include the TUN listener, so this is true
@@ -144,6 +87,14 @@ pub fn tun_is_available() -> bool {
 /// already on in an elevated engine.
 pub fn needs_elevation(tun: &TunSettings, engine_is_elevated: bool) -> bool {
     tun.enabled && !engine_is_elevated
+}
+
+/// The configuration with TUN turned off, for the fallback when elevation
+/// fails. Everything else is unchanged.
+pub fn without_tun(config: &RuntimeConfig) -> RuntimeConfig {
+    let mut plain = config.clone();
+    plain.tun.enabled = false;
+    plain
 }
 
 /// The TUN settings the app should ask the engine for.
@@ -231,14 +182,28 @@ mod tests {
     }
 
     #[test]
-    fn the_elevation_command_puts_the_engine_last() {
-        let command = elevation_command(std::path::Path::new("/opt/meow")).unwrap();
-        let args = command.args(&["-f".to_string(), "/tmp/config.yaml".to_string()]);
-        let last_engine = args
-            .iter()
-            .position(|arg| arg.contains("meow"))
-            .expect("the engine's path is in the arguments");
-        assert!(last_engine > 0);
-        assert_eq!(args[last_engine + 1], "-f");
+    fn the_fallback_configuration_differs_only_in_tun() {
+        let mut config = RuntimeConfig {
+            mixed_port: Some(7890),
+            socks_port: None,
+            port: None,
+            allow_lan: false,
+            bind_address: None,
+            mode: starpod_core::domain::ProxyMode::Rule,
+            log_level: starpod_core::domain::LogLevel::Info,
+            tun: TunSettings::default(),
+            proxies: Vec::new(),
+            proxy_groups: Vec::new(),
+            rules: vec!["MATCH,DIRECT".to_string()],
+            rule_providers: Vec::new(),
+            subscriptions: Vec::new(),
+        };
+        config.tun.enabled = true;
+        let plain = without_tun(&config);
+        assert!(!plain.tun.enabled);
+        assert_eq!(plain.mixed_port, config.mixed_port);
+        assert_eq!(plain.rules, config.rules);
+        // The original is untouched: the fallback is a copy.
+        assert!(config.tun.enabled);
     }
 }

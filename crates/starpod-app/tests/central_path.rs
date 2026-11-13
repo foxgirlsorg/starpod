@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use starpod_app::{AppError, AppService, NoticeKind, ServiceDeps, SubscriptionStatus};
 use starpod_core::rules::parse_line;
 use starpod_core::{ProxyMode, RuleSpec, RuntimeConfig, SubscriptionMode, TunSettings};
+use starpod_engine::reassert::{EngineSubscription, LiveProxy};
 use starpod_engine::{
     EngineError, EngineHandle, EnginePhase, EngineStatus, LogBuffer, LogStream, ProxyEngine,
     StopRequest, ValidationReport,
@@ -91,6 +92,7 @@ enum Call {
     Reload(RuntimeConfig),
     Stop,
     Select { group: String, member: String },
+    ReplaceRules(Vec<String>),
 }
 
 #[derive(Default)]
@@ -102,6 +104,12 @@ struct EngineState {
     delays: BTreeMap<String, u32>,
     /// Whether a live selection is refused.
     fail_selects: bool,
+    /// The engine's rule list, as the engine currently holds it.
+    live_rules: Vec<String>,
+    /// The engine-managed subscriptions the engine reports.
+    engine_subs: Vec<EngineSubscription>,
+    /// The proxies the engine reports as live.
+    live_proxies: Vec<LiveProxy>,
 }
 
 /// A `ProxyEngine` that records every call and can be told to reject a
@@ -218,6 +226,40 @@ impl ProxyEngine for FakeEngine {
     fn logs(&self) -> LogStream {
         LogStream::new(LogBuffer::new(16))
     }
+
+    async fn rules(&self) -> Result<Vec<String>, EngineError> {
+        let state = self.lock();
+        if state.phase != EnginePhase::Running {
+            return Err(EngineError::EngineDown);
+        }
+        Ok(state.live_rules.clone())
+    }
+
+    async fn replace_rules(&self, rules: &[String]) -> Result<(), EngineError> {
+        let mut state = self.lock();
+        if state.phase != EnginePhase::Running {
+            return Err(EngineError::EngineDown);
+        }
+        state.calls.push(Call::ReplaceRules(rules.to_vec()));
+        state.live_rules = rules.to_vec();
+        Ok(())
+    }
+
+    async fn engine_subscriptions(&self) -> Result<Vec<EngineSubscription>, EngineError> {
+        let state = self.lock();
+        if state.phase != EnginePhase::Running {
+            return Err(EngineError::EngineDown);
+        }
+        Ok(state.engine_subs.clone())
+    }
+
+    async fn proxies(&self) -> Result<Vec<LiveProxy>, EngineError> {
+        let state = self.lock();
+        if state.phase != EnginePhase::Running {
+            return Err(EngineError::EngineDown);
+        }
+        Ok(state.live_proxies.clone())
+    }
 }
 
 // ----- a provider that answers a script ---------------------------------------
@@ -329,7 +371,7 @@ fn last_config(calls: &[Call]) -> RuntimeConfig {
             Call::Validate(config) | Call::Start(config) | Call::Reload(config) => {
                 Some(config.clone())
             }
-            Call::Stop | Call::Select { .. } => None,
+            Call::Stop | Call::Select { .. } | Call::ReplaceRules(_) => None,
         })
         .expect("the engine was given a configuration")
 }
@@ -863,6 +905,8 @@ async fn the_snapshot_publishes_every_change_to_subscribers() {
         Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
     let mut service = build_service(&dir, &engine, provider);
     service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
     let mut updates = service.subscribe();
 
     service.connect().await.unwrap();
@@ -1068,6 +1112,241 @@ async fn latency_refuses_with_a_clear_message_when_the_proxy_is_stopped() {
     }
 }
 
+// ----- the connect rule ------------------------------------------------------
+
+/// The reasons the connect rule gives, as the snapshot and the errors carry them.
+const NO_SUBSCRIPTION: &str = "Add a subscription first";
+const NO_SERVERS: &str = "Refresh your subscription — it has no servers yet";
+const NO_ENGINE: &str = "Install the engine first.";
+
+fn is_invalid(result: &Result<(), AppError>, reason: &str) -> bool {
+    matches!(result, Err(AppError::Invalid(text)) if text == reason)
+}
+
+#[tokio::test]
+async fn connecting_without_a_subscription_is_refused_before_the_engine_is_touched() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    assert_eq!(
+        service.snapshot().connect_blocked.as_deref(),
+        Some(NO_SUBSCRIPTION)
+    );
+
+    let connect = service.connect().await;
+    assert!(is_invalid(&connect, NO_SUBSCRIPTION), "{connect:?}");
+    let restart = service.restart().await;
+    assert!(is_invalid(&restart, NO_SUBSCRIPTION), "{restart:?}");
+
+    assert!(
+        engine.calls().is_empty(),
+        "no validation or start reached the engine: {:?}",
+        engine.calls()
+    );
+    assert_eq!(service.snapshot().engine.phase, EnginePhase::Stopped);
+}
+
+#[tokio::test]
+async fn a_subscription_that_never_fetched_blocks_connecting_until_it_has_servers() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    assert_eq!(
+        service.snapshot().connect_blocked.as_deref(),
+        Some(NO_SERVERS)
+    );
+
+    let connect = service.connect().await;
+    assert!(is_invalid(&connect, NO_SERVERS), "{connect:?}");
+    assert!(engine.calls().is_empty(), "{:?}", engine.calls());
+
+    service.refresh_subscription(&id).await.unwrap();
+    assert_eq!(service.snapshot().connect_blocked, None);
+    service.connect().await.unwrap();
+    assert_eq!(service.snapshot().engine.phase, EnginePhase::Running);
+}
+
+#[tokio::test]
+async fn an_engine_managed_subscription_allows_connecting() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    service
+        .add_subscription(
+            "Airport".to_string(),
+            SUB_URL.to_string(),
+            None,
+            SubscriptionMode::EngineManaged,
+        )
+        .await
+        .unwrap();
+    assert_eq!(service.snapshot().connect_blocked, None);
+
+    service.connect().await.unwrap();
+    assert_eq!(service.snapshot().engine.phase, EnginePhase::Running);
+}
+
+#[tokio::test]
+async fn connecting_is_refused_while_the_engine_is_not_installed() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = AppService::new(ServiceDeps {
+        store: Store::new(paths_in(&dir)),
+        secrets: SelectedStore {
+            store: Box::new(MockSecretStore::new()),
+            fallback_reason: None,
+        },
+        engine: Box::new(engine.clone()),
+        provider,
+        engine_installed: false,
+    });
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+
+    assert_eq!(
+        service.snapshot().connect_blocked.as_deref(),
+        Some(NO_ENGINE)
+    );
+    let connect = service.connect().await;
+    assert!(is_invalid(&connect, NO_ENGINE), "{connect:?}");
+    assert!(engine.calls().is_empty(), "{:?}", engine.calls());
+}
+
+#[tokio::test]
+async fn removing_the_last_usable_subscription_stops_a_running_proxy_and_says_why() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+    service.connect().await.unwrap();
+    let before = engine.calls().len();
+
+    service.remove_subscription(&id).await.unwrap();
+
+    assert_eq!(
+        engine.calls()[before..].to_vec(),
+        vec![Call::Stop],
+        "the proxy is stopped, not reloaded with no servers"
+    );
+    let snapshot = service.snapshot();
+    assert_eq!(snapshot.engine.phase, EnginePhase::Stopped);
+    assert_eq!(snapshot.connect_blocked.as_deref(), Some(NO_SUBSCRIPTION));
+    let (kind, text) = snapshot.notice.clone().expect("a notice explains the stop");
+    assert_eq!(kind, NoticeKind::Warning);
+    assert!(text.contains("no subscription has servers"), "{text}");
+
+    let connect = service.connect().await;
+    assert!(is_invalid(&connect, NO_SUBSCRIPTION), "{connect:?}");
+}
+
+#[tokio::test]
+async fn removing_one_of_two_subscriptions_keeps_a_running_proxy_on_the_other() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let first = add_airport(&mut service, None).await;
+    service.refresh_subscription(&first).await.unwrap();
+    let second = service
+        .add_subscription(
+            "Second".to_string(),
+            SUB_URL.to_string(),
+            None,
+            SubscriptionMode::AppManaged,
+        )
+        .await
+        .unwrap();
+    service.refresh_subscription(&second).await.unwrap();
+    service.connect().await.unwrap();
+
+    service.remove_subscription(&first).await.unwrap();
+
+    let snapshot = service.snapshot();
+    assert_eq!(snapshot.engine.phase, EnginePhase::Running);
+    assert_eq!(snapshot.connect_blocked, None);
+    assert!(
+        matches!(engine.calls().last(), Some(Call::Reload(_))),
+        "the running proxy is reloaded on the remaining subscription"
+    );
+    assert!(
+        snapshot
+            .nodes
+            .iter()
+            .all(|node| node.name.starts_with("Second / ")),
+        "{:?}",
+        snapshot.nodes
+    );
+}
+
+#[tokio::test]
+async fn clearing_the_cache_of_the_last_usable_subscription_stops_a_running_proxy() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+    service.connect().await.unwrap();
+
+    service.clear_cache().await.unwrap();
+
+    assert!(matches!(engine.calls().last(), Some(Call::Stop)));
+    let snapshot = service.snapshot();
+    assert_eq!(snapshot.engine.phase, EnginePhase::Stopped);
+    assert_eq!(snapshot.connect_blocked.as_deref(), Some(NO_SERVERS));
+}
+
+#[tokio::test]
+async fn a_proxy_left_running_without_a_usable_subscription_can_be_disconnected_but_not_restarted()
+{
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    // An engine an earlier run left running.
+    engine.lock().phase = EnginePhase::Running;
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    assert_eq!(service.snapshot().engine.phase, EnginePhase::Running);
+
+    // It is left alone at load, and a restart is refused without stopping it.
+    let restart = service.restart().await;
+    assert!(is_invalid(&restart, NO_SUBSCRIPTION), "{restart:?}");
+    assert!(
+        engine
+            .calls()
+            .iter()
+            .all(|call| !matches!(call, Call::Stop)),
+        "a refused restart does not stop the proxy: {:?}",
+        engine.calls()
+    );
+
+    service.disconnect().await.unwrap();
+    assert!(matches!(engine.calls().last(), Some(Call::Stop)));
+    assert_eq!(service.snapshot().engine.phase, EnginePhase::Stopped);
+}
+
 #[tokio::test]
 #[ignore = "needs the meow engine installed; run with --ignored"]
 async fn the_installed_meow_engine_accepts_the_central_fixture() {
@@ -1100,5 +1379,194 @@ async fn the_installed_meow_engine_accepts_the_central_fixture() {
         check.accepted,
         "the real engine rejected the central fixture: {:?}",
         check.engine_error
+    );
+}
+
+// ----- engine-managed subscriptions (ARCHITECTURE §4.6, R12) ------------------
+
+/// The user's rule as the engine spells it, and the app's terminal rule.
+const USER_RULE: &str = "DOMAIN,example.org,DIRECT";
+const TAIL: &str = "MATCH,PROXY";
+/// A rule the engine's engine-managed subscription supplies.
+const SUB_RULE: &str = "DOMAIN,sub.example,PROXY";
+
+impl FakeEngine {
+    fn set_live_rules(&self, rules: &[&str]) {
+        self.lock().live_rules = rules.iter().map(|rule| rule.to_string()).collect();
+    }
+
+    fn set_engine_subs(&self, last_updated: i64) {
+        self.lock().engine_subs = vec![EngineSubscription {
+            name: "Airport".to_string(),
+            last_updated: Some(serde_json::json!(last_updated)),
+        }];
+    }
+
+    fn set_live_proxies(&self, proxies: Vec<LiveProxy>) {
+        self.lock().live_proxies = proxies;
+    }
+
+    fn replace_calls(&self) -> Vec<Vec<String>> {
+        self.calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::ReplaceRules(rules) => Some(rules),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// A running service with one engine-managed subscription and one user rule.
+async fn running_with_engine_managed(dir: &TempDir, engine: &FakeEngine) -> AppService {
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(dir, engine, provider);
+    service.load().await.unwrap();
+    service
+        .add_subscription(
+            "Airport".to_string(),
+            SUB_URL.to_string(),
+            None,
+            SubscriptionMode::EngineManaged,
+        )
+        .await
+        .expect("the engine-managed subscription is added");
+    service.add_rule(rule(USER_RULE)).await.unwrap();
+    service.connect().await.unwrap();
+    service
+}
+
+#[tokio::test]
+async fn an_engine_refresh_puts_the_user_rules_back_in_front_and_only_when_it_refreshed() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let mut service = running_with_engine_managed(&dir, &engine).await;
+
+    // The engine applied the subscription's rule ahead of the user's.
+    engine.set_engine_subs(1);
+    engine.set_live_rules(&[SUB_RULE, USER_RULE, TAIL]);
+
+    // The first look after a start counts as a refresh.
+    service.check_engine_subscriptions().await;
+    assert_eq!(
+        engine.replace_calls(),
+        vec![vec![
+            USER_RULE.to_string(),
+            SUB_RULE.to_string(),
+            TAIL.to_string()
+        ]],
+        "the user's rule comes first, the subscription's follows, MATCH is last"
+    );
+
+    // Nothing changed: no second write.
+    service.check_engine_subscriptions().await;
+    assert_eq!(engine.replace_calls().len(), 1);
+
+    // A refresh (new last_updated) with the order inverted again is corrected.
+    engine.set_engine_subs(2);
+    engine.set_live_rules(&[SUB_RULE, USER_RULE, TAIL]);
+    service.check_engine_subscriptions().await;
+    assert_eq!(engine.replace_calls().len(), 2);
+
+    // The order is inverted but nothing refreshed: the watch does not fire.
+    engine.set_live_rules(&[SUB_RULE, USER_RULE, TAIL]);
+    service.check_engine_subscriptions().await;
+    assert_eq!(engine.replace_calls().len(), 2);
+
+    let log = service.snapshot().log_lines.join("\n");
+    assert!(
+        log.contains("restored the user's rule order"),
+        "the restore is logged: {log}"
+    );
+}
+
+#[tokio::test]
+async fn without_an_engine_managed_subscription_or_a_running_engine_the_engine_is_not_asked() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    // An app-managed subscription with servers, so the connect rule allows
+    // the start. It is not engine-managed, which is what this test checks.
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+    service.add_rule(rule(USER_RULE)).await.unwrap();
+    service.connect().await.unwrap();
+
+    engine.set_engine_subs(1);
+    engine.set_live_rules(&[SUB_RULE, USER_RULE, TAIL]);
+    service.check_engine_subscriptions().await;
+    assert!(
+        engine.replace_calls().is_empty(),
+        "no engine-managed subscription, so no rule write"
+    );
+
+    service.disconnect().await.unwrap();
+    service.check_engine_subscriptions().await;
+    assert!(
+        engine.replace_calls().is_empty(),
+        "a stopped engine is not asked"
+    );
+}
+
+#[tokio::test]
+async fn an_engine_managed_node_that_shadows_a_users_node_is_reported_in_the_snapshot() {
+    let dir = TempDir::new().unwrap();
+    let mut state = starpod_store::UserState::default();
+    state.nodes.push(starpod_core::domain::Node {
+        id: "home".to_string(),
+        name: "Home".to_string(),
+        protocol: "trojan".to_string(),
+        server: Some("home.example".to_string()),
+        port: Some(443),
+        tags: Vec::new(),
+        raw: serde_json::Map::new(),
+    });
+    Store::new(paths_in(&dir)).save_user_state(&state).unwrap();
+
+    let engine = FakeEngine::default();
+    let mut service = running_with_engine_managed(&dir, &engine).await;
+
+    // The subscription's refresh brought a node named "Home" at another server.
+    engine.set_engine_subs(1);
+    engine.set_live_proxies(vec![LiveProxy {
+        name: "Home".to_string(),
+        server: Some("remote.example".to_string()),
+        port: Some(443),
+    }]);
+    service.check_engine_subscriptions().await;
+
+    let warnings = service.snapshot().warnings;
+    let shadow = warnings
+        .iter()
+        .find(|warning| warning.contains("“Home”"))
+        .unwrap_or_else(|| panic!("the shadow is reported: {warnings:?}"));
+    assert!(
+        shadow.contains("“Airport”"),
+        "it names the subscription: {shadow}"
+    );
+    assert!(
+        shadow.contains("app-managed"),
+        "it suggests the switch: {shadow}"
+    );
+
+    // The next refresh brings the user's own server back: the warning clears.
+    engine.set_engine_subs(2);
+    engine.set_live_proxies(vec![LiveProxy {
+        name: "Home".to_string(),
+        server: Some("home.example".to_string()),
+        port: Some(443),
+    }]);
+    service.check_engine_subscriptions().await;
+    assert!(
+        !service
+            .snapshot()
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("“Home”")),
+        "a resolved shadow is no longer reported"
     );
 }

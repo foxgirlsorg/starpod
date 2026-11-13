@@ -28,6 +28,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::error::{EngineError, EngineResult};
+use crate::reassert::{EngineSubscription, LiveProxy};
 
 /// How long a request may take before it is abandoned.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -197,6 +198,35 @@ impl ControllerClient {
         Ok(())
     }
 
+    /// The engine-managed subscriptions, as the engine lists them.
+    ///
+    /// `GET /api/subscriptions`. The fields the app relies on (`name`,
+    /// `last_updated`) are documented in ARCHITECTURE §3.2.1; the envelope
+    /// is parsed by [`parse_subscriptions`].
+    pub async fn engine_subscriptions(&self) -> EngineResult<Vec<EngineSubscription>> {
+        parse_subscriptions(&self.get("/api/subscriptions").await?)
+    }
+
+    /// The engine's rule list, in evaluation order. `GET /rules`.
+    pub async fn rules(&self) -> EngineResult<Vec<String>> {
+        parse_rules(&self.get("/rules").await?)
+    }
+
+    /// Replace the engine's rule list. `POST /rules` with
+    /// `{"rules": [...]}`, the body ARCHITECTURE §4.6 gives. The engine's
+    /// answer is not documented, so any success is accepted; the caller
+    /// reads the list back to verify the order took.
+    pub async fn replace_rules(&self, rules: &[String]) -> EngineResult<()> {
+        self.post("/rules", &serde_json::json!({ "rules": rules }))
+            .await?;
+        Ok(())
+    }
+
+    /// The proxies in the engine's live configuration. `GET /proxies`.
+    pub async fn proxies(&self) -> EngineResult<Vec<LiveProxy>> {
+        parse_proxies(&self.get("/proxies").await?)
+    }
+
     /// Send one request and interpret the answer.
     async fn send(
         &self,
@@ -260,6 +290,96 @@ impl ControllerClient {
             _ => EngineError::Transport(format!("the engine answered {status}")),
         })
     }
+}
+
+/// Read the answer of `GET /api/subscriptions`.
+///
+/// ASSUMED envelope: a bare JSON array, or an object with a `subscriptions`
+/// array. Each entry needs a `name`; `last_updated` is kept as the engine
+/// sent it, because only its change matters to the app.
+pub fn parse_subscriptions(value: &Value) -> EngineResult<Vec<EngineSubscription>> {
+    array_of(value, "subscriptions", "subscription list")?
+        .iter()
+        .map(|item| {
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| malformed("subscription list"))?;
+            Ok(EngineSubscription {
+                name: name.to_string(),
+                last_updated: item.get("last_updated").filter(|v| !v.is_null()).cloned(),
+            })
+        })
+        .collect()
+}
+
+/// Read the answer of `GET /rules`.
+///
+/// ASSUMED envelope: a bare array, or an object with a `rules` array, of
+/// rule strings in the engine's own syntax. An object entry is refused
+/// rather than rebuilt from its fields: re-posting a rule the app cannot
+/// reproduce byte for byte would change the user's configuration.
+pub fn parse_rules(value: &Value) -> EngineResult<Vec<String>> {
+    array_of(value, "rules", "rule list")?
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| malformed("rule list (an entry is not a rule string)"))
+        })
+        .collect()
+}
+
+/// Read the answer of `GET /proxies`.
+///
+/// ASSUMED envelope: an object whose `proxies` is either a map keyed by
+/// name (the mihomo style the engine mirrors) or an array, or a bare array
+/// or map of the same. `server` and `port` are optional; the engine may not
+/// report them, and a caller must treat their absence as "unknown".
+pub fn parse_proxies(value: &Value) -> EngineResult<Vec<LiveProxy>> {
+    let container = value.get("proxies").unwrap_or(value);
+    match container {
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, entry)| live_proxy(entry, Some(key)))
+            .collect(),
+        Value::Array(items) => items.iter().map(|entry| live_proxy(entry, None)).collect(),
+        _ => Err(malformed("proxy list")),
+    }
+}
+
+fn live_proxy(entry: &Value, key: Option<&str>) -> EngineResult<LiveProxy> {
+    let name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .or(key)
+        .ok_or_else(|| malformed("proxy list (an entry has no name)"))?;
+    Ok(LiveProxy {
+        name: name.to_string(),
+        server: entry
+            .get("server")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        port: entry
+            .get("port")
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok()),
+    })
+}
+
+/// The array inside an answer, which is either the answer itself or the
+/// value of `key`.
+fn array_of<'a>(value: &'a Value, key: &str, what: &str) -> EngineResult<&'a Vec<Value>> {
+    value
+        .as_array()
+        .or_else(|| value.get(key).and_then(Value::as_array))
+        .ok_or_else(|| malformed(what))
+}
+
+fn malformed(what: &str) -> EngineError {
+    EngineError::Internal(format!(
+        "the engine's answer for the {what} has an unexpected shape"
+    ))
 }
 
 /// Percent-encode a path segment.
@@ -352,6 +472,123 @@ mod tests {
             .await
             .expect("the probe answers");
         assert_eq!(delay, 123);
+    }
+
+    #[test]
+    fn the_subscription_list_is_read_with_its_last_update_kept_as_sent() {
+        let bare = serde_json::json!([
+            { "name": "Sub", "last_updated": "2026-11-13T10:00:00Z", "interval": 3600 },
+            { "name": "Other", "last_updated": null }
+        ]);
+        let listed = parse_subscriptions(&bare).expect("a bare list parses");
+        assert_eq!(listed[0].name, "Sub");
+        assert_eq!(
+            listed[0].last_updated,
+            Some(serde_json::json!("2026-11-13T10:00:00Z"))
+        );
+        assert_eq!(listed[1].last_updated, None);
+
+        let wrapped = serde_json::json!({ "subscriptions": [{ "name": "Sub" }] });
+        assert_eq!(parse_subscriptions(&wrapped).unwrap()[0].name, "Sub");
+        assert!(parse_subscriptions(&serde_json::json!({ "x": 1 })).is_err());
+    }
+
+    #[test]
+    fn a_rule_list_of_strings_is_read_and_an_object_entry_is_refused() {
+        let strings = serde_json::json!({ "rules": ["DOMAIN,a.com,DIRECT", "MATCH,PROXY"] });
+        assert_eq!(
+            parse_rules(&strings).unwrap(),
+            vec!["DOMAIN,a.com,DIRECT".to_string(), "MATCH,PROXY".to_string()]
+        );
+        let objects = serde_json::json!([{ "type": "DomainSuffix", "payload": "a.com" }]);
+        assert!(parse_rules(&objects).is_err());
+    }
+
+    #[test]
+    fn the_proxy_list_is_read_in_both_the_map_and_the_array_form() {
+        let map = serde_json::json!({
+            "proxies": {
+                "Node A": { "type": "trojan", "server": "a.example", "port": 443 },
+                "Auto": { "type": "url-test" }
+            }
+        });
+        let mut listed = parse_proxies(&map).expect("the map form parses");
+        listed.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(listed[0].name, "Auto");
+        assert_eq!(listed[0].server, None);
+        assert_eq!(listed[1].server.as_deref(), Some("a.example"));
+        assert_eq!(listed[1].port, Some(443));
+
+        let array = serde_json::json!({ "proxies": [{ "name": "Node B" }] });
+        assert_eq!(parse_proxies(&array).unwrap()[0].name, "Node B");
+    }
+
+    #[tokio::test]
+    async fn the_rule_order_is_posted_as_a_rules_list_with_the_secret_in_the_header() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rules"))
+            .and(header("authorization", "Bearer s3cret"))
+            .and(body_json(serde_json::json!({
+                "rules": ["DOMAIN,a.com,DIRECT", "MATCH,PROXY"]
+            })))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = ControllerClient::new(server.uri(), "s3cret");
+        client
+            .replace_rules(&["DOMAIN,a.com,DIRECT".to_string(), "MATCH,PROXY".to_string()])
+            .await
+            .expect("the rules are accepted");
+    }
+
+    #[tokio::test]
+    async fn the_subscription_rules_and_proxies_are_fetched_from_their_routes() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/subscriptions"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!([{ "name": "Sub", "last_updated": 1700000000 }]),
+                ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rules"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "rules": ["MATCH,PROXY"] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/proxies"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "proxies": { "Node A": { "server": "a.example", "port": 1 } } }),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = ControllerClient::new(server.uri(), "s");
+        let subs = client.engine_subscriptions().await.unwrap();
+        assert_eq!(subs[0].last_updated, Some(serde_json::json!(1700000000)));
+        assert_eq!(
+            client.rules().await.unwrap(),
+            vec!["MATCH,PROXY".to_string()]
+        );
+        assert_eq!(client.proxies().await.unwrap()[0].name, "Node A");
     }
 
     #[tokio::test]

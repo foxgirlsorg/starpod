@@ -26,6 +26,7 @@ use starpod_core::domain::{RuntimeConfig, TunSettings};
 
 use crate::error::EngineError;
 use crate::log::LogStream;
+use crate::reassert::{EngineSubscription, LiveProxy};
 
 /// The lifecycle phase of the proxy engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -83,6 +84,32 @@ pub struct ExitInfo {
     pub signal: Option<i32>,
     /// Whether the engine was asked to stop, as opposed to crashing.
     pub requested: bool,
+}
+
+impl ExitInfo {
+    /// An exit whose cause is not known.
+    pub fn unknown() -> Self {
+        Self {
+            code: None,
+            #[cfg(unix)]
+            signal: None,
+            requested: false,
+        }
+    }
+
+    /// The exit described by a process status. `requested` starts false; the
+    /// supervisor sets it when the stop was asked for.
+    pub fn from_status(status: std::process::ExitStatus) -> Self {
+        Self {
+            code: status.code(),
+            #[cfg(unix)]
+            signal: {
+                use std::os::unix::process::ExitStatusExt as _;
+                status.signal()
+            },
+            requested: false,
+        }
+    }
 }
 
 /// A request to stop the engine.
@@ -194,4 +221,45 @@ pub trait ProxyEngine: Send + Sync {
 
     /// The engine's log stream.
     fn logs(&self) -> LogStream;
+
+    // ----- engine-managed subscriptions (ARCHITECTURE §4.6) ----------------
+    //
+    // The methods below are optional. A proxy core that cannot offer one
+    // answers `EngineError::Unsupported`, which the caller treats as "nothing
+    // to re-assert".
+
+    /// The engine's rule list, in evaluation order.
+    async fn rules(&self) -> Result<Vec<String>, EngineError> {
+        Err(EngineError::Unsupported(
+            "reading the rule list".to_string(),
+        ))
+    }
+
+    /// Replace the engine's rule list with `rules`, in that order.
+    async fn replace_rules(&self, _rules: &[String]) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported(
+            "replacing the rule list".to_string(),
+        ))
+    }
+
+    /// The engine-managed subscriptions and when each last refreshed.
+    async fn engine_subscriptions(&self) -> Result<Vec<EngineSubscription>, EngineError> {
+        Err(EngineError::Unsupported(
+            "listing subscriptions".to_string(),
+        ))
+    }
+
+    /// The proxies in the engine's live configuration.
+    async fn proxies(&self) -> Result<Vec<LiveProxy>, EngineError> {
+        Err(EngineError::Unsupported("listing proxies".to_string()))
+    }
+
+    /// Re-attach to an engine that an earlier run of the app left running.
+    ///
+    /// Returns `Ok(true)` when a live engine answering with this app's secret
+    /// was found and is now the one this engine controls, and `Ok(false)`
+    /// when there is none. The default finds nothing.
+    async fn adopt(&self) -> Result<bool, EngineError> {
+        Ok(false)
+    }
 }

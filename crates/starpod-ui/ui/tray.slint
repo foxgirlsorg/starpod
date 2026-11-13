@@ -32,7 +32,8 @@ export component AppTray inherits SystemTrayIcon {
 
         MenuItem {
             title: "Connect";
-            enabled: Bridge.engine-phase == "stopped" || Bridge.engine-phase == "failed";
+            enabled: (Bridge.engine-phase == "stopped" || Bridge.engine-phase == "failed")
+                && Bridge.connect-blocked-reason == "";
             activated => {
                 Bridge.connect();
             }

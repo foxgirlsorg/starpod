@@ -9,7 +9,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Design } from "../design.slint";
 import { Bridge } from "../bridge.slint";
 import { AppButton, ButtonSize, ButtonVariant, Card, EmptyState, LoadingState, SectionHeading, StatusDot, StatusKind } from "../primitives.slint";
-import { IconRefreshCw } from "../icons.slint";
+import { IconRefreshCw, IconTriangleAlert } from "../icons.slint";
 
 // One routing mode in the segmented control.
 component ModeSegment inherits Rectangle {
@@ -177,6 +177,51 @@ export component DashboardPage inherits Rectangle {
                     }
                 }
 
+                // Findings from the last build that did not stop it. The
+                // configuration is in use; these are things to look at.
+                if (Bridge.warnings.length > 0) : Rectangle {
+                    background: Design.card;
+                    border-radius: Design.radius-xl;
+                    border-width: 1px;
+                    border-color: Design.warning;
+
+                    VerticalLayout {
+                        padding: Design.space-lg;
+                        spacing: Design.space-xs;
+
+                        HorizontalLayout {
+                            spacing: Design.space-sm;
+                            alignment: start;
+
+                            IconTriangleAlert {
+                                width: 16px;
+                                height: 16px;
+                                y: (parent.height - self.height) / 2;
+                                stroke: Design.warning;
+                                stroke-width: 2px;
+                            }
+
+                            Text {
+                                text: Bridge.warnings.length == 1 ? "One warning about the current configuration"
+                                    : "\{Bridge.warnings.length} warnings about the current configuration";
+                                color: Design.foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-md;
+                                font-weight: 500;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        for item in Bridge.warnings : Text {
+                            text: item;
+                            color: Design.muted-foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-sm;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
                 // The engine is missing: explain it and offer the install.
                 if (!Bridge.engine-installed) : Card {
                     title: "Engine not installed";
@@ -194,6 +239,23 @@ export component DashboardPage inherits Rectangle {
                     }
                 }
 
+                // No usable subscription: say what is missing and send the
+                // user to Servers to fix it.
+                if (Bridge.engine-installed && Bridge.connect-blocked-reason != "") : Card {
+                    title: Bridge.subscriptions.length == 0 ? "Add a subscription to connect"
+                        : "Refresh your subscription to connect";
+                    description: Bridge.connect-blocked-reason;
+
+                    AppButton {
+                        text: Bridge.subscriptions.length == 0 ? "Add a subscription" : "Go to Servers";
+                        variant: ButtonVariant.default;
+                        size: ButtonSize.lg;
+                        clicked => {
+                            Bridge.active-page = 1;
+                        }
+                    }
+                }
+
                 // Quick actions.
                 HorizontalLayout {
                     spacing: Design.space-sm;
@@ -203,10 +265,10 @@ export component DashboardPage inherits Rectangle {
                         text: "Connect";
                         variant: ButtonVariant.default;
                         size: ButtonSize.lg;
-                        enabled: !root.running && !root.transitioning && Bridge.engine-installed && !Bridge.busy;
+                        enabled: !root.running && !root.transitioning && Bridge.connect-blocked-reason == "" && !Bridge.busy;
                         disabled-reason: root.running ? "The engine is already running."
                             : root.transitioning ? "The engine is changing state."
-                            : !Bridge.engine-installed ? "Install the engine first."
+                            : Bridge.connect-blocked-reason != "" ? Bridge.connect-blocked-reason
                             : "Another task is running.";
                         clicked => {
                             Bridge.connect();
@@ -229,9 +291,10 @@ export component DashboardPage inherits Rectangle {
                         text: "Restart";
                         variant: ButtonVariant.secondary;
                         size: ButtonSize.lg;
-                        enabled: (root.running || root.failed) && !Bridge.busy;
+                        enabled: (root.running || root.failed) && Bridge.connect-blocked-reason == "" && !Bridge.busy;
                         disabled-reason: root.transitioning ? "The engine is changing state."
                             : !(root.running || root.failed) ? "Restart is available once the engine is running or has failed."
+                            : Bridge.connect-blocked-reason != "" ? Bridge.connect-blocked-reason
                             : "Another task is running.";
                         clicked => {
                             Bridge.restart();

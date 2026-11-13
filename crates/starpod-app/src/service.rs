@@ -22,13 +22,14 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
-use starpod_core::rules::parse_line;
+use starpod_core::rules::{parse_line, translate_all};
 use starpod_core::timestamp;
 use starpod_core::{
     ProxyMode, RuleSpec, RuntimeConfig, StoredRule, Subscription, SubscriptionMode,
     SubscriptionPayload, SubscriptionQuota as CoreQuota, UserPreferences,
 };
 use starpod_engine::log::redact_urls;
+use starpod_engine::reassert::{desired_rule_order, is_match_rule};
 use starpod_engine::{
     EngineError, EngineHandle, EnginePhase, EngineStatus, ExitInfo, MeowEngine, ProxyEngine,
     Redactor, ValidationReport,
@@ -48,12 +49,18 @@ use tokio::sync::{Mutex, watch};
 use url::Url;
 use uuid::Uuid;
 
+use crate::reassert::{OwnNode, RefreshWatch, shadow_warnings};
+
 use crate::compose::{Composed, compose};
 use crate::error::{AppError, RuleLineError};
 use crate::snapshot::{
     AppSnapshot, EngineView, NodeView, NoticeKind, RuleView, SubscriptionStatus, SubscriptionView,
-    builtin_target_names, rule_kind_views, rule_view,
+    builtin_target_names, connect_blocked_reason, rule_kind_views, rule_view,
 };
+
+/// The notice shown when the proxy is stopped because the last usable
+/// subscription went away.
+const STOPPED_FOR_NO_SERVERS: &str = "The proxy was stopped because no subscription has servers any more. Add or refresh a subscription to connect again.";
 
 /// How many lines of the app's own log are kept.
 const LOG_CAPACITY: usize = 500;
@@ -138,6 +145,11 @@ pub struct AppService {
     /// probe failed or timed out.
     latencies: BTreeMap<String, Option<u32>>,
     warnings: Vec<String>,
+    /// Warnings about engine-managed subscriptions, from the last engine
+    /// refresh check. Kept apart from `warnings`, which each build replaces.
+    engine_warnings: Vec<String>,
+    /// What the engine last reported for its managed subscriptions.
+    refresh_watch: RefreshWatch,
     engine_status: EngineStatus,
     engine_error: Option<String>,
     handle: Option<EngineHandle>,
@@ -177,6 +189,8 @@ impl AppService {
             built: None,
             latencies: BTreeMap::new(),
             warnings: Vec::new(),
+            engine_warnings: Vec::new(),
+            refresh_watch: RefreshWatch::default(),
             engine_status: EngineStatus::default(),
             engine_error: None,
             handle: None,
@@ -204,12 +218,13 @@ impl AppService {
             .with_controller_dir(paths.controller_dir());
         let provider = HttpSubscriptionProvider::new()
             .map_err(|error| AppError::Subscription(error.to_string()))?;
+        let engine_installed = starpod_engine::download::is_installed_in(paths.data_dir());
         Ok(Self::new(ServiceDeps {
             store: Store::new(paths),
             secrets,
             engine: Box::new(engine),
             provider: Arc::new(provider),
-            engine_installed: starpod_engine::download::is_installed(),
+            engine_installed,
         }))
     }
 
@@ -345,7 +360,12 @@ impl AppService {
             rule_kinds: rule_kind_views(),
             rule_targets,
             preferences: prefs.clone(),
-            warnings: self.warnings.clone(),
+            warnings: self
+                .warnings
+                .iter()
+                .chain(&self.engine_warnings)
+                .cloned()
+                .collect(),
             log_lines: self.app_log.iter().cloned().collect(),
             engine_log_lines,
             secret_backend: self.secrets.backend_name().to_string(),
@@ -353,6 +373,45 @@ impl AppService {
             secret_fallback_reason: self.secret_fallback_reason.clone(),
             data_dir: self.store.paths().data_dir().to_path_buf(),
             notice: self.notice.clone(),
+            connect_blocked: self.connect_block(),
+        }
+    }
+
+    /// Why connecting is not allowed right now, or `None` when it is.
+    ///
+    /// This is the only place the connect rule is applied; see
+    /// [`connect_blocked_reason`]. It reads the saved subscriptions and their
+    /// cached payloads, never the engine.
+    fn connect_block(&self) -> Option<String> {
+        self.connect_block_for(&self.meta, &self.caches)
+    }
+
+    /// As [`AppService::connect_block`], for a candidate set of subscriptions
+    /// and caches that has not been saved yet.
+    fn connect_block_for(
+        &self,
+        meta: &SubscriptionMeta,
+        caches: &SubscriptionCacheSet,
+    ) -> Option<String> {
+        let rows: Vec<(&Subscription, Option<usize>)> = meta
+            .subscriptions
+            .iter()
+            .map(|subscription| {
+                let cached_nodes = caches
+                    .payload(&subscription.id)
+                    .map(|payload| payload.nodes.len());
+                (subscription, cached_nodes)
+            })
+            .collect();
+        connect_blocked_reason(self.engine_installed, &rows)
+    }
+
+    /// Refuse to start the proxy when the connect rule blocks it. Checked
+    /// before the engine is touched.
+    fn ensure_connectable(&self) -> Result<(), AppError> {
+        match self.connect_block() {
+            Some(reason) => Err(AppError::Invalid(reason)),
+            None => Ok(()),
         }
     }
 
@@ -451,6 +510,12 @@ impl AppService {
             }
         }
 
+        // An engine an earlier run left running is taken over, not restarted.
+        match self.engine.adopt().await {
+            Ok(true) => self.log("reattached to the proxy engine that an earlier run started"),
+            Ok(false) => {}
+            Err(error) => problems.push(self.scrub(&error.to_string())),
+        }
         self.refresh_engine_status().await;
         self.notice = None;
         match self.compose_current() {
@@ -506,6 +571,9 @@ impl AppService {
     }
 
     /// Remove a subscription, its secrets and its cached payload.
+    ///
+    /// If that leaves no subscription with servers while the proxy runs, the
+    /// proxy is stopped and a notice says why (see [`AppService::commit`]).
     pub async fn remove_subscription(&mut self, id: &str) -> Result<(), AppError> {
         let result = self.remove_subscription_inner(id).await;
         self.finish(result)
@@ -555,6 +623,10 @@ impl AppService {
 
     /// Start the proxy with the current configuration. Does nothing if it is
     /// already running.
+    ///
+    /// Fails with [`AppError::Invalid`], without touching the engine, when
+    /// the connect rule blocks it (no subscription supplies servers, or the
+    /// engine is not installed).
     pub async fn connect(&mut self) -> Result<(), AppError> {
         let result = self.connect_inner().await;
         self.finish(result)
@@ -567,6 +639,9 @@ impl AppService {
     }
 
     /// Stop the proxy and start it again with the current configuration.
+    ///
+    /// Refused with [`AppError::Invalid`] while the connect rule blocks it,
+    /// before the proxy is stopped.
     pub async fn restart(&mut self) -> Result<(), AppError> {
         let result = self.restart_inner().await;
         self.finish(result)
@@ -960,6 +1035,7 @@ impl AppService {
     }
 
     async fn connect_inner(&mut self) -> Result<(), AppError> {
+        self.ensure_connectable()?;
         if self.refresh_engine_status().await.is_running() {
             return Ok(());
         }
@@ -987,10 +1063,20 @@ impl AppService {
         Ok(())
     }
 
+    /// Disconnect is never blocked by the connect rule: stopping a proxy is
+    /// always allowed.
     async fn disconnect_inner(&mut self) -> Result<(), AppError> {
         if self.refresh_engine_status().await == EnginePhase::Stopped {
             return Ok(());
         }
+        self.stop_engine().await?;
+        self.log("the proxy stopped");
+        Ok(())
+    }
+
+    /// Stop the engine and forget what it was doing. Shared by Disconnect and
+    /// by the path that stops a proxy whose last usable subscription is gone.
+    async fn stop_engine(&mut self) -> Result<(), AppError> {
         self.engine
             .stop()
             .await
@@ -1000,11 +1086,12 @@ impl AppService {
         self.refresh_engine_status().await;
         // Latencies were measured against a proxy that is now gone.
         self.latencies.clear();
-        self.log("the proxy stopped");
         Ok(())
     }
 
     async fn restart_inner(&mut self) -> Result<(), AppError> {
+        // Checked before the stop, so a blocked restart leaves the proxy as it was.
+        self.ensure_connectable()?;
         self.disconnect_inner().await?;
         self.connect_inner().await
     }
@@ -1189,7 +1276,7 @@ impl AppService {
 
     async fn install_engine_inner(&mut self) -> Result<(), AppError> {
         self.log("installing the proxy engine");
-        let path = starpod_engine::download::install()
+        let path = starpod_engine::download::install_in(self.paths().data_dir())
             .await
             .map_err(|error| self.engine_failure(error))?;
         self.engine_installed = true;
@@ -1216,6 +1303,12 @@ impl AppService {
     ///
     /// A failure at step 4 leaves the new state in effect and reports that
     /// it could not be saved. The running proxy already uses it.
+    ///
+    /// A running proxy that loses its last usable subscription is stopped
+    /// instead of reloaded: a reload would leave it routing everything
+    /// direct. A proxy that was already without a usable subscription when
+    /// this change arrived (one an earlier run left running, for example) is
+    /// not stopped, so the user can still disconnect it.
     async fn commit(
         &mut self,
         state: UserState,
@@ -1224,8 +1317,20 @@ impl AppService {
     ) -> Result<(), AppError> {
         self.check_writable(&state, &meta)?;
         let composed = self.compose_for(&state, &meta, &caches)?;
+        let was_connectable = self.connect_block().is_none();
+        let now_connectable = self.connect_block_for(&meta, &caches).is_none();
+        let stop_proxy =
+            was_connectable && !now_connectable && self.refresh_engine_status().await.is_running();
+        if stop_proxy {
+            self.stop_engine().await?;
+            self.log("stopped the proxy: no subscription has servers any more");
+        }
         self.apply_if_running(&composed.config).await?;
-        self.persist_and_adopt(state, meta, caches, &composed)
+        let result = self.persist_and_adopt(state, meta, caches, &composed);
+        if stop_proxy {
+            self.notice = Some((NoticeKind::Warning, STOPPED_FOR_NO_SERVERS.to_string()));
+        }
+        result
     }
 
     /// Refuse a change to a file this build must not overwrite.
@@ -1289,7 +1394,129 @@ impl AppService {
             .reload(config)
             .await
             .map_err(|error| self.engine_failure(error))?;
+        // The engine applies its managed subscriptions again on a reload,
+        // which puts their rules ahead of the user's (ARCHITECTURE §4.6).
+        if !self.engine_managed_names().is_empty() {
+            self.reassert_rule_order().await;
+        }
         Ok(())
+    }
+
+    // ----- engine-managed subscriptions (ARCHITECTURE §4.6, R12) ---------------
+
+    /// Check the engine-managed subscriptions, as the background loop does
+    /// every 30 seconds.
+    ///
+    /// Does nothing while the engine is not running or no subscription is
+    /// engine-managed. When the engine reports a refresh, or this is the
+    /// first look since it started, the user's rule order is put back in
+    /// front and the shadow check is run again. Errors are logged, not
+    /// returned: the loop has no one to report them to, and the next tick
+    /// tries again.
+    pub async fn check_engine_subscriptions(&mut self) {
+        let managed = self.engine_managed_names();
+        if managed.is_empty() || !self.engine_status.phase.is_running() {
+            self.refresh_watch.reset();
+            if !self.engine_warnings.is_empty() {
+                self.engine_warnings.clear();
+                self.publish();
+            }
+            return;
+        }
+        let Ok(listed) = self.engine.engine_subscriptions().await else {
+            return;
+        };
+        if !self.refresh_watch.observe(&listed, &managed) {
+            return;
+        }
+        self.reassert_rule_order().await;
+        self.check_shadowing(&managed).await;
+        self.publish();
+    }
+
+    /// The labels of the engine-managed subscriptions. The engine names each
+    /// one by its label, which is how they are matched.
+    fn engine_managed_names(&self) -> Vec<String> {
+        self.meta
+            .subscriptions
+            .iter()
+            .filter(|subscription| subscription.mode == SubscriptionMode::EngineManaged)
+            .map(|subscription| subscription.label.clone())
+            .collect()
+    }
+
+    /// Put the user's rules first, in the user's order, and `MATCH` last.
+    /// The engine is given a new list only when the order differs.
+    async fn reassert_rule_order(&mut self) {
+        let user = self.user_rule_lines();
+        let live = match self.engine.rules().await {
+            Ok(live) => live,
+            Err(error) => {
+                let text = self.scrub(&error.to_string());
+                self.log(format!("could not read the engine's rules: {text}"));
+                return;
+            }
+        };
+        let desired = desired_rule_order(&user, &live);
+        if desired == live {
+            return;
+        }
+        if let Err(error) = self.engine.replace_rules(&desired).await {
+            let text = self.scrub(&error.to_string());
+            self.log(format!("could not restore the rule order: {text}"));
+            return;
+        }
+        match self.engine.rules().await {
+            Ok(after) if after == desired => {
+                self.log("restored the user's rule order after an engine-managed refresh");
+            }
+            Ok(_) => self.log(
+                "the engine kept a different rule order after the restore; an engine-managed subscription's rules may be ahead of yours",
+            ),
+            Err(error) => {
+                let text = self.scrub(&error.to_string());
+                self.log(format!("could not verify the restored rule order: {text}"));
+            }
+        }
+    }
+
+    /// The user's enabled rules as the engine spells them, in the order the
+    /// build uses. Like the build, it stops at the first `MATCH` the user
+    /// wrote, and it leaves out the app's own `MATCH` tail, which the engine
+    /// order check keeps last.
+    fn user_rule_lines(&self) -> Vec<String> {
+        let mut rules: Vec<&StoredRule> = self.state.rules.iter().collect();
+        rules.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.id.cmp(&b.id)));
+        rules
+            .into_iter()
+            .filter(|rule| rule.enabled)
+            .flat_map(|rule| translate_all(std::slice::from_ref(&rule.spec)))
+            .take_while(|line| !is_match_rule(line))
+            .collect()
+    }
+
+    /// Record the user's own nodes that an engine-managed subscription
+    /// shadows, from the engine's live proxy list.
+    async fn check_shadowing(&mut self, managed: &[String]) {
+        let live = match self.engine.proxies().await {
+            Ok(live) => live,
+            Err(error) => {
+                let text = self.scrub(&error.to_string());
+                self.log(format!("could not read the engine's proxies: {text}"));
+                return;
+            }
+        };
+        let own: Vec<OwnNode> = self
+            .state
+            .nodes
+            .iter()
+            .map(|node| OwnNode {
+                name: node.name.clone(),
+                server: node.server.clone(),
+                port: node.port,
+            })
+            .collect();
+        self.engine_warnings = shadow_warnings(&own, &live, managed);
     }
 
     // ----- composition --------------------------------------------------------

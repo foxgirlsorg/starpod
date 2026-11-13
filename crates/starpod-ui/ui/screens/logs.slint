@@ -160,9 +160,7 @@ export component LogsPage inherits VerticalLayout {
     horizontal-stretch: 1;
     vertical-stretch: 1;
 
-    // Windows ships Consolas. Where the family is missing Slint falls back
-    // to the default face, so the page still lays out.
-    private property <string> mono: "Consolas";
+    private property <string> mono: Design.font-mono;
 
     SectionHeading {
         eyebrow: "Diagnostics";

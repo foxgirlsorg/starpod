@@ -80,6 +80,10 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security_Cryptography",
     "Win32_System_Threading",
     "Win32_System_Console",
+    # ShellExecuteExW (engine elevation, `runas`) is in Win32_UI_Shell and is
+    # gated behind Win32_System_Registry in windows-sys 0.61.
+    "Win32_UI_Shell",
+    "Win32_System_Registry",
 ] }
 security-framework = "3.7"
 secret-service = { version = "5.2", features = ["rt-tokio-crypto-rust"] }
@@ -96,6 +100,9 @@ slint = { version = "1.18.1", default-features = false, features = [
     "renderer-femtovg",
     "renderer-software",
     "compat-1-2",
+    # The native SystemTrayIcon backend (ARCHITECTURE §6.4). Without it the
+    # tray element compiles but fails at runtime with "no system tray backend".
+    "system-tray",
 ] }
 slint-build = "1.18.1"
 

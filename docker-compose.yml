@@ -16,6 +16,24 @@ services:
       CARGO_TARGET_DIR: /target
     command: cargo build --workspace --all-targets
 
+  # Cross-compiles dist/starpod.exe (x86_64-pc-windows-gnu, mingw-w64).
+  # Run: docker compose run --rm windows
+  windows:
+    build:
+      context: .
+      dockerfile: Dockerfile.windows
+    working_dir: /work
+    volumes:
+      - .:/work
+      - ./.scratch/cargo-registry:/usr/local/cargo/registry
+      # Separate target volume so Windows and Linux artifacts never collide.
+      - starpod-target-win:/target-win
+    environment:
+      CARGO_TARGET_DIR: /target-win
+    command: ["bash", "/work/tools/build-windows.sh"]
+
 volumes:
   starpod-target:
     name: starpod-target
+  starpod-target-win:
+    name: starpod-target-win

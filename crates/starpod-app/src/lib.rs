@@ -27,6 +27,7 @@
 
 mod compose;
 pub mod error;
+mod reassert;
 pub mod service;
 pub mod snapshot;
 pub mod ui;

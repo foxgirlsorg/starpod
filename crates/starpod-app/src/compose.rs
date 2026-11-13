@@ -13,12 +13,34 @@
 use std::collections::BTreeMap;
 
 use starpod_core::config::DEFAULT_GROUP_NAME;
+use starpod_core::rules::translate;
 use starpod_core::{
-    BuildInput, BuildOutcome, EngineManagedSubscription, RuntimeConfig, Severity, SubscriptionMode,
-    UserPreferences,
+    BuildInput, BuildOutcome, EngineManagedSubscription, Finding, RuleSpec, RuntimeConfig,
+    Severity, SubscriptionMode, UserPreferences,
 };
 use starpod_store::{SubscriptionMeta, UserState};
 use starpod_subscription::SubscriptionCacheSet;
+
+/// Why a rule cannot be used, if its kind needs something the app cannot
+/// supply.
+///
+/// `RULE-SET` names a rule provider and `SUB-RULE` names a block of rules.
+/// The app declares neither (`rule_providers` is always empty, and nothing
+/// defines blocks), and the engine rejects an undefined one, so such a rule
+/// can never validate. The reason is given here rather than the core's
+/// "not declared" finding, which does not say the feature is missing.
+pub(crate) fn unsupported_rule(spec: &RuleSpec) -> Option<String> {
+    let reason = match spec {
+        RuleSpec::RuleSet { .. } => {
+            "RULE-SET rules are not supported yet: the app supplies no rule providers"
+        }
+        RuleSpec::SubRule { .. } => {
+            "SUB-RULE rules are not supported yet: the app defines no named rule blocks"
+        }
+        _ => return None,
+    };
+    Some(format!("{reason}, so “{}” cannot be used", translate(spec)))
+}
 
 /// A candidate configuration and the warnings the build produced for it.
 #[derive(Debug, Clone)]
@@ -65,6 +87,28 @@ pub(crate) fn compose(
         }
     }
 
+    // Disabled rules take no part in routing, so they cannot break the build.
+    let problems: Vec<String> = state
+        .rules
+        .iter()
+        .filter(|rule| rule.enabled)
+        .filter_map(|rule| unsupported_rule(&rule.spec))
+        .chain(
+            subscriptions
+                .iter()
+                .flat_map(|payload| payload.rules.iter())
+                .filter_map(unsupported_rule),
+        )
+        .collect();
+    if !problems.is_empty() {
+        return Err(problems);
+    }
+
+    // With no subscription to supply nodes, the core's empty-group finding is
+    // only noise: connecting is already refused with "Add a subscription to
+    // connect", so the warning would say nothing the user can act on.
+    let no_subscriptions = subscriptions.is_empty() && engine_managed.is_empty();
+
     let input = BuildInput {
         preferences: state.preferences.clone(),
         user_rules: state.rules.clone(),
@@ -72,6 +116,8 @@ pub(crate) fn compose(
         user_groups: state.groups.clone(),
         subscriptions,
         engine_managed,
+        // Subscription payloads carry no rule providers, so there are none to
+        // pass. A RULE-SET rule is refused above before this is reached.
         rule_providers: Vec::new(),
     };
 
@@ -88,11 +134,24 @@ pub(crate) fn compose(
     let mut warnings: Vec<String> = findings
         .iter()
         .filter(|finding| finding.severity == Severity::Warning)
+        .filter(|finding| !(no_subscriptions && is_empty_group(finding, &config)))
         .map(|finding| finding.message.clone())
         .collect();
     select_node(&mut config, &state.preferences, &mut warnings);
 
     Ok(Composed { config, warnings })
+}
+
+/// Whether a finding is the core's "the group has no members" warning for a
+/// group that is in the built configuration with nothing in it.
+fn is_empty_group(finding: &Finding, config: &RuntimeConfig) -> bool {
+    finding.message.ends_with("has no members")
+        && finding.subject.as_deref().is_some_and(|name| {
+            config
+                .proxy_groups
+                .iter()
+                .any(|group| group.name == name && group.members.is_empty())
+        })
 }
 
 /// Move the user's selected node to the front of the selected group.
@@ -135,5 +194,114 @@ fn select_node(config: &mut RuntimeConfig, prefs: &UserPreferences, warnings: &m
         None => warnings.push(format!(
             "the selected node “{node_name}” is not a member of the group “{group_name}”"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use starpod_core::Subscription;
+
+    fn engine_managed(id: &str) -> Subscription {
+        Subscription {
+            id: id.to_string(),
+            label: id.to_string(),
+            mode: SubscriptionMode::EngineManaged,
+            interval_secs: 3600,
+            has_auth_header: false,
+            last_updated: None,
+            quota: None,
+            node_count: 0,
+            group_count: 0,
+            last_error: None,
+        }
+    }
+
+    fn compose_with(meta: &SubscriptionMeta, engine_urls: &BTreeMap<String, String>) -> Composed {
+        compose(
+            &UserState::default(),
+            meta,
+            &SubscriptionCacheSet::new(),
+            engine_urls,
+        )
+        .expect("an empty configuration still builds")
+    }
+
+    #[test]
+    fn empty_group_warning_is_dropped_when_there_is_no_subscription() {
+        let composed = compose_with(&SubscriptionMeta::default(), &BTreeMap::new());
+
+        assert!(
+            !composed
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("has no members")),
+            "{:?}",
+            composed.warnings
+        );
+    }
+
+    #[test]
+    fn empty_group_warning_is_kept_when_a_subscription_is_configured() {
+        let meta = SubscriptionMeta {
+            subscriptions: vec![engine_managed("sub-1")],
+            ..SubscriptionMeta::default()
+        };
+        let urls = BTreeMap::from([("sub-1".to_string(), "https://example.test/sub".to_string())]);
+
+        let composed = compose_with(&meta, &urls);
+
+        assert!(
+            composed
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("has no members")),
+            "{:?}",
+            composed.warnings
+        );
+    }
+
+    #[test]
+    fn other_warnings_survive_when_there_is_no_subscription() {
+        // Two user groups with the same name: the core renames the second and
+        // warns about it. That warning is not about an empty group, so it stays.
+        let spare = |id: &str| starpod_core::ProxyGroup {
+            id: id.to_string(),
+            name: "Spare".to_string(),
+            group_type: "select".to_string(),
+            members: Vec::new(),
+            strategy: None,
+            url: None,
+            interval: None,
+            raw: Default::default(),
+        };
+        let mut state = UserState::default();
+        state.groups.push(spare("user-spare-1"));
+        state.groups.push(spare("user-spare-2"));
+
+        let composed = compose(
+            &state,
+            &SubscriptionMeta::default(),
+            &SubscriptionCacheSet::new(),
+            &BTreeMap::new(),
+        )
+        .expect("an empty configuration still builds");
+
+        assert!(
+            composed
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("already named “Spare”")),
+            "{:?}",
+            composed.warnings
+        );
+        assert!(
+            !composed
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("has no members")),
+            "{:?}",
+            composed.warnings
+        );
     }
 }

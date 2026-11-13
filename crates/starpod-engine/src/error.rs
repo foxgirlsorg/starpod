@@ -75,6 +75,11 @@ pub enum EngineError {
     /// The engine took an unexpected action.
     #[error("unexpected engine condition: {0}")]
     Internal(String),
+
+    /// The proxy core does not offer the operation. The default
+    /// implementations of optional `ProxyEngine` methods return this.
+    #[error("the proxy core does not support {0}")]
+    Unsupported(String),
 }
 
 impl EngineError {

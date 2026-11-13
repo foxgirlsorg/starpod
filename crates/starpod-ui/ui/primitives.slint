@@ -274,7 +274,9 @@ export enum FieldKind {
 export component Field inherits Rectangle {
     in property <string> label;
     in property <string> placeholder;
-    in property <string> value;
+    // Two-way: the TextInput writes into it, so a screen can read the value
+    // and reset it (bind with `<=>`).
+    in-out property <string> value;
     in property <FieldKind> kind: FieldKind.text;
     in property <bool> enabled: true;
     in property <string> error;
@@ -370,7 +372,7 @@ export component Field inherits Rectangle {
                         : root.kind == FieldKind.number ? InputType.number : InputType.text;
                     read-only: root.read-only;
                     enabled: root.enabled;
-                    text: root.value;
+                    text <=> root.value;
 
                     edited => {
                         root.edited(self.text);

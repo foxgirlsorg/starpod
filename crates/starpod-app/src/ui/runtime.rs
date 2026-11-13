@@ -28,6 +28,8 @@ use super::mapping::{
 
 /// How often the engine's state is polled.
 const ENGINE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// How often engine-managed subscriptions are checked for a refresh (§4.6).
+const REASSERT_INTERVAL: Duration = Duration::from_secs(30);
 /// How often the auto-refresh schedule is checked.
 const AUTO_REFRESH_TICK: Duration = Duration::from_secs(60);
 /// How often the filter controls are read.
@@ -313,7 +315,10 @@ pub fn request_quit(ctx: &Ctx) {
 /// host cannot show one, and then the app quits when its window is closed.
 fn create_tray() -> Option<AppTray> {
     match AppTray::new().and_then(|tray| tray.show().map(|()| tray)) {
-        Ok(tray) => Some(tray),
+        Ok(tray) => {
+            info!("tray created");
+            Some(tray)
+        }
         Err(error) => {
             warn!(
                 %error,
@@ -333,6 +338,18 @@ async fn propagate(mut updates: watch::Receiver<AppSnapshot>) {
             break;
         }
         snapshot = updates.borrow_and_update().clone();
+    }
+}
+
+/// Check the engine-managed subscriptions every [`REASSERT_INTERVAL`]. The
+/// service does nothing on a tick when the engine is not running or no
+/// subscription is engine-managed.
+async fn watch_engine_subscriptions(service: SharedAppService) {
+    let mut tick = tokio::time::interval(REASSERT_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        service.lock().await.check_engine_subscriptions().await;
     }
 }
 
@@ -419,6 +436,7 @@ pub fn run(
     service: SharedAppService,
 ) -> Result<(), Box<dyn Error>> {
     let window = AppWindow::new()?;
+    info!("window created");
     let tray = create_tray();
     let tray_available = tray.is_some();
     let weak = window.as_weak();
@@ -442,6 +460,7 @@ pub fn run(
     // The window is shown before it moves into the UI state: the state is the
     // only owner the Slint thread needs from here on.
     window.show()?;
+    info!("window shown");
     let ui = UiState::new(window, tray);
     ui.show_tray_availability(tray_available);
     UI.with(|cell| *cell.borrow_mut() = Some(ui));
@@ -454,6 +473,7 @@ pub fn run(
         }
     });
     runtime.spawn(poll_engine(service.clone()));
+    runtime.spawn(watch_engine_subscriptions(service.clone()));
     runtime.spawn(auto_refresh(service));
 
     let filters = Timer::default();
@@ -465,7 +485,16 @@ pub fn run(
         });
     });
 
+    // Queued before the loop starts, so it runs only once the loop is
+    // dispatching events.
+    if let Err(error) = slint::invoke_from_event_loop(|| info!("event loop entered")) {
+        warn!(%error, "could not queue the event-loop marker");
+    }
     let outcome = slint::run_event_loop_until_quit();
+    match &outcome {
+        Ok(()) => info!("event loop exited: quit requested"),
+        Err(error) => warn!(%error, "event loop exited with an error"),
+    }
     drop(filters);
     let state = UI.with(|cell| cell.borrow_mut().take());
     drop(state);

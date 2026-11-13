@@ -39,6 +39,8 @@ export struct RuleItem {
     payload: string,
     target: string,
     line: string,
+    // A disabled rule is kept in the list but takes no part in routing.
+    enabled: bool,
     from-subscription: bool,
     error: string,
 }
@@ -50,17 +52,24 @@ export struct LogItem {
     message: string,
 }
 
+// The settings form. A number that is not set is -1 and shows as an empty
+// field. An empty bind address or device name means "not set" too.
 export struct SettingsModel {
+    // -1 = not set (the listener uses its default; HTTP is off); 1-65535 = port
     mixed-port: int,
     socks-port: int,
     http-port: int,
     allow-lan: bool,
+    // "" = not set (loopback)
     bind-address: string,
     log-level: string,
     mode: string,
     tun-enabled: bool,
+    // "" = not set (the engine's default device)
     tun-device: string,
+    // -1 = not set (the engine default); 1280-9000 = MTU
     tun-mtu: int,
+    // -1 = not set (the app default, 60); 0 = manual only; otherwise minutes
     auto-refresh-minutes: int,
 }
 
@@ -74,6 +83,10 @@ export global Bridge {
     in-out property <string> engine-phase: "stopped";
     in-out property <string> engine-error: "";
     in-out property <bool> engine-installed: false;
+    // Why Connect and Restart are blocked, or "" when they are allowed. Rust
+    // decides it: the engine must be installed and at least one subscription
+    // must supply servers.
+    in-out property <string> connect-blocked-reason: "";
     in-out property <string> engine-version: "";
     in-out property <bool> busy: false;
     in-out property <string> busy-message: "";
@@ -110,10 +123,15 @@ export global Bridge {
     in-out property <string> settings-error: "";
     in-out property <string> secret-backend: "";
     in-out property <bool> secrets-encrypted: false;
+    // Why the platform keyring was not used. Empty when it was used, or when
+    // the reason is not known.
+    in-out property <string> secret-fallback-reason: "";
     in-out property <string> data-dir: "";
 
     // --- shell --------------------------------------------------------------
     in-out property <bool> tray-available: false;
+    // Non-blocking findings from the last successful build, for the Dashboard.
+    in-out property <[string]> warnings: [];
 
     // --- callbacks: engine --------------------------------------------------
     callback connect();
@@ -141,6 +159,8 @@ export global Bridge {
     callback delete-rule(int);
     // index, delta
     callback move-rule(int, int);
+    // index, enabled
+    callback set-rule-enabled(int, bool);
     callback apply-raw-rules(string);
 
     // --- callbacks: settings and logs ---------------------------------------

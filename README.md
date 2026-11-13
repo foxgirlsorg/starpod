@@ -48,7 +48,13 @@ docker compose run --rm dev cargo test --workspace
 docker compose run --rm dev cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-The GUI cannot be launched in the container. Run the app natively.
+The GUI cannot be launched in the container. To get a Windows binary without a host toolchain, cross-compile it:
+
+```sh
+docker compose run --rm windows
+```
+
+This writes an unsigned `dist/starpod.exe` (target `x86_64-pc-windows-gnu`). The first build takes about 25 minutes; later ones take a few. On first run, install the engine from the Dashboard or Settings.
 
 ## Workspace
 
