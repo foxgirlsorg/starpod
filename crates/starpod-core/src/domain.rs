@@ -290,7 +290,12 @@ pub struct Subscription {
     pub interval_secs: u64,
     /// The optional `Authorization` header value, also a secret.
     pub has_auth_header: bool,
-    /// When the subscription was last fetched successfully.
+    /// When the subscription was last fetched successfully, as RFC 3339.
+    ///
+    /// `None` means it has never been fetched successfully. A *failed*
+    /// refresh does not change this field: the timestamp records the last
+    /// fetch that worked, so the user can see how stale the working data
+    /// is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_updated: Option<String>,
     /// The quota reported by the subscription's `subscription-userinfo` header.
@@ -300,6 +305,21 @@ pub struct Subscription {
     /// number does not exist and the UI says so rather than showing a zero.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quota: Option<SubscriptionQuota>,
+    /// How many nodes the last valid payload carried.
+    ///
+    /// Zero for an engine-managed subscription: the app never sees its
+    /// payload, so it cannot count what is in it.
+    #[serde(default)]
+    pub node_count: usize,
+    /// How many proxy groups the last valid payload carried.
+    #[serde(default)]
+    pub group_count: usize,
+    /// The last error, written for the user.
+    ///
+    /// The message is redacted at the point it is created — a provider
+    /// error can carry a URL, and a URL carries the token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 /// Who fetches a subscription.
@@ -513,8 +533,13 @@ impl BuildOutcome {
 /// The built configuration, ready to be validated and applied.
 ///
 /// This is the app's own model of a configuration. Turning it into the
-/// engine's YAML is [`RuntimeConfig::to_yaml`], and validating it is the
-/// engine's `meow -t` — both happen outside this crate.
+/// engine's YAML happens in `starpod-engine`, which is the only crate that
+/// knows the engine's key names — and it must, because the engine ignores
+/// keys it does not recognise. Validating it is the engine's `meow -t`,
+/// which also happens outside this crate.
+///
+/// The separation is deliberate: this crate stays pure, so the whole
+/// pipeline can be exercised with fixtures and no engine on the machine.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeConfig {
     /// The HTTP proxy port.

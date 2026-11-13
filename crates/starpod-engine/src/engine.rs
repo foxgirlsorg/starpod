@@ -149,6 +149,9 @@ pub struct ValidationReport {
 #[async_trait]
 pub trait ProxyEngine: Send + Sync {
     /// Start the engine with the given configuration.
+    ///
+    /// The configuration is written to the engine's configured path first,
+    /// and the engine is started on that file.
     async fn start(&self, cfg: &RuntimeConfig) -> Result<EngineHandle, EngineError>;
 
     /// Stop the engine gracefully.
@@ -158,6 +161,9 @@ pub trait ProxyEngine: Send + Sync {
     ///
     /// This is a hot reload: the engine closes its existing connections, so
     /// the app warns the user before calling it.
+    ///
+    /// The implementation validates the candidate before applying it, and
+    /// the running configuration is left untouched if the check fails.
     async fn reload(&self, cfg: &RuntimeConfig) -> Result<(), EngineError>;
 
     /// The engine's operational state.

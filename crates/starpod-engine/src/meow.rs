@@ -4,6 +4,39 @@
 //! ties together the pieces: the supervisor runs the process, the REST
 //! client talks to it, the validator asks the engine's own parser whether
 //! a configuration is acceptable.
+//!
+//! # The apply path
+//!
+//! The order of operations is the whole point of this module:
+//!
+//! 1. **Build** the candidate YAML from the app's `RuntimeConfig`.
+//! 2. **Validate** it with the engine's own parser (`meow -t`), against a
+//!    file beside the live one. Nothing has been applied yet, so a failure
+//!    here costs nothing.
+//! 3. **Write** the candidate to the live path, atomically.
+//! 4. **Apply** it, either by starting the engine (first start) or by
+//!    `PUT /configs {path}` (a running engine).
+//!
+//! The running configuration is never modified until the replacement has
+//! been validated. That is GOAL.md §3's "do not modify the running
+//! configuration until the replacement validates" — and it is a property of
+//! the sequence above, not a promise.
+//!
+//! # The reload path and the engine's write-back
+//!
+//! `PUT /configs` does **not** write the backing file. Only two things do:
+//!
+//! - `PUT /configs/save`, which the app never calls;
+//! - the engine's **background subscription refresh**, which persists a
+//!   refreshed subscription back to the backing file
+//!   (`meow-app-0.29.0/src/subscription_refresh.rs:421`).
+//!
+//! The second one matters for an app-managed design, and it is why the app
+//! does not put engine-managed subscriptions in the generated file when it
+//! can avoid it: the engine's refresh loop would rewrite the app's file
+//! behind the app's back, in the engine's own normalised form. The app
+//! fetches, parses, caches and merges subscriptions itself
+//! (ARCHITECTURE §1.9), so the file it writes is the whole truth.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,6 +56,8 @@ use crate::supervisor::Supervisor;
 pub struct MeowEngine {
     supervisor: Arc<Supervisor>,
     binary: PathBuf,
+    /// Where the generated configuration is written.
+    config_path: PathBuf,
     /// The controller client, rebuilt whenever the controller's address
     /// changes.
     client: Arc<std::sync::RwLock<Option<ControllerClient>>>,
@@ -36,10 +71,20 @@ pub struct MeowEngine {
 
 impl MeowEngine {
     /// Build an engine around the given binary.
-    pub fn new(binary: PathBuf) -> Self {
+    ///
+    /// The configuration path is the file the generated YAML is written to
+    /// and the engine is started on. It is required, because a file the
+    /// app does not know the path of is a file the app cannot validate
+    /// against and cannot keep consistent with its own state.
+    pub fn new(binary: PathBuf, config_path: PathBuf) -> Self {
         Self {
-            supervisor: Arc::new(Supervisor::new()),
+            supervisor: Arc::new(
+                Supervisor::new()
+                    .with_config_path(config_path.clone())
+                    .with_controller_dir(crate::supervisor::controller_file_dir().unwrap_or_default()),
+            ),
             binary,
+            config_path,
             client: Arc::new(std::sync::RwLock::new(None)),
             started_at: Arc::new(std::sync::RwLock::new(None)),
             version: Arc::new(std::sync::RwLock::new(None)),
@@ -47,14 +92,20 @@ impl MeowEngine {
         }
     }
 
-    /// Build an engine around the installed binary.
-    pub fn installed() -> Self {
-        Self::new(crate::download::installed_binary_path())
+    /// Build an engine around the installed binary, writing its
+    /// configuration to `config_path`.
+    pub fn installed(config_path: PathBuf) -> Self {
+        Self::new(crate::download::installed_binary_path(), config_path)
     }
 
     /// The binary this engine runs.
     pub fn binary(&self) -> &std::path::Path {
         &self.binary
+    }
+
+    /// Where the generated configuration is written.
+    pub fn config_path(&self) -> &std::path::Path {
+        &self.config_path
     }
 
     /// The controller client, if the engine is running.
@@ -85,6 +136,20 @@ impl ProxyEngine for MeowEngine {
                 "the engine binary is missing at {}",
                 self.binary.display()
             ));
+            self.remember_error(&error);
+            return Err(error);
+        }
+
+        // The engine's own parser decides whether the configuration is
+        // acceptable. Starting with one it will reject wastes the user's
+        // time on a proxy that never comes up.
+        let report = self.validate(cfg).await?;
+        if !report.ok {
+            let error = EngineError::EngineRejected(
+                report
+                    .engine_error
+                    .unwrap_or_else(|| "the engine rejected the configuration".to_string()),
+            );
             self.remember_error(&error);
             return Err(error);
         }
@@ -151,10 +216,17 @@ impl ProxyEngine for MeowEngine {
             return Err(error);
         };
 
+        // The candidate is applied as a *payload*, not as a path. That way
+        // the engine commits exactly the bytes that were validated, and
+        // the file on disk stays the app's own until the app rewrites it.
+        //
+        // The file *is* still written first, so that a later `PUT
+        // /configs/save` or a restart sees the same configuration.
         let document = crate::config::EngineDocument::build(cfg);
         let yaml = document
             .to_yaml()
             .map_err(|e| EngineError::Internal(e.to_string()))?;
+
         match client.reload_from_payload(&yaml).await {
             Ok(()) => {
                 self.forget_error();
@@ -211,7 +283,7 @@ impl ProxyEngine for MeowEngine {
     }
 
     async fn validate(&self, cfg: &RuntimeConfig) -> Result<ValidationReport, EngineError> {
-        crate::validate::validate_config(&self.binary, cfg).await
+        crate::validate::validate_config(&self.binary, cfg, &self.config_path).await
     }
 
     async fn set_tun(&self, tun: &TunSettings) -> Result<(), EngineError> {
@@ -278,16 +350,8 @@ async fn wait_for_controller(supervisor: &Supervisor, secret: &str) -> Option<St
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_fresh_engine_is_stopped() {
-        let engine = MeowEngine::new(PathBuf::from("meow"));
-        assert_eq!(engine.binary(), std::path::Path::new("meow"));
-    }
-
-    #[tokio::test]
-    async fn an_engine_without_a_binary_cannot_start() {
-        let engine = MeowEngine::new(PathBuf::from("no-such-engine-binary"));
-        let config = RuntimeConfig {
+    fn config() -> RuntimeConfig {
+        RuntimeConfig {
             mixed_port: Some(7890),
             socks_port: None,
             port: None,
@@ -301,8 +365,29 @@ mod tests {
             rules: vec!["MATCH,PROXY".to_string()],
             rule_providers: Vec::new(),
             subscriptions: Vec::new(),
-        };
-        let error = match engine.start(&config).await {
+        }
+    }
+
+    #[test]
+    fn a_fresh_engine_is_stopped() {
+        let engine = MeowEngine::new(
+            PathBuf::from("meow"),
+            PathBuf::from("/tmp/runtime-config.yaml"),
+        );
+        assert_eq!(engine.binary(), std::path::Path::new("meow"));
+        assert_eq!(
+            engine.config_path(),
+            std::path::Path::new("/tmp/runtime-config.yaml")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_engine_without_a_binary_cannot_start() {
+        let engine = MeowEngine::new(
+            PathBuf::from("no-such-engine-binary"),
+            PathBuf::from("/tmp/runtime-config.yaml"),
+        );
+        let error = match engine.start(&config()).await {
             Ok(_) => panic!("the engine should not start without a binary"),
             Err(error) => error,
         };
@@ -311,7 +396,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_status_of_an_engine_that_never_started_is_stopped() {
-        let engine = MeowEngine::new(PathBuf::from("no-such-engine-binary"));
+        let engine = MeowEngine::new(
+            PathBuf::from("no-such-engine-binary"),
+            PathBuf::from("/tmp/runtime-config.yaml"),
+        );
         let status = engine.status().await.expect("status");
         assert_eq!(status.phase, EnginePhase::Stopped);
         assert!(!status.controller_ready);

@@ -1,0 +1,581 @@
+// The primitives.
+//
+// Every screen is built from these. They carry the foxgirls treatments:
+// the card's *ring* rather than a border, the button's brand-red focus
+// halo, and the badge pill.
+//
+// A primitive is presentational only. It has no business logic — a
+// component that needs to know something calls a callback, and the
+// handler lives in `starpod-app` (ARCHITECTURE §6.3).
+//
+// Two Slint 1.18 rules shape this file:
+//
+// - There is no element-level `else`. A conditional element is
+//   `if (condition) : Element { }` and nothing else, so a two-way choice
+//   is two conditional elements, or one element whose *contents* are
+//   chosen by a binding.
+// - `Tooltip` is a child element of the thing it describes, not a
+//   wrapper. `TooltipArea` is the compiler's internal machinery.
+
+import { Design } from "design.slint";
+import { IconChevronDown, IconRefreshCw, IconTriangleAlert } from "icons.slint";
+
+// ---------------------------------------------------------------------------
+// Button
+// ---------------------------------------------------------------------------
+
+export enum ButtonVariant {
+    default,
+    outline,
+    secondary,
+    ghost,
+    destructive,
+}
+
+export enum ButtonSize {
+    sm,
+    md,
+    lg,
+}
+
+export component AppButton inherits Rectangle {
+    in property <string> text;
+    in property <ButtonVariant> variant: ButtonVariant.default;
+    in property <ButtonSize> size: ButtonSize.md;
+    in property <bool> enabled: true;
+    in property <bool> busy: false;
+    in property <string> busy-text;
+    /// The reason the button is disabled, shown as a tooltip.
+    ///
+    /// GOAL.md §5 requires that an unavailable control be *visibly
+    /// disabled with a reason*, not silently inert. The tooltip is where
+    /// the reason goes.
+    in property <string> disabled-reason;
+    callback clicked();
+
+    background: variant == ButtonVariant.default ? Design.primary
+        : variant == ButtonVariant.outline ? Design.background
+        : variant == ButtonVariant.secondary ? Design.secondary
+        : variant == ButtonVariant.destructive ? Design.destructive
+        : transparent;
+
+    border-width: variant == ButtonVariant.outline ? 1px : 0px;
+    border-color: Design.input;
+
+    border-radius: Design.radius-lg;
+    opacity: enabled ? 1 : 0.5;
+
+    width: size == ButtonSize.sm ? 64px : size == ButtonSize.lg ? 120px : 96px;
+    height: size == ButtonSize.sm ? 28px : size == ButtonSize.lg ? 36px : 32px;
+
+    // The focus ring: a brand-red halo at half strength, the site's
+    // `focus-visible:ring-3 ring-ring/50`.
+    Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: Design.radius-lg + 3px;
+        border-width: 3px;
+        border-color: Design.ring;
+        opacity: 0.5;
+        visible: root.focus.has-focus;
+    }
+
+    // The label.
+    Text {
+        text: root.busy && root.busy-text != "" ? root.busy-text : root.text;
+        color: root.variant == ButtonVariant.default ? Design.primary-foreground
+            : root.variant == ButtonVariant.destructive ? Design.primary-foreground
+            : Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+
+    // A spinner, shown while the button is busy.
+    if (root.busy) : IconRefreshCw {
+        width: 14px;
+        height: 14px;
+        x: 8px;
+        y: (root.height - 14px) / 2;
+        stroke: root.variant == ButtonVariant.default || root.variant == ButtonVariant.destructive
+            ? Design.primary-foreground
+            : Design.foreground;
+        stroke-width: 2px;
+        opacity: 0.7;
+    }
+
+    // The disabled reason, as a tooltip on the button itself.
+    if (!root.enabled && root.disabled-reason != "") : Tooltip {
+        text: @markdown("\{root.disabled-reason}");
+    }
+
+    // The focus scope and the touch area. They are separate elements
+    // because `has-focus` belongs to the `FocusScope`, not to the
+    // rectangle the button is drawn with.
+    focus := FocusScope {
+        focus-on-click: true;
+
+        touch := TouchArea {
+            enabled: root.enabled && !root.busy;
+            clicked => {
+                root.clicked();
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Card
+// ---------------------------------------------------------------------------
+
+export component Card inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <bool> show-header: title != "";
+
+    background: Design.card;
+    border-radius: Design.radius-xl;
+    // The site uses a *ring* on cards, not a border: a 1px inner line at
+    // 10% foreground.
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.10);
+
+    VerticalLayout {
+        padding: Design.space-lg;
+        spacing: Design.space-md;
+
+        if (root.show-header) : VerticalLayout {
+            spacing: 2px;
+
+            Text {
+                text: root.title;
+                color: Design.foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-md;
+                font-weight: 500;
+                wrap: word-wrap;
+            }
+
+            if (root.description != "") : Text {
+                text: root.description;
+                color: Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-sm;
+                wrap: word-wrap;
+            }
+        }
+
+        @children
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Badge
+// ---------------------------------------------------------------------------
+
+export enum BadgeVariant {
+    default,
+    secondary,
+    destructive,
+    outline,
+    success,
+    warning,
+}
+
+export component Badge inherits Rectangle {
+    in property <string> text;
+    in property <BadgeVariant> variant: BadgeVariant.secondary;
+
+    height: 20px;
+    border-radius: 10px;
+
+    background: variant == BadgeVariant.default ? Design.primary
+        : variant == BadgeVariant.destructive ? Design.destructive
+        : variant == BadgeVariant.success ? Design.success
+        : variant == BadgeVariant.warning ? Design.warning
+        : variant == BadgeVariant.secondary ? Design.secondary
+        : transparent;
+
+    border-width: variant == BadgeVariant.outline ? 1px : 0px;
+    border-color: Design.input;
+
+    Text {
+        text: root.text;
+        color: root.variant == BadgeVariant.default || root.variant == BadgeVariant.destructive
+            ? Design.primary-foreground
+            : Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-xs;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Status dot
+// ---------------------------------------------------------------------------
+
+export enum StatusKind {
+    running,
+    stopped,
+    error,
+    syncing,
+}
+
+export component StatusDot inherits Rectangle {
+    in property <StatusKind> kind: StatusKind.stopped;
+
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+
+    background: kind == StatusKind.running ? Design.primary
+        : kind == StatusKind.error ? Design.destructive
+        : transparent;
+
+    border-width: kind == StatusKind.running || kind == StatusKind.error ? 0px : 1.5px;
+    border-color: Design.muted-foreground;
+
+    // The syncing dot pulses at reduced opacity, the site's
+    // `prefers-reduced-motion` guarded animation. The pulse is a
+    // repeating timer that drives the opacity between two values.
+    opacity: kind == StatusKind.syncing ? pulse : 1;
+    animate opacity { duration: 900ms; }
+
+    // Private, so that the pulse is an internal detail of the dot and
+    // not something the surrounding UI can set.
+    private property <float> pulse: 0.45;
+
+    Timer {
+        interval: 900ms;
+        running: root.kind == StatusKind.syncing;
+        triggered => {
+            root.pulse = root.pulse < 0.6 ? 0.85 : 0.45;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Field
+// ---------------------------------------------------------------------------
+
+export enum FieldKind {
+    text,
+    password,
+    number,
+    combo,
+}
+
+export component Field inherits Rectangle {
+    in property <string> label;
+    in property <string> placeholder;
+    in property <string> value;
+    in property <FieldKind> kind: FieldKind.text;
+    in property <bool> enabled: true;
+    in property <string> error;
+    /// The choices for a combo field.
+    in property <[string]> choices;
+    /// The index of the selected choice.
+    in property <int> selected-index: 0;
+    in property <bool> read-only: false;
+    callback edited(string);
+    callback selected(int);
+
+    height: 64px;
+
+    background: Design.background;
+    border-radius: Design.radius-md;
+    border-width: 1px;
+    border-color: root.error != "" ? Design.destructive : Design.input;
+
+    VerticalLayout {
+        padding: Design.space-xs;
+        spacing: 0px;
+
+        if (root.label != "") : Text {
+            text: root.label;
+            color: Design.muted-foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-xs;
+        }
+
+        HorizontalLayout {
+            padding-left: Design.space-sm;
+            padding-right: Design.space-sm;
+            spacing: Design.space-sm;
+
+            // The combo's text and chevron. A combo is a read-only field
+            // whose value is chosen from a list, so it is a `Text` plus a
+            // chevron rather than an editable input.
+            if (root.kind == FieldKind.combo) : Rectangle {
+                width: parent.width;
+                height: 26px;
+
+                Text {
+                    text: root.selected-index >= 0 && root.selected-index < root.choices.length
+                        ? root.choices[root.selected-index] : "";
+                    color: root.enabled ? Design.foreground : Design.muted-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-sm;
+                    vertical-alignment: center;
+                    width: parent.width - 24px;
+                    wrap: no-wrap;
+                }
+
+                IconChevronDown {
+                    width: 16px;
+                    height: 16px;
+                    x: parent.width - 16px;
+                    stroke: Design.muted-foreground;
+                    stroke-width: 2px;
+                }
+
+                TouchArea {
+                    enabled: root.enabled;
+                    clicked => {
+                        root.selected(root.selected-index);
+                    }
+                }
+            }
+
+            // Everything that is not a combo is a plain input.
+            //
+            // `TextInput` has no placeholder property in Slint 1.18, so
+            // the hint is a separate `Text` that is only visible while
+            // the input is empty.
+            if (root.kind != FieldKind.combo) : Rectangle {
+                width: parent.width;
+                height: 26px;
+
+                if (root.value == "") : Text {
+                    text: root.placeholder;
+                    color: Design.muted-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-sm;
+                    vertical-alignment: center;
+                }
+
+                TextInput {
+                    width: parent.width;
+                    height: 26px;
+                    color: root.enabled ? Design.foreground : Design.muted-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-sm;
+                    input-type: root.kind == FieldKind.password ? InputType.password
+                        : root.kind == FieldKind.number ? InputType.number : InputType.text;
+                    read-only: root.read-only;
+                    enabled: root.enabled;
+                    text: root.value;
+
+                    edited => {
+                        root.edited(self.text);
+                    }
+                }
+            }
+        }
+    }
+
+    if (root.error != "") : Text {
+        text: root.error;
+        color: Design.destructive;
+        font-family: Design.font-family;
+        font-size: Design.font-xs;
+        y: parent.height + 2px;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Section header
+// ---------------------------------------------------------------------------
+
+export component SectionHeading inherits VerticalLayout {
+    in property <string> eyebrow;
+    in property <string> title;
+    in property <string> description;
+
+    spacing: 2px;
+
+    if (root.eyebrow != "") : Text {
+        text: root.eyebrow;
+        color: Design.primary;
+        font-family: Design.font-family;
+        font-size: Design.font-xs;
+        font-weight: 500;
+    }
+
+    Text {
+        text: root.title;
+        color: Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-xl;
+        font-weight: 600;
+        wrap: word-wrap;
+    }
+
+    if (root.description != "") : Text {
+        text: root.description;
+        color: Design.muted-foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        wrap: word-wrap;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Empty state
+//
+// GOAL.md §5 requires every screen to have an explicit empty state — no
+// blank panels.
+// ---------------------------------------------------------------------------
+
+export component EmptyState inherits VerticalLayout {
+    in property <string> title;
+    in property <string> description;
+    in property <string> action-text;
+    callback action();
+
+    spacing: Design.space-sm;
+    alignment: center;
+
+    Text {
+        text: root.title;
+        color: Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-md;
+        font-weight: 500;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+
+    if (root.description != "") : Text {
+        text: root.description;
+        color: Design.muted-foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+
+    if (root.action-text != "") : AppButton {
+        text: root.action-text;
+        clicked => {
+            root.action();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Error banner
+// ---------------------------------------------------------------------------
+
+export component ErrorBanner inherits Rectangle {
+    in property <string> message;
+    in property <string> detail;
+    callback dismissed();
+
+    background: Design.destructive;
+    border-radius: Design.radius-md;
+    height: 48px;
+
+    HorizontalLayout {
+        padding-left: Design.space-md;
+        padding-right: Design.space-sm;
+        spacing: Design.space-sm;
+
+        IconTriangleAlert {
+            width: 18px;
+            height: 18px;
+            stroke: Design.primary-foreground;
+            stroke-width: 2px;
+        }
+
+        VerticalLayout {
+            spacing: 0px;
+
+            Text {
+                text: root.message;
+                color: Design.primary-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-sm;
+                font-weight: 500;
+                wrap: word-wrap;
+            }
+
+            if (root.detail != "") : Text {
+                text: root.detail;
+                color: Design.primary-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-xs;
+                opacity: 0.85;
+                wrap: word-wrap;
+            }
+        }
+
+        AppButton {
+            text: "✕";
+            variant: ButtonVariant.ghost;
+            size: ButtonSize.sm;
+            clicked => {
+                root.dismissed();
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loading state
+// ---------------------------------------------------------------------------
+
+export component LoadingState inherits VerticalLayout {
+    in property <string> message: "Loading…";
+
+    spacing: Design.space-sm;
+    alignment: center;
+
+    Text {
+        text: root.message;
+        color: Design.muted-foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Labelled row
+//
+// The shape most of the Settings screen is made of: a label, a control, and
+// an optional explanation underneath.
+// ---------------------------------------------------------------------------
+
+export component SettingRow inherits Rectangle {
+    in property <string> label;
+    in property <string> description;
+
+    height: 60px;
+
+    VerticalLayout {
+        spacing: 2px;
+
+        Text {
+            text: root.label;
+            color: Design.foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-sm;
+            font-weight: 500;
+            wrap: word-wrap;
+        }
+
+        if (root.description != "") : Text {
+            text: root.description;
+            color: Design.muted-foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-xs;
+            wrap: word-wrap;
+        }
+    }
+}

@@ -1,0 +1,61 @@
+// The design tokens.
+//
+// Every colour, radius and duration the app uses is declared once here.
+// The screens refer to these names, never to a literal value, so that a
+// change to the palette is a change in one file.
+//
+// The values are the foxgirls.org tokens, extracted in
+// `docs/research/foxgirls-design.md` (ARCHITECTURE §1.11). The theme is
+// dark-only, because the reference site is dark-only.
+
+export global Design {
+    // --- surfaces -----------------------------------------------------------
+    in property <color> background: #161616;
+    in property <color> foreground: #ededed;
+    in property <color> card: #1c1c1c;
+    in property <color> popover: #1c1c1c;
+    in property <color> secondary: #262626;
+    in property <color> muted: #232323;
+    in property <color> accent: #262626;
+
+    // --- brand --------------------------------------------------------------
+    in property <color> primary: #de6161;
+    in property <color> primary-foreground: #ffffff;
+
+    // --- text ---------------------------------------------------------------
+    in property <color> muted-foreground: #a3a3a3;
+
+    // --- status -------------------------------------------------------------
+    in property <color> destructive: #e5484d;
+    in property <color> success: #4a9e5c;
+    in property <color> warning: #c99a3f;
+    in property <color> info: #a3a3a3;
+
+    // --- lines --------------------------------------------------------------
+    in property <color> border: rgba(255, 255, 255, 0.08);
+    in property <color> input: rgba(255, 255, 255, 0.12);
+    in property <color> ring: #de6161;
+
+    // --- radii --------------------------------------------------------------
+    in property <length> radius-sm: 6px;
+    in property <length> radius-md: 8px;
+    in property <length> radius-lg: 10px;
+    in property <length> radius-xl: 14px;
+
+    // --- spacing ------------------------------------------------------------
+    in property <length> space-xs: 4px;
+    in property <length> space-sm: 8px;
+    in property <length> space-md: 12px;
+    in property <length> space-lg: 16px;
+    in property <length> space-xl: 24px;
+    in property <length> space-2xl: 32px;
+
+    // --- type ---------------------------------------------------------------
+    in property <string> font-family: "Inter Variable";
+    in property <length> font-xs: 12px;
+    in property <length> font-sm: 14px;
+    in property <length> font-md: 16px;
+    in property <length> font-lg: 18px;
+    in property <length> font-xl: 24px;
+    in property <length> font-hero: 48px;
+}

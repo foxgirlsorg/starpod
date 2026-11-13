@@ -1,0 +1,23 @@
+[package]
+name = "starpod-subscription"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fetching, parsing, validating and refreshing proxy subscriptions for Starpod"
+
+[dependencies]
+starpod-core = { workspace = true }
+serde_json = { workspace = true }
+serde-saphyr = { workspace = true }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+reqwest = { workspace = true }
+async-trait = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = { workspace = true }

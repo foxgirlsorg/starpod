@@ -1,0 +1,15 @@
+[package]
+name = "starpod-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The Slint user interface for Starpod"
+
+[dependencies]
+slint = { workspace = true }
+starpod-core = { workspace = true }
+
+[build-dependencies]
+slint-build = { workspace = true }

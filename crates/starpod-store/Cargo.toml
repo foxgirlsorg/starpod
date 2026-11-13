@@ -1,0 +1,41 @@
+[package]
+name = "starpod-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Persistence, migrations and secret storage for Starpod"
+
+[dependencies]
+starpod-core = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+dirs = { workspace = true }
+base64 = { workspace = true }
+url = { workspace = true }
+
+# --- platform-specific secret storage ---------------------------------------
+# Each of these is only pulled in for the platform that uses it, so a Linux
+# build never compiles the Keychain bindings and a macOS build never compiles
+# the Secret Service D-Bus client.
+[target.'cfg(target_os = "windows")'.dependencies]
+# `Win32_Security_Authorization` for `SetNamedSecurityInfoW` (the DACL),
+# `Win32_Security_Cryptography` for DPAPI, and `Win32_Storage_FileSystem` for
+# `MoveFileExW` (the atomic rename).
+windows = { workspace = true, features = [
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

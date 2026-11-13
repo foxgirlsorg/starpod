@@ -13,10 +13,13 @@
 pub mod config;
 pub mod domain;
 pub mod rules;
+pub mod timestamp;
 
 pub use config::build;
 pub use domain::{
-    BuildInput, BuildOutcome, Finding, Node, ProxyGroup, ProxyMode, RuleProvider, RuntimeConfig,
-    Severity, StoredRule, Subscription, SubscriptionMode, SubscriptionPayload, UserPreferences,
+    BuildInput, BuildOutcome, EngineManagedSubscription, Finding, LogLevel, Node, ProxyGroup,
+    ProxyMode, RuleProvider, RuleProviderBehavior, RuntimeConfig, Severity, StoredRule,
+    Subscription, SubscriptionMode, SubscriptionPayload, SubscriptionQuota, SubscriptionSettings,
+    TunSettings, UserPreferences,
 };
 pub use rules::{RuleSpec, RuleTarget};

@@ -1,3 +1,14 @@
+# The Rust toolchain the app is built with.
+#
+# 1.92.0 is the floor Slint 1.17 sets (`slint` 1.17+ requires rustc 1.92),
+# and Slint 1.17 is the first release with the native `SystemTrayIcon`
+# element that ARCHITECTURE §6.4 relies on for the system tray.
+#
+# The engine is *not* built from source: meow ships as a prebuilt release
+# binary that the app downloads and drives as a subprocess, so meow's own
+# MSRV does not constrain the app's toolchain. The app only has to speak
+# meow's configuration format and REST API, both of which are stable
+# across Rust versions.
 [toolchain]
-channel = "1.89.0"
+channel = "1.92.0"
 components = ["rustfmt", "clippy"]

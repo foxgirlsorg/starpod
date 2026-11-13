@@ -18,8 +18,45 @@
 //!
 //! If the child does not exit within the grace period, it is killed. A
 //! stuck engine must not keep the app from quitting.
+//!
+//! # The command line
+//!
+//! The engine is started as
+//!
+//! ```text
+//! meow -f <config-path> --secret <secret>
+//! ```
+//!
+//! The **secret** is on the command line and nowhere else. It is not in the
+//! config file: the engine accepts a top-level `secret:` key
+//! (`meow-config-0.29.0/src/raw.rs:205`), and the app's own writer refuses
+//! to produce one (`starpod_store::runtime_config::reject_secret_key`).
+//! The engine overrides `config.api.secret` with `--secret` *after* the
+//! config is built (`meow-app-0.29.0/src/main.rs:612-615`), so the value
+//! the API actually checks is the one the app passed
+//! (`meow-api-0.29.0/src/routes.rs:152`).
+//!
+//! A secret on a child's command line is visible to other processes of the
+//! same user on some systems. That is a deliberate trade-off: it is the
+//! only interface the engine offers, the engine's own controller file
+//! stores the secret in the same user's home directory anyway, and the
+//! alternative — putting it in the config file — would spread it to every
+//! reader of that file, including the backup tools a user might run.
+//!
+//! # The controller address
+//!
+//! The controller's address is in the **config file**, not on the command
+//! line, and that is not a stylistic choice. The engine binds its API
+//! socket exactly once, at startup (`meow-app-0.29.0/src/main.rs:1508-1571`),
+//! and the `PUT /configs` reload path never rebinds it. A reload therefore
+//! cannot move the controller — so the address that the file names is the
+//! address the controller keeps, for the engine's whole life.
+//!
+//! The app asks for port `0`, so the OS assigns a free port, and learns
+//! which one from the engine's own controller file
+//! (`<pid>.json` in the directory named by `MEOW_RUNTIME_DIR`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -32,10 +69,14 @@ use starpod_core::domain::RuntimeConfig;
 use crate::config::EngineDocument;
 use crate::error::{EngineError, EngineResult};
 use crate::log::{LogBuffer, LogStreamKind, Redactor};
-use crate::validate::validate_config;
 
 /// How long the engine may take to exit after a graceful stop request.
 const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The environment variable that redirects the engine's controller file.
+///
+/// `meow-common-0.29.0/src/controller_file.rs:24`.
+pub const CONTROLLER_DIR_ENV: &str = "MEOW_RUNTIME_DIR";
 
 /// The directory the engine writes its controller file into.
 ///
@@ -43,7 +84,7 @@ const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 /// after its own pid. The file is the only reliable way to learn the port
 /// the engine bound when the configuration asked for port zero.
 pub fn controller_file_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("MEOW_RUNTIME_DIR")
+    if let Some(dir) = std::env::var_os(CONTROLLER_DIR_ENV)
         && !dir.is_empty()
     {
         return Some(PathBuf::from(dir));
@@ -78,18 +119,14 @@ pub fn read_controller_address(pid: u32) -> Option<String> {
     Some(controller.to_string())
 }
 
-/// Where the engine's configuration file lives.
-pub fn config_path() -> PathBuf {
-    crate::download::install_dir()
-        .parent()
-        .map(|parent| parent.join("runtime.yaml"))
-        .unwrap_or_else(|| PathBuf::from("runtime.yaml"))
-}
-
 /// The controller's address: loopback only.
 ///
 /// The controller API can rewrite the engine's configuration and read its
 /// traffic. It must never be reachable from the network.
+///
+/// The port is `0`, so the OS assigns a free one. The app learns the
+/// assigned port from the engine's controller file. Binding to an explicit
+/// port would race with anything else on the machine that wants it.
 pub const CONTROLLER_ADDRESS: &str = "127.0.0.1:0";
 
 /// A running engine.
@@ -104,42 +141,54 @@ pub struct EngineProcess {
 impl EngineProcess {
     /// Start the engine with a configuration.
     ///
-    /// The configuration is written to a file first and the engine is
+    /// The configuration is written to `config_path` first and the engine is
     /// started on it. Writing it to a file — rather than passing it inline
     /// — means the engine's own diagnostics name a file the user can look
     /// at, and it means the file's permissions can be restricted.
+    ///
+    /// The file also carries the `external-controller` address, because the
+    /// controller is bound once and never moves; see the module docs.
     pub async fn start(
-        binary: &std::path::Path,
+        binary: &Path,
         config: &RuntimeConfig,
+        config_path: &Path,
+        controller_dir: Option<&Path>,
         secret: &str,
         logs: &LogBuffer,
         redactor: &Redactor,
     ) -> EngineResult<Self> {
-        let document = EngineDocument::build(config).with_controller(CONTROLLER_ADDRESS, secret);
+        let document = EngineDocument::build(config).with_controller(CONTROLLER_ADDRESS);
         let yaml = document
             .to_yaml()
             .map_err(|e| EngineError::Internal(e.to_string()))?;
 
-        let path = config_path();
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = config_path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|e| EngineError::Io(e.to_string()))?;
         }
-        write_private_file(&path, yaml.as_bytes())
+        write_private_file(config_path, yaml.as_bytes())
             .await
             .map_err(|e| EngineError::Io(e.to_string()))?;
 
         let mut command = Command::new(binary);
         command
             .arg("-f")
-            .arg(&path)
+            .arg(config_path)
             .arg("--secret")
             .arg(secret)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+
+        // Point the engine's controller file at the app's own directory, so
+        // Starpod's file never collides with another meow's on this machine
+        // and never has to be guessed at.
+        if let Some(dir) = controller_dir {
+            std::fs::create_dir_all(dir).map_err(|e| EngineError::Io(e.to_string()))?;
+            command.env(CONTROLLER_DIR_ENV, dir);
+        }
 
         #[cfg(windows)]
         {
@@ -294,7 +343,7 @@ where
 ///
 /// The configuration file holds subscription URLs, which carry tokens. It
 /// must not be readable by other users on the machine.
-async fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+async fn write_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
@@ -333,6 +382,14 @@ pub struct Supervisor {
     controller: Arc<std::sync::RwLock<String>>,
     /// The redactor for the logs.
     redactor: Redactor,
+    /// Where the generated configuration is written.
+    config_path: PathBuf,
+    /// The directory the engine publishes its controller file into.
+    ///
+    /// Set through [`Supervisor::with_controller_dir`]. When it is set, the
+    /// engine is pointed at it with `MEOW_RUNTIME_DIR`, so Starpod's
+    /// controller file never collides with another meow's on the machine.
+    controller_dir: Option<PathBuf>,
 }
 
 impl Supervisor {
@@ -341,6 +398,13 @@ impl Supervisor {
     /// There is deliberately no `Default`: a supervisor's secret is
     /// generated per instance, and a default implementation would make
     /// two supervisors share one by accident.
+    ///
+    /// The secret does not need to be persisted. The app generates it,
+    /// hands it to the engine on the command line, and keeps it for the
+    /// engine's lifetime; a restart is a new engine with a new secret. The
+    /// engine fixes the secret at startup and a reload never changes it
+    /// (`meow-api-0.29.0/src/routes.rs` reads the value the server was
+    /// constructed with), so persisting one would buy nothing.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let secret = crate::secret::random_secret();
@@ -352,7 +416,29 @@ impl Supervisor {
             exited,
             controller: Arc::new(std::sync::RwLock::new(String::new())),
             redactor: Redactor::new([secret.clone()]),
+            config_path: PathBuf::new(),
+            controller_dir: None,
         }
+    }
+
+    /// Tell the supervisor where the generated configuration lives.
+    #[must_use]
+    pub fn with_config_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config_path = path.into();
+        self
+    }
+
+    /// Tell the supervisor where the engine should publish its controller
+    /// file.
+    ///
+    /// The engine reads `MEOW_RUNTIME_DIR` from its environment
+    /// (`meow-common-0.29.0/src/controller_file.rs:24`), so this is applied
+    /// to the child's environment rather than being a path the app reads
+    /// directly.
+    #[must_use]
+    pub fn with_controller_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.controller_dir = Some(dir.into());
+        self
     }
 
     /// The controller's address.
@@ -387,9 +473,15 @@ impl Supervisor {
     /// Start the engine.
     pub async fn start(
         &self,
-        binary: &std::path::Path,
+        binary: &Path,
         config: &RuntimeConfig,
     ) -> EngineResult<crate::engine::EngineHandle> {
+        if self.config_path.as_os_str().is_empty() {
+            return Err(EngineError::Internal(
+                "the supervisor has no configuration path".to_string(),
+            ));
+        }
+
         let mut guard = self.child.lock().await;
         if guard.is_some() {
             return Err(EngineError::Internal(
@@ -397,8 +489,16 @@ impl Supervisor {
             ));
         }
 
-        let process =
-            EngineProcess::start(binary, config, &self.secret, &self.logs, &self.redactor).await?;
+        let process = EngineProcess::start(
+            binary,
+            config,
+            &self.config_path,
+            self.controller_dir.as_deref(),
+            &self.secret,
+            &self.logs,
+            &self.redactor,
+        )
+        .await?;
         *guard = Some(process);
 
         let sender = self.exited.clone();
@@ -442,20 +542,11 @@ impl Supervisor {
             process.stop().await?;
         }
         *guard = None;
+        if let Ok(mut slot) = self.controller.write() {
+            slot.clear();
+        }
         Ok(())
     }
-}
-
-/// Validate a configuration with the engine's own parser.
-///
-/// This runs the engine binary with `-t`, which parses the configuration
-/// and exits without starting the proxy. It is the authoritative check that
-/// a configuration the app built is one the engine will accept.
-pub async fn validate_with_engine(
-    binary: &std::path::Path,
-    config: &RuntimeConfig,
-) -> EngineResult<crate::engine::ValidationReport> {
-    validate_config(binary, config).await
 }
 
 #[cfg(test)]
@@ -471,9 +562,12 @@ mod tests {
     }
 
     #[test]
-    fn the_config_path_sits_beside_the_engine() {
-        let path = config_path();
-        assert!(path.ends_with("runtime.yaml"), "{path:?}");
+    fn the_controller_address_asks_for_an_ephemeral_port() {
+        // Port 0 lets the OS pick a free port. A fixed port would race with
+        // whatever else on the machine wants it, and the engine binds the
+        // controller exactly once — a bind failure is a hard startup error
+        // (`meow-app-0.29.0/src/main.rs:1558-1560`).
+        assert!(CONTROLLER_ADDRESS.ends_with(":0"), "{CONTROLLER_ADDRESS}");
     }
 
     #[tokio::test]
@@ -481,5 +575,30 @@ mod tests {
         let supervisor = Supervisor::new();
         assert!(!supervisor.secret().is_empty());
         assert_eq!(supervisor.controller(), "");
+    }
+
+    #[tokio::test]
+    async fn a_supervisor_without_a_config_path_refuses_to_start() {
+        let supervisor = Supervisor::new();
+        let config = starpod_core::domain::RuntimeConfig {
+            mixed_port: Some(7890),
+            socks_port: None,
+            port: None,
+            allow_lan: false,
+            bind_address: None,
+            mode: starpod_core::domain::ProxyMode::Rule,
+            log_level: starpod_core::domain::LogLevel::Info,
+            tun: starpod_core::domain::TunSettings::default(),
+            proxies: Vec::new(),
+            proxy_groups: Vec::new(),
+            rules: vec!["MATCH,DIRECT".to_string()],
+            rule_providers: Vec::new(),
+            subscriptions: Vec::new(),
+        };
+        let error = supervisor
+            .start(Path::new("no-such-engine-binary"), &config)
+            .await
+            .expect_err("the supervisor has nowhere to write the configuration");
+        assert!(matches!(error, EngineError::Internal(_)), "{error:?}");
     }
 }

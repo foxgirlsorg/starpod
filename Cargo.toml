@@ -88,6 +88,16 @@ zip = { version = "9.5", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1.1"
 
+# --- ui ----------------------------------------------------------------------
+slint = { version = "1.18.1", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-femtovg",
+    "renderer-software",
+    "compat-1-2",
+] }
+slint-build = "1.18.1"
+
 # --- misc --------------------------------------------------------------------
 sha2 = "0.10"
 rand = "0.9"
