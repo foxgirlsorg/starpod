@@ -4,6 +4,20 @@ All notable changes to Starpod are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Home is now the profile card, announcements, the connect button and one
+  **Server** drop-down for the primary group, with an **All servers** link to
+  the Proxies page. The routing mode, the system proxy and TUN switches, the
+  session traffic, the group picker and the latency test moved from Home to the
+  Proxies page.
+- A primary group that the user has not chosen a server for starts on its
+  automatic member: the url-test, fallback or load-balance member named "Auto",
+  or the first automatic member when none has that name. The default is not
+  saved; a choice made by the user always wins.
+
 ## [0.0.1] - 2026-11-14
 
 First usable build.

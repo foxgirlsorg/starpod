@@ -1902,3 +1902,154 @@ async fn the_profile_headers_reach_the_card_and_the_provider_interval_becomes_th
         Some("https://example.com/news")
     );
 }
+
+// ----- the default server of the primary group ---------------------------------
+
+/// A subscription whose own select group is its MATCH target. The group lists
+/// a fallback group first and the "auto" url-test group last, so the default
+/// has to pick the url-test group by its name, not by its position.
+const CHOOSER: &str = "\
+mixed-port: 7899
+proxies:
+  - name: \"Node A\"
+    type: trojan
+    server: a.example.com
+    port: 443
+    password: hunter2-trojan
+  - name: \"Node B\"
+    type: vmess
+    server: b.example.com
+    port: 8443
+    uuid: 00000000-0000-0000-0000-000000000001
+    alterId: 0
+    cipher: auto
+proxy-groups:
+  - name: \"Pick\"
+    type: select
+    proxies:
+      - \"Steady\"
+      - \"Node A\"
+      - \"Node B\"
+      - \"⚡ Auto\"
+  - name: \"Steady\"
+    type: fallback
+    proxies:
+      - \"Node A\"
+      - \"Node B\"
+    url: https://example.com/generate_204
+    interval: 300
+  - name: \"⚡ Auto\"
+    type: url-test
+    proxies:
+      - \"Node B\"
+      - \"Node A\"
+    url: https://example.com/generate_204
+    interval: 300
+rules:
+  - MATCH,Pick
+";
+
+/// The primary group of the chooser subscription, and its automatic member,
+/// both as the app names them.
+fn chooser_names(service: &AppService) -> (String, String) {
+    let primary = service
+        .snapshot()
+        .primary_group
+        .expect("the subscription has a primary group");
+    (primary, "Airport / ⚡ Auto".to_string())
+}
+
+#[tokio::test]
+async fn the_primary_group_starts_on_its_auto_member_until_the_user_chooses() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(CHOOSER.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+    let (primary, auto) = chooser_names(&service);
+
+    // Stopped: the snapshot already shows the auto member.
+    let shown = service
+        .snapshot()
+        .groups
+        .iter()
+        .find(|group| group.name == primary)
+        .and_then(|group| group.selected.clone());
+    assert_eq!(shown.as_deref(), Some(auto.as_str()));
+
+    service.connect().await.unwrap();
+
+    let calls = engine.calls();
+    assert_eq!(
+        calls.last(),
+        Some(&Call::Select {
+            group: primary.clone(),
+            member: auto.clone(),
+        }),
+        "the running engine is told the default member: {calls:?}"
+    );
+    assert!(
+        service.user_state().preferences.group_selections.is_empty(),
+        "a default is not saved as a choice"
+    );
+    let shown = service
+        .snapshot()
+        .groups
+        .iter()
+        .find(|group| group.name == primary)
+        .and_then(|group| group.selected.clone());
+    assert_eq!(shown.as_deref(), Some(auto.as_str()));
+}
+
+#[tokio::test]
+async fn a_user_choice_in_the_primary_group_replaces_the_default_on_every_build() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(CHOOSER.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+    let (primary, auto) = chooser_names(&service);
+    service.connect().await.unwrap();
+
+    service
+        .select_member(&primary, "Airport / Node B")
+        .await
+        .unwrap();
+    let shown = service
+        .snapshot()
+        .groups
+        .iter()
+        .find(|group| group.name == primary)
+        .and_then(|group| group.selected.clone());
+    assert_eq!(shown.as_deref(), Some("Airport / Node B"));
+
+    // A rebuild while running must not switch back to the default.
+    let before = engine.calls().len();
+    service
+        .add_rule(rule("DOMAIN-SUFFIX,example.net,DIRECT"))
+        .await
+        .unwrap();
+    let later = engine.calls()[before..].to_vec();
+    assert!(
+        !later.contains(&Call::Select {
+            group: primary.clone(),
+            member: auto.clone(),
+        }),
+        "the user's choice wins over the default: {later:?}"
+    );
+    assert_eq!(
+        service
+            .user_state()
+            .preferences
+            .group_selections
+            .get(&primary)
+            .map(String::as_str),
+        Some("Airport / Node B")
+    );
+}

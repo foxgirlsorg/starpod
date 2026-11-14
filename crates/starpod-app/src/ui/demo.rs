@@ -55,7 +55,7 @@ const SERVERS: [(&str, &str, i32); 24] = [
     ("🇦🇹 Vienna 01", "vless", -1),
 ];
 
-/// The first twelve servers are the members of "🚀 Proxy".
+/// The first twelve servers are the members of "🚀 Proxy", after its "⚡ Auto".
 const PROXY_MEMBERS: usize = 12;
 
 const PROXY: &str = "🚀 Proxy";
@@ -132,7 +132,14 @@ pub fn apply(bridge: &Bridge<'_>) {
     bridge.set_nodes(ModelRc::new(VecModel::from(nodes)));
 
     // Groups: a manual one, an automatic one and a blocked-sites one.
-    let proxy_members = members(&SERVERS[..PROXY_MEMBERS]);
+    // "🚀 Proxy" starts on its automatic member, as a fresh profile does.
+    let mut proxy_members = vec![MemberView {
+        name: AUTO.into(),
+        label: AUTO.into(),
+        protocol: "group".into(),
+        latency: Latency::Untested,
+    }];
+    proxy_members.extend(members(&SERVERS[..PROXY_MEMBERS]));
     let auto_members = members(&SERVERS[..PROXY_MEMBERS]);
     let blocked_members = vec![
         MemberView {
@@ -153,7 +160,7 @@ pub fn apply(bridge: &Bridge<'_>) {
             name: PROXY.into(),
             label: PROXY.into(),
             kind: "select".into(),
-            selected: Some(FRANKFURT.into()),
+            selected: Some(AUTO.into()),
             members: proxy_members,
         },
         GroupView {

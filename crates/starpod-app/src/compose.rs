@@ -90,6 +90,9 @@ pub(crate) struct Composed {
     /// The group the Home page offers first. See
     /// [`starpod_core::BuildOutcome::primary_group`].
     pub primary_group: Option<String>,
+    /// The group and member the app selects by default, when the user has
+    /// never chosen a member for the primary group. See [`default_selection`].
+    pub default_selection: Option<(String, String)>,
 }
 
 /// Compose the candidate for the given state.
@@ -193,6 +196,8 @@ pub(crate) fn compose(
             .map(|finding| finding.message.clone()),
     );
     apply_group_selections(&mut config, &state.preferences);
+    let default_selection =
+        default_selection(&mut config, primary_group.as_deref(), &state.preferences);
     select_node(&mut config, &state.preferences, &mut warnings);
     if config.mode == ProxyMode::Global && global_mode_blocked(meta, caches) {
         config.mode = ProxyMode::Rule;
@@ -205,6 +210,7 @@ pub(crate) fn compose(
         config,
         warnings,
         primary_group,
+        default_selection,
     })
 }
 
@@ -228,18 +234,91 @@ pub(crate) fn global_mode_blocked(meta: &SubscriptionMeta, caches: &Subscription
 /// choice stays saved and applies again when it comes back.
 fn apply_group_selections(config: &mut RuntimeConfig, prefs: &UserPreferences) {
     for (group_name, member) in &prefs.group_selections {
-        let Some(group) = config
-            .proxy_groups
-            .iter_mut()
-            .find(|group| group.name == *group_name)
-        else {
-            continue;
-        };
-        if let Some(index) = group.members.iter().position(|name| name == member) {
-            let chosen = group.members.remove(index);
-            group.members.insert(0, chosen);
-        }
+        move_to_front(config, group_name, member);
     }
+}
+
+/// Move a member to the front of its group. A group or a member that is not
+/// there does nothing.
+fn move_to_front(config: &mut RuntimeConfig, group_name: &str, member: &str) {
+    let Some(group) = config
+        .proxy_groups
+        .iter_mut()
+        .find(|group| group.name == group_name)
+    else {
+        return;
+    };
+    if let Some(index) = group.members.iter().position(|name| name == member) {
+        let chosen = group.members.remove(index);
+        group.members.insert(0, chosen);
+    }
+}
+
+/// The group kinds that choose their own member: url-test, fallback and
+/// load-balance.
+const AUTOMATIC_KINDS: [&str; 3] = ["url-test", "fallback", "load-balance"];
+
+/// The member a select group uses until the user chooses one: its "auto"
+/// member.
+///
+/// `members` lists each member's name with its group kind (empty for a
+/// server). The first automatic member whose name contains "auto", ignoring
+/// case, is chosen; when none has that name, the first automatic member is.
+/// `None` when the group has no automatic member.
+pub(crate) fn auto_member(members: &[(&str, &str)]) -> Option<String> {
+    let automatic: Vec<&str> = members
+        .iter()
+        .filter(|(_, kind)| AUTOMATIC_KINDS.contains(kind))
+        .map(|(name, _)| *name)
+        .collect();
+    automatic
+        .iter()
+        .find(|name| name.to_lowercase().contains("auto"))
+        .or_else(|| automatic.first())
+        .map(|name| (*name).to_string())
+}
+
+/// The member the primary group uses by default.
+///
+/// Applies only when the user has no saved choice for the primary group, and
+/// only to a select group: the other kinds choose their own member. The
+/// member is moved to the front of its group, as a saved choice is, so the
+/// engine starts on it. Nothing is saved: this is a default, so a later user
+/// choice wins and every build chooses again.
+fn default_selection(
+    config: &mut RuntimeConfig,
+    primary: Option<&str>,
+    prefs: &UserPreferences,
+) -> Option<(String, String)> {
+    let primary = primary?;
+    if prefs.group_selections.contains_key(primary) {
+        return None;
+    }
+    let member = {
+        let view: &RuntimeConfig = config;
+        let group = view
+            .proxy_groups
+            .iter()
+            .find(|group| group.name == primary)?;
+        if group.group_type != "select" {
+            return None;
+        }
+        let kinds: Vec<(&str, &str)> = group
+            .members
+            .iter()
+            .map(|name| {
+                let kind = view
+                    .proxy_groups
+                    .iter()
+                    .find(|other| other.name == *name)
+                    .map_or("", |other| other.group_type.as_str());
+                (name.as_str(), kind)
+            })
+            .collect();
+        auto_member(&kinds)?
+    };
+    move_to_front(config, primary, &member);
+    Some((primary.to_string(), member))
 }
 
 /// Whether a finding is the core's "the group has no members" warning for a
@@ -465,5 +544,45 @@ mod tests {
             "{:?}",
             composed.warnings
         );
+    }
+
+    #[test]
+    fn the_auto_member_is_the_automatic_member_named_auto() {
+        let members = [
+            ("Node A", ""),
+            ("Fastest", "fallback"),
+            ("⚡ Auto", "url-test"),
+            ("Balanced", "load-balance"),
+        ];
+        assert_eq!(auto_member(&members).as_deref(), Some("⚡ Auto"));
+    }
+
+    #[test]
+    fn the_name_match_ignores_case() {
+        let members = [("Node A", ""), ("AUTO select", "url-test")];
+        assert_eq!(auto_member(&members).as_deref(), Some("AUTO select"));
+    }
+
+    #[test]
+    fn without_a_name_the_first_automatic_member_is_chosen() {
+        let members = [
+            ("Node A", ""),
+            ("Fastest", "fallback"),
+            ("Balanced", "load-balance"),
+        ];
+        assert_eq!(auto_member(&members).as_deref(), Some("Fastest"));
+    }
+
+    #[test]
+    fn a_select_group_named_auto_is_not_an_automatic_member() {
+        let members = [("Auto", "select"), ("Node A", "")];
+        assert_eq!(auto_member(&members), None);
+    }
+
+    #[test]
+    fn a_group_of_servers_has_no_automatic_member() {
+        let members = [("Node A", ""), ("Node B", "")];
+        assert_eq!(auto_member(&members), None);
+        assert_eq!(auto_member(&[]), None);
     }
 }

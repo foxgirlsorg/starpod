@@ -102,7 +102,20 @@ To stop the device headers, turn off **Send device identification** in Settings.
 
 ## 3. Servers and node selection
 
-The Servers screen lists the nodes from your own list and from app-managed subscriptions.
+The Home and Proxies screens are where you choose servers. The rules, the routing mode and the system proxy are not on Home.
+
+**Home** shows the profile card, the announcements, the connect button and one **Server** drop-down. The drop-down picks a server of the primary group: the group that unmatched traffic goes to (see section 4). Its default is the group's automatic member, the url-test, fallback or load-balance member named "Auto" when there is one, otherwise the first automatic member. The drop-down is hidden when there is no primary group, and it is disabled when the primary group chooses its server by itself. **All servers** opens the Proxies screen.
+
+**Proxies** holds everything about servers and routing:
+
+- **Routing mode.** Rule, Global or Direct. Global is missing when the profile does not allow it.
+- **System proxy** and **TUN**, the same switches the Settings screen has (see section 6.2). While connected, the row also shows the session upload and download.
+- **Groups.** Each group is a card that opens to its servers. Choose a server in a select group by clicking its tile; automatic groups choose their own server. Use the gauge button to test a group's latency, and **Test latency** in the header to test every server.
+- **Filter, sort and hide.** The filter searches server names and labels. Sort by default order, latency or name, and hide unavailable servers.
+
+The automatic default is only a starting point. Choosing a server on Home or on Proxies saves your choice for that group, and a later refresh or rebuild keeps it. Nothing is written for the default itself, so a subscription change that alters the group chooses again.
+
+**Servers from your own list and from subscriptions.** The Proxies screen lists the nodes from your own list and from app-managed subscriptions.
 
 - **Select a node.** While the proxy is running, the selection is applied live to the engine. While it is stopped, the selection is only saved and applies on the next start.
 - **Selection survives refreshes.** The selected node is remembered by its internal id, not its name. If the provider renames a node, your selection stays on it.
@@ -139,7 +152,7 @@ Rules decide where each connection goes. The engine checks them from top to bott
 1. Your rules, in the order you set.
 2. Subscription rules from app-managed subscriptions.
 3. `MATCH`, the catch-all. The app always places it last. Its target is chosen in this order:
-   - the group you select on the Home page (your selected group), when that group exists;
+   - the primary group: the group the Home page's Server drop-down shows, when that group exists;
    - otherwise the target of the first `MATCH` rule, whether it comes from a subscription or from you, when that names an existing group or a built-in outbound such as `DIRECT`;
    - otherwise the app's `PROXY` group.
 

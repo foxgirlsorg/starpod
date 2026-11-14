@@ -239,6 +239,9 @@ msgstr "Группа"
 msgid "Server"
 msgstr "Сервер"
 
+msgid "All servers"
+msgstr "Все серверы"
+
 msgid "Chosen automatically"
 msgstr "Выбран автоматически"
 

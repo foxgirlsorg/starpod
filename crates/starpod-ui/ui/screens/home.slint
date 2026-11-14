@@ -1,13 +1,14 @@
 // Home: the active profile card (logo, quota, expiry and its warning), the
-// other profiles' announcements, the connect button with its status line, the
-// connection row while connected, and the mode and server picker. Sized to fit
-// 1100x720 without scrolling in the demo state (ui-spec.md section 5.1).
+// other profiles' announcements, the connect button with its status line, and
+// the server picker of the primary group. The routing mode, the system proxy,
+// TUN and the session traffic are on the Proxies page. Sized to fit 1100x720
+// without scrolling in the demo state (ui-spec.md section 5.1).
 
 import { Design } from "../design.slint";
 import { Bridge, AnnouncementItem, ProfileCardItem, TextRun } from "../bridge.slint";
 import {
     Button, ButtonVariant, ButtonSize, Card, Select, EmojiText, Alert, AlertVariant,
-    IconButton, Progress, Switch, Segmented
+    IconButton, Progress
 } from "../primitives.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -96,40 +97,6 @@ component AnnouncementCard inherits Rectangle {
     }
 }
 
-// One control row of the connection card: a label, then the switch.
-component SwitchRow inherits HorizontalLayout {
-    in property <string> label;
-    in property <bool> checked;
-    in property <bool> enabled: true;
-    callback toggled(bool);
-
-    spacing: 8px;
-    vertical-stretch: 0;
-
-    Text {
-        text: root.label;
-        color: Design.foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-sm;
-        font-weight: 500;
-        vertical-alignment: center;
-        wrap: no-wrap;
-    }
-
-    VerticalLayout {
-        vertical-stretch: 0;
-        alignment: center;
-
-        Switch {
-            checked: root.checked;
-            enabled: root.enabled;
-            toggled(value) => {
-                root.toggled(value);
-            }
-        }
-    }
-}
-
 export component HomePage inherits Rectangle {
     // "stopped" and "failed" look alike; "starting" and "stopping" pulse.
     private property <bool> running: Bridge.engine-phase == "running";
@@ -162,16 +129,8 @@ export component HomePage inherits Rectangle {
         : @tr("Your subscription expires in {n} day" | "Your subscription expires in {n} days" % root.days);
     private property <string> renew-url: Bridge.profile-card.web-url != "" ? Bridge.profile-card.web-url : Bridge.profile-card.support-url;
 
-    // The mode choice. Global is left out when the active profile forbids it.
-    private property <[string]> mode-labels: Bridge.global-mode-allowed ? [@tr("Rule"), @tr("Global"), @tr("Direct")] : [@tr("Rule"), @tr("Direct")];
-    private property <[string]> mode-keys: Bridge.global-mode-allowed ? ["rule", "global", "direct"] : ["rule", "direct"];
-    private property <int> mode-index: Bridge.mode == "direct" ? root.mode-keys.length - 1
-        : (Bridge.mode == "global" && Bridge.global-mode-allowed) ? 1
-        : 0;
-
-    // The picker's local state. group-index starts at the primary group and
-    // changes only with the user's choice; sel-index is the server in use.
-    private property <bool> group-chosen: false;
+    // The server picker works on the primary group. group-index is that group's
+    // place in the groups list; sel-index is the server in use within it.
     private property <int> group-index: 0;
     private property <int> sel-index: -1;
     // group-index, kept inside the groups list.
@@ -194,7 +153,7 @@ export component HomePage inherits Rectangle {
     for g[i] in Bridge.groups : Rectangle {
         visible: false;
         init => {
-            if (!root.group-chosen && g.name == Bridge.primary-group) {
+            if (g.name == Bridge.primary-group) {
                 root.group-index = i;
             }
         }
@@ -590,178 +549,40 @@ export component HomePage inherits Rectangle {
                     }
                 }
 
-                // While connected: the session traffic, the system proxy and TUN.
-                if (root.running) : Rectangle {
+                // The server picker: the primary group's choice, centred under
+                // the button. Its own page lists every group and server.
+                if (Bridge.primary-group != "" && Bridge.groups.length > 0 && Bridge.groups[root.gi].members.length > 0) : HorizontalLayout {
                     vertical-stretch: 0;
-                    height: 10px;
-                }
-
-                if (root.running) : Card {
-                    inner-padding: 12px;
-
-                    HorizontalLayout {
-                        vertical-stretch: 0;
-                        height: 36px;
-                        spacing: 16px;
-
-                        if (Bridge.session-traffic-visible) : HorizontalLayout {
-                            horizontal-stretch: 1;
-                            spacing: 12px;
-
-                            HorizontalLayout {
-                                spacing: 4px;
-
-                                VerticalLayout {
-                                    vertical-stretch: 0;
-                                    alignment: center;
-
-                                    Image {
-                                        width: 12px;
-                                        height: 12px;
-                                        source: @image-url("../assets/icons/arrow-up.svg");
-                                        colorize: Design.muted-foreground;
-                                    }
-                                }
-
-                                Text {
-                                    text: Bridge.session-upload;
-                                    color: Design.foreground;
-                                    font-family: Design.font-family;
-                                    font-size: Design.font-xs;
-                                    vertical-alignment: center;
-                                    wrap: no-wrap;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 4px;
-
-                                VerticalLayout {
-                                    vertical-stretch: 0;
-                                    alignment: center;
-
-                                    Image {
-                                        width: 12px;
-                                        height: 12px;
-                                        source: @image-url("../assets/icons/arrow-down.svg");
-                                        colorize: Design.muted-foreground;
-                                    }
-                                }
-
-                                Text {
-                                    text: Bridge.session-download;
-                                    color: Design.foreground;
-                                    font-family: Design.font-family;
-                                    font-size: Design.font-xs;
-                                    vertical-alignment: center;
-                                    wrap: no-wrap;
-                                }
-                            }
-                        }
-
-                        if (!Bridge.session-traffic-visible) : Rectangle {
-                            horizontal-stretch: 1;
-                        }
-
-                        SwitchRow {
-                            label: @tr("System proxy");
-                            checked: Bridge.system-proxy-active;
-                            toggled(value) => {
-                                Bridge.toggle-system-proxy(value);
-                            }
-                        }
-
-                        SwitchRow {
-                            label: @tr("TUN");
-                            checked: Bridge.settings.tun-enabled;
-                            toggled(value) => {
-                                Bridge.toggle-tun(value);
-                            }
-                        }
-                    }
-                }
-
-                if (root.running && Bridge.system-proxy-error != "") : VerticalLayout {
-                    vertical-stretch: 0;
-                    padding-top: 4px;
-
-                    Text {
-                        vertical-stretch: 0;
-                        text: Bridge.system-proxy-error;
-                        color: Design.destructive;
-                        font-family: Design.font-family;
-                        font-size: Design.font-xs;
-                        wrap: word-wrap;
-                    }
-                }
-
-                Rectangle {
-                    vertical-stretch: 0;
-                    height: 12px;
-                }
-
-                // The mode and the server picker: one card, compact.
-                Card {
-                    inner-padding: 12px;
+                    padding-top: 16px;
+                    alignment: center;
 
                     VerticalLayout {
+                        width: 320px;
                         vertical-stretch: 0;
-                        spacing: 12px;
+                        spacing: 4px;
 
-                        HorizontalLayout {
-                            vertical-stretch: 0;
-                            height: 36px;
-                            spacing: 8px;
-
-                            Segmented {
-                                options: root.mode-labels;
-                                current-index: root.mode-index;
-                                selected(i) => {
-                                    Bridge.set-mode(root.mode-keys[i]);
-                                }
-                            }
-
-                            Rectangle {
-                                horizontal-stretch: 1;
-                            }
-
-                            // Icon only, so the row fits in Russian too. The tooltip
-                            // carries the label.
-                            if (Bridge.groups.length > 0) : IconButton {
-                                icon: @image-url("../assets/icons/gauge.svg");
-                                tooltip: @tr("Test latency");
-                                size: ButtonSize.md;
-                                enabled: !Bridge.busy;
-                                clicked => {
-                                    Bridge.test-latency();
-                                }
+                        Select {
+                            label: @tr("Server");
+                            items: Bridge.groups[root.gi].member-choices;
+                            current-index: root.sel-index;
+                            enabled: Bridge.groups[root.gi].kind == "select";
+                            hint: Bridge.groups[root.gi].kind == "select" ? "" : @tr("Chosen automatically");
+                            selected(i) => {
+                                root.sel-index = i;
+                                Bridge.select-member(Bridge.groups[root.gi].name, Bridge.groups[root.gi].members[i].name);
                             }
                         }
 
-                        if (Bridge.groups.length > 0) : HorizontalLayout {
-                            vertical-stretch: 0;
-                            spacing: 12px;
+                        HorizontalLayout {
+                            alignment: center;
+                            height: 28px;
 
-                            Select {
-                                label: @tr("Group");
-                                items: Bridge.group-choices;
-                                current-index: root.gi;
-                                selected(i) => {
-                                    root.sel-index = -1;
-                                    root.group-chosen = true;
-                                    root.group-index = i;
-                                }
-                            }
-
-                            Select {
-                                label: @tr("Server");
-                                items: Bridge.groups[root.gi].member-choices;
-                                current-index: root.sel-index;
-                                enabled: Bridge.groups[root.gi].kind == "select";
-                                hint: Bridge.groups[root.gi].kind == "select" ? "" : @tr("Chosen automatically");
-                                selected(i) => {
-                                    root.sel-index = i;
-                                    Bridge.select-member(Bridge.groups[root.gi].name, Bridge.groups[root.gi].members[i].name);
+                            Button {
+                                text: @tr("All servers");
+                                variant: ButtonVariant.ghost;
+                                size: ButtonSize.sm;
+                                clicked => {
+                                    Bridge.active-page = 2;
                                 }
                             }
                         }

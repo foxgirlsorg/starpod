@@ -239,6 +239,9 @@ msgstr ""
 msgid "Server"
 msgstr ""
 
+msgid "All servers"
+msgstr ""
+
 msgid "Chosen automatically"
 msgstr ""
 

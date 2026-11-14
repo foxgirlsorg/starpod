@@ -1593,6 +1593,8 @@ impl AppService {
         self.handle = Some(handle);
         self.engine_error = None;
         self.refresh_engine_status().await;
+        self.assert_default_selection(composed.default_selection.as_ref())
+            .await;
         self.log("the proxy started");
         self.sync_system_proxy().await;
         Ok(())
@@ -2145,7 +2147,7 @@ impl AppService {
             self.stop_engine().await?;
             self.log("stopped the proxy: no subscription has servers any more");
         }
-        self.apply_if_running(&composed.config).await?;
+        self.apply_if_running(&composed).await?;
         let result = self.persist_and_adopt(state, meta, caches, &composed);
         self.sync_system_proxy().await;
         if stop_proxy {
@@ -2199,20 +2201,20 @@ impl AppService {
     }
 
     /// Validate and reload the candidate, if and only if the engine runs.
-    async fn apply_if_running(&mut self, config: &RuntimeConfig) -> Result<(), AppError> {
+    async fn apply_if_running(&mut self, composed: &Composed) -> Result<(), AppError> {
         if !self.refresh_engine_status().await.is_running() {
             return Ok(());
         }
         let report = self
             .engine
-            .validate(config)
+            .validate(&composed.config)
             .await
             .map_err(|error| self.engine_failure(error))?;
         if !report.ok {
             return Err(self.rejected(&report));
         }
         self.engine
-            .reload(config)
+            .reload(&composed.config)
             .await
             .map_err(|error| self.engine_failure(error))?;
         // The engine applies its managed subscriptions again on a reload,
@@ -2220,7 +2222,30 @@ impl AppService {
         if !self.engine_managed_names().is_empty() {
             self.reassert_rule_order().await;
         }
+        self.assert_default_selection(composed.default_selection.as_ref())
+            .await;
         Ok(())
+    }
+
+    /// Select the primary group's default member on the running engine.
+    ///
+    /// The configuration already lists that member first, so a fresh start
+    /// would use it anyway; the explicit selection makes the engine's choice
+    /// match the one the app shows after a reload too. A refusal is logged,
+    /// not returned: the proxy runs, on the engine's own first member.
+    async fn assert_default_selection(&mut self, default: Option<&(String, String)>) {
+        let Some((group, member)) = default else {
+            return;
+        };
+        if !self.engine_status.phase.is_running() {
+            return;
+        }
+        if let Err(error) = self.engine.select(group, member).await {
+            let text = self.scrub(&error.to_string());
+            self.log(format!("could not select the default server: {text}"));
+            return;
+        }
+        self.refresh_live_selections().await;
     }
 
     // ----- engine-managed subscriptions (ARCHITECTURE §4.6, R12) ---------------

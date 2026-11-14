@@ -178,11 +178,52 @@ component ServerGrid inherits Rectangle {
     }
 }
 
+// One switch with its label, for the routing row.
+component SwitchRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <bool> checked;
+    callback toggled(bool);
+
+    spacing: 8px;
+    vertical-stretch: 0;
+    horizontal-stretch: 0;
+
+    Text {
+        text: root.label;
+        color: Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        font-weight: 500;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+
+    VerticalLayout {
+        vertical-stretch: 0;
+        alignment: center;
+
+        Switch {
+            checked: root.checked;
+            toggled(value) => {
+                root.toggled(value);
+            }
+        }
+    }
+}
+
 export component ProxiesPage inherits Rectangle {
     // The group whose selected tile is marked. Cleared by the timer below.
     private property <string> locate-group: "";
     // The filter, lowercased once for the case-insensitive match.
     private property <string> filter-q: Bridge.node-filter.to-lowercase();
+
+    // The routing mode. Global is left out when the active profile forbids it.
+    private property <bool> running: Bridge.engine-phase == "running";
+    private property <[string]> mode-labels: Bridge.global-mode-allowed ? [@tr("Rule"), @tr("Global"), @tr("Direct")] : [@tr("Rule"), @tr("Direct")];
+    private property <[string]> mode-keys: Bridge.global-mode-allowed ? ["rule", "global", "direct"] : ["rule", "direct"];
+    private property <int> mode-index: Bridge.mode == "direct" ? root.mode-keys.length - 1
+        : (Bridge.mode == "global" && Bridge.global-mode-allowed) ? 1
+        : 0;
 
     // The located mark lasts this long.
     Timer {
@@ -224,6 +265,128 @@ export component ProxiesPage inherits Rectangle {
                 }
             }
 
+            // The routing row: the mode, the system proxy and TUN switches, and
+            // the session traffic while connected.
+            VerticalLayout {
+                spacing: 8px;
+                padding-bottom: 16px;
+
+                Card {
+                    inner-padding: 12px;
+
+                    VerticalLayout {
+                        spacing: 8px;
+
+                        HorizontalLayout {
+                            vertical-stretch: 0;
+                            height: 36px;
+                            spacing: 16px;
+
+                            Segmented {
+                                options: root.mode-labels;
+                                current-index: root.mode-index;
+                                selected(i) => {
+                                    Bridge.set-mode(root.mode-keys[i]);
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            if (root.running && Bridge.session-traffic-visible) : HorizontalLayout {
+                                horizontal-stretch: 0;
+                                spacing: 12px;
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+
+                                    VerticalLayout {
+                                        vertical-stretch: 0;
+                                        alignment: center;
+
+                                        Image {
+                                            width: 12px;
+                                            height: 12px;
+                                            source: @image-url("../assets/icons/arrow-up.svg");
+                                            colorize: Design.muted-foreground;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: Bridge.session-upload;
+                                        color: Design.foreground;
+                                        font-family: Design.font-family;
+                                        font-size: Design.font-xs;
+                                        vertical-alignment: center;
+                                        wrap: no-wrap;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+
+                                    VerticalLayout {
+                                        vertical-stretch: 0;
+                                        alignment: center;
+
+                                        Image {
+                                            width: 12px;
+                                            height: 12px;
+                                            source: @image-url("../assets/icons/arrow-down.svg");
+                                            colorize: Design.muted-foreground;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: Bridge.session-download;
+                                        color: Design.foreground;
+                                        font-family: Design.font-family;
+                                        font-size: Design.font-xs;
+                                        vertical-alignment: center;
+                                        wrap: no-wrap;
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            vertical-stretch: 0;
+                            height: 36px;
+                            spacing: 16px;
+
+                            SwitchRow {
+                                label: @tr("System proxy");
+                                checked: Bridge.system-proxy-active;
+                                toggled(value) => {
+                                    Bridge.toggle-system-proxy(value);
+                                }
+                            }
+
+                            SwitchRow {
+                                label: @tr("TUN");
+                                checked: Bridge.settings.tun-enabled;
+                                toggled(value) => {
+                                    Bridge.toggle-tun(value);
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        if (root.running && Bridge.system-proxy-error != "") : Text {
+                            text: Bridge.system-proxy-error;
+                            color: Design.destructive;
+                            font-family: Design.font-family;
+                            font-size: Design.font-xs;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
             // The toolbar: the filter on the first row; the sort, the hide
             // switch and the expand and collapse buttons on the second.
             VerticalLayout {
@@ -242,6 +405,26 @@ export component ProxiesPage inherits Rectangle {
 
                     Rectangle {
                         horizontal-stretch: 1;
+                    }
+
+                    Button {
+                        text: @tr("Expand all");
+                        variant: ButtonVariant.ghost;
+                        size: ButtonSize.sm;
+                        horizontal-stretch: 0;
+                        clicked => {
+                            Bridge.expand-all(true);
+                        }
+                    }
+
+                    Button {
+                        text: @tr("Collapse all");
+                        variant: ButtonVariant.ghost;
+                        size: ButtonSize.sm;
+                        horizontal-stretch: 0;
+                        clicked => {
+                            Bridge.expand-all(false);
+                        }
                     }
                 }
 
@@ -286,26 +469,6 @@ export component ProxiesPage inherits Rectangle {
 
                     Rectangle {
                         horizontal-stretch: 1;
-                    }
-
-                    Button {
-                        text: @tr("Expand all");
-                        variant: ButtonVariant.ghost;
-                        size: ButtonSize.sm;
-                        horizontal-stretch: 0;
-                        clicked => {
-                            Bridge.expand-all(true);
-                        }
-                    }
-
-                    Button {
-                        text: @tr("Collapse all");
-                        variant: ButtonVariant.ghost;
-                        size: ButtonSize.sm;
-                        horizontal-stretch: 0;
-                        clicked => {
-                            Bridge.expand-all(false);
-                        }
                     }
                 }
             }
