@@ -24,6 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use starpod_core::domain::{RuntimeConfig, TunSettings};
 
+use crate::connections::ConnectionsReply;
 use crate::error::EngineError;
 use crate::log::LogStream;
 use crate::reassert::{EngineSubscription, LiveProxy};
@@ -219,6 +220,22 @@ pub trait ProxyEngine: Send + Sync {
     /// [`EngineError::EngineDown`] when the engine is not running.
     async fn delay(&self, proxy: &str, url: &str, timeout_ms: u32) -> Result<u32, EngineError>;
 
+    /// Measure every member of a proxy group at once, in milliseconds. Only
+    /// the members that answered are returned.
+    ///
+    /// The default refuses, so an engine without the call says so rather than
+    /// returning an empty result that looks like "nothing answered".
+    async fn group_delay(
+        &self,
+        _group: &str,
+        _url: &str,
+        _timeout_ms: u32,
+    ) -> Result<std::collections::BTreeMap<String, u32>, EngineError> {
+        Err(EngineError::Unsupported(
+            "group latency tests are not available for this engine".to_string(),
+        ))
+    }
+
     /// The engine's log stream.
     fn logs(&self) -> LogStream;
 
@@ -252,6 +269,21 @@ pub trait ProxyEngine: Send + Sync {
     /// The proxies in the engine's live configuration.
     async fn proxies(&self) -> Result<Vec<LiveProxy>, EngineError> {
         Err(EngineError::Unsupported("listing proxies".to_string()))
+    }
+
+    /// The engine's open connections, with the traffic totals.
+    async fn connections(&self) -> Result<ConnectionsReply, EngineError> {
+        Err(EngineError::Unsupported("listing connections".to_string()))
+    }
+
+    /// Close one open connection by its id.
+    async fn close_connection(&self, _id: &str) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported("closing a connection".to_string()))
+    }
+
+    /// Close every open connection.
+    async fn close_all_connections(&self) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported("closing connections".to_string()))
     }
 
     /// Re-attach to an engine that an earlier run of the app left running.

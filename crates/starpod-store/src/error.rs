@@ -38,9 +38,9 @@ pub enum StoreError {
     },
 
     /// A value could not be serialised to JSON.
-    #[error("could not serialise {what}: {source}")]
+    #[error("could not serialize {what}: {source}")]
     Serialize {
-        /// What was being serialised, e.g. `"user state"`.
+        /// What was being serialized, e.g. `"user state"`.
         what: &'static str,
         /// The underlying error.
         #[source]

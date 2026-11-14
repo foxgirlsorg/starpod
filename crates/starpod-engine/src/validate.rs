@@ -190,6 +190,7 @@ mod tests {
             rules: vec!["MATCH,PROXY".to_string()],
             rule_providers: Vec::new(),
             subscriptions: Vec::new(),
+            engine: Default::default(),
         }
     }
 

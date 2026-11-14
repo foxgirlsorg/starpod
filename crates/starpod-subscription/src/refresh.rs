@@ -23,9 +23,9 @@ use starpod_core::SubscriptionPayload;
 
 use crate::cache::SubscriptionCache;
 use crate::error::SubscriptionError;
-use crate::metadata::{SubscriptionMetadata, SubscriptionQuota};
+use crate::metadata::{ProfileInfo, SubscriptionMetadata, SubscriptionQuota};
 use crate::pipeline::{PayloadFormat, parse_payload};
-use crate::provider::{FetchRequest, SubscriptionProvider};
+use crate::provider::{FetchRequest, FetchResponse, SubscriptionProvider};
 
 /// What a refresh did.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,11 +33,14 @@ pub enum RefreshOutcome {
     /// The subscription was fetched, parsed and validated.
     Refreshed {
         /// The validated payload.
-        payload: SubscriptionPayload,
+        payload: Box<SubscriptionPayload>,
         /// The format the body was in.
         format: PayloadFormat,
         /// The quota the server reported, if it reported one.
         quota: Option<SubscriptionQuota>,
+        /// The profile headers the server sent. Each field is `None` when its
+        /// header was absent, so a successful refresh replaces all of them.
+        profile: Box<ProfileInfo>,
     },
     /// The refresh failed.
     ///
@@ -48,6 +51,10 @@ pub enum RefreshOutcome {
         error: SubscriptionError,
         /// Whether a previously cached payload is still available.
         kept_previous: bool,
+        /// The profile headers, when the server answered with them before the
+        /// refresh failed. Set for a device-limit refusal, so the support link
+        /// can still be shown; `None` otherwise.
+        profile: Option<Box<ProfileInfo>>,
     },
 }
 
@@ -68,7 +75,7 @@ impl RefreshOutcome {
     /// The payload, if the refresh succeeded.
     pub fn payload(&self) -> Option<&SubscriptionPayload> {
         match self {
-            Self::Refreshed { payload, .. } => Some(payload),
+            Self::Refreshed { payload, .. } => Some(payload.as_ref()),
             Self::Failed { .. } => None,
         }
     }
@@ -98,26 +105,55 @@ pub async fn refresh(
             return RefreshOutcome::Failed {
                 error: SubscriptionError::Provider(error),
                 kept_previous: !cache.is_empty(),
+                profile: None,
             };
         }
     };
 
     let quota = response.userinfo().and_then(SubscriptionQuota::parse);
+    let profile = Box::new(ProfileInfo::from_response(&response));
+
+    // A device-limit refusal is checked first: the provider may answer it with
+    // a page, and the page must not be reported as the wrong thing.
+    if profile.device_limit {
+        return RefreshOutcome::Failed {
+            error: SubscriptionError::DeviceLimitReached,
+            kept_previous: !cache.is_empty(),
+            profile: Some(profile),
+        };
+    }
+    if is_web_page(&response) {
+        return RefreshOutcome::Failed {
+            error: SubscriptionError::ServedWebPage,
+            kept_previous: !cache.is_empty(),
+            profile: None,
+        };
+    }
 
     match parse_payload(&response.body, &metadata.id, &metadata.label) {
         Ok(parsed) => {
             cache.store(parsed.payload.clone(), now);
             RefreshOutcome::Refreshed {
-                payload: parsed.payload,
+                payload: Box::new(parsed.payload),
                 format: parsed.format,
                 quota,
+                profile,
             }
         }
         Err(error) => RefreshOutcome::Failed {
             error,
             kept_previous: !cache.is_empty(),
+            profile: None,
         },
     }
+}
+
+/// Whether the response is an HTML or XML page rather than a subscription.
+fn is_web_page(response: &FetchResponse) -> bool {
+    response.header("content-type").is_some_and(|value| {
+        let media_type = value.split(';').next().unwrap_or_default().trim();
+        media_type.eq_ignore_ascii_case("text/html") || media_type.eq_ignore_ascii_case("text/xml")
+    })
 }
 
 #[cfg(test)]
@@ -305,5 +341,123 @@ proxies:
             panic!("the refresh succeeded");
         };
         assert_eq!(*format, PayloadFormat::Base64Yaml);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_reports_the_profile_headers_it_was_sent() {
+        let provider = StaticSubscriptionProvider::with_response(
+            FetchResponse::new(BODY.as_bytes().to_vec())
+                .with_header("announce", "Maintenance tonight")
+                .with_header("profile-title", "Foxgirls VPN"),
+        );
+        let mut cache = SubscriptionCache::new();
+        let outcome = refresh(&provider, &request(), &metadata(), &mut cache, 1_000).await;
+
+        let RefreshOutcome::Refreshed { profile, .. } = outcome else {
+            panic!("the refresh succeeded");
+        };
+        assert_eq!(profile.announce.as_deref(), Some("Maintenance tonight"));
+        assert_eq!(profile.title.as_deref(), Some("Foxgirls VPN"));
+        assert_eq!(profile.support_url, None, "an absent header reads as none");
+    }
+
+    #[tokio::test]
+    async fn a_device_limit_refusal_keeps_the_cached_payload_and_the_support_link() {
+        let provider = StaticSubscriptionProvider::with_response(
+            FetchResponse::new(BODY.as_bytes().to_vec())
+                .with_header("x-hwid-max-devices-reached", "true")
+                .with_header("support-url", "https://help.example.com"),
+        );
+        let mut cache = SubscriptionCache::new();
+        cache.store(cached_payload("Old Node"), 500);
+
+        let outcome = refresh(&provider, &request(), &metadata(), &mut cache, 1_000).await;
+
+        let RefreshOutcome::Failed {
+            error,
+            kept_previous,
+            profile,
+        } = outcome
+        else {
+            panic!("the device limit fails the refresh");
+        };
+        assert_eq!(error, SubscriptionError::DeviceLimitReached);
+        assert!(kept_previous);
+        let profile = profile.expect("the headers are kept for the support link");
+        assert_eq!(
+            profile.support_url.as_deref(),
+            Some("https://help.example.com")
+        );
+        assert_eq!(
+            cache.payload(),
+            Some(&cached_payload("Old Node")),
+            "the payload from before the limit is still in use"
+        );
+    }
+
+    #[test]
+    fn the_device_limit_message_is_the_one_the_user_is_shown() {
+        assert_eq!(
+            SubscriptionError::DeviceLimitReached.to_string(),
+            "This subscription has reached its device limit. Contact support to free a slot."
+        );
+    }
+
+    #[tokio::test]
+    async fn a_web_page_is_refused_with_a_clear_error_and_keeps_the_cache() {
+        let provider = StaticSubscriptionProvider::with_response(
+            FetchResponse::new(BODY.as_bytes().to_vec())
+                .with_header("content-type", "text/html; charset=utf-8"),
+        );
+        let mut cache = SubscriptionCache::new();
+        cache.store(cached_payload("Old Node"), 500);
+
+        let outcome = refresh(&provider, &request(), &metadata(), &mut cache, 1_000).await;
+
+        assert_eq!(outcome.error(), Some(&SubscriptionError::ServedWebPage));
+        assert_eq!(
+            SubscriptionError::ServedWebPage.to_string(),
+            "The server returned a web page, not a subscription"
+        );
+        assert_eq!(cache.payload(), Some(&cached_payload("Old Node")));
+    }
+
+    #[tokio::test]
+    async fn an_xml_page_is_refused_too_but_a_yaml_content_type_is_not() {
+        for content_type in ["text/xml", "TEXT/XML; charset=utf-8"] {
+            let provider = StaticSubscriptionProvider::with_response(
+                FetchResponse::new(BODY.as_bytes().to_vec())
+                    .with_header("content-type", content_type),
+            );
+            let mut cache = SubscriptionCache::new();
+            let outcome = refresh(&provider, &request(), &metadata(), &mut cache, 1_000).await;
+            assert_eq!(
+                outcome.error(),
+                Some(&SubscriptionError::ServedWebPage),
+                "{content_type}"
+            );
+        }
+
+        let provider = StaticSubscriptionProvider::with_response(
+            FetchResponse::new(BODY.as_bytes().to_vec())
+                .with_header("content-type", "application/yaml"),
+        );
+        let mut cache = SubscriptionCache::new();
+        let outcome = refresh(&provider, &request(), &metadata(), &mut cache, 1_000).await;
+        assert!(outcome.is_ok(), "a YAML body is a subscription");
+    }
+
+    #[tokio::test]
+    async fn a_refresh_reports_the_update_interval_for_the_schedule() {
+        let provider = StaticSubscriptionProvider::with_response(
+            FetchResponse::new(BODY.as_bytes().to_vec())
+                .with_header("profile-update-interval", "2"),
+        );
+        let mut cache = SubscriptionCache::new();
+        let outcome = refresh(&provider, &request(), &metadata(), &mut cache, 1_000).await;
+        let RefreshOutcome::Refreshed { profile, .. } = outcome else {
+            panic!("the refresh succeeded");
+        };
+        assert_eq!(profile.update_interval_hours, Some(2));
     }
 }

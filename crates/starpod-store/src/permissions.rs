@@ -178,7 +178,7 @@ fn restrict_windows(path: &Path) -> Result<(), StoreError> {
     // buffer and the revision is the one `InitializeAcl` documents for a
     // plain (non-canonical) ACL.
     unsafe { InitializeAcl(acl_ptr, acl_size as u32, ACL_REVISION) }
-        .map_err(|e| permission_error(path, &format!("could not initialise the ACL: {e}")))?;
+        .map_err(|e| permission_error(path, &format!("could not initialize the ACL: {e}")))?;
 
     // SAFETY: the ACL was just initialised with room for one ACE of
     // `ace_size` bytes, and the SID is a live, owned SID.

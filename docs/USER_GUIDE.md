@@ -2,7 +2,7 @@
 
 This guide covers the desktop app: installing the engine, adding subscriptions, choosing servers, writing rules, and where your data lives. For building the app, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
-Screen and button names may change before the first release. The behaviour described here is what the code does today.
+Screen and button names may change before the first release. The behavior described here is what the code does today.
 
 ## 1. First run and the engine
 
@@ -68,6 +68,38 @@ If the proxy is running and a change leaves no usable subscription (removing the
 
 A proxy that is already running when the app starts with no usable subscription (one an earlier run left running) is left running, so you can Disconnect it. Restart is refused until a subscription has servers.
 
+### 2.4 What a provider can send
+
+An app-managed subscription's response headers are read on each refresh. Header names match regardless of case. A header that is absent, empty or unreadable is treated as not sent.
+
+| Header | What the app does |
+|---|---|
+| `subscription-userinfo` | Shows the traffic used, the plan total and the expiry date. See section 2.1 |
+| `profile-title` | Names the subscription. Falls back to the file name in `content-disposition`, then to your label |
+| `content-disposition` | When there is no `profile-title`, its file name (`filename*` is decoded first, then `filename`; a `.yaml`, `.yml` or `.txt` extension is dropped) names the subscription |
+| `profile-web-page-url` | The "web page" link on the Home page. Only `http` and `https` addresses are kept |
+| `profile-web-page-name` | The label of that web page link. Without it the address is shown |
+| `profile-logo` | The subscription's logo on the Home page. Downloaded once per refresh, at most 512 KiB, within 10 seconds. PNG, JPEG and SVG are accepted. A logo that fails to download leaves the previous one in place |
+| `announce` | The announcement shown on the Home page. The two characters `\n` become a line break |
+| `announce-url` | A link shown with the announcement. Only `http` and `https` |
+| `support-url` | The support link, shown with the announcement and with a device-limit notice. Only `http` and `https` |
+| `profile-update-interval` | The refresh interval, in whole hours, when you have not set your own (section 4, P7) |
+| `global-mode` | `false` disables the Global routing mode while the subscription is active. A Global choice then runs as Rule, and the Global option is unavailable |
+| `expand-proxy-groups` | Stored. `false` means proxy groups start collapsed |
+| `x-hwid-limit`, `x-hwid-max-devices-reached` | `true` means this device has no slot left. The refresh fails with "This subscription has reached its device limit. Contact support to free a slot." The last working payload stays in use, and the support link is shown |
+| `Content-Type: text/html` or `text/xml` | The refresh fails with "The server returned a web page, not a subscription", because a landing or login page is not a subscription |
+
+**Device identification.** Each fetch sends these headers, so a provider can tell devices apart:
+
+- `x-hwid`: a stable, anonymous identifier. It is the first 32 hex characters of a SHA-256 of this computer's machine id (Windows `MachineGuid`, Linux `/etc/machine-id`, macOS `IOPlatformUUID`). The machine id itself is never sent. Where no machine id can be read, the app generates a random identifier once and keeps it in your data folder.
+- `x-device-os`: `Windows`, `Linux` or `macOS`.
+- `x-ver-os`: the OS version, best effort (on Windows the build number, as `10.0.<build>`).
+- `x-device-model`: the device model, best effort. The CPU architecture when the model cannot be read.
+
+The app also sends its own `User-Agent` (`starpod/<version>`) on every fetch.
+
+To stop the device headers, turn off **Send device identification** in Settings. With it off, none of the four `x-` headers is sent. A provider that limits devices may then refuse the subscription.
+
 ## 3. Servers and node selection
 
 The Servers screen lists the nodes from your own list and from app-managed subscriptions.
@@ -87,8 +119,9 @@ The running configuration is built from your settings and the subscriptions. Whe
 | P2 | Mode, log level, TUN | Your setting, then the subscription's, then the default |
 | P3 | Nodes | The union of subscription nodes and your nodes. On a name clash, yours wins |
 | P4 | Proxy groups | Per group name. Your group replaces a subscription group of the same name |
-| P5 | Rules | Your rules first, in your order. Then subscription rules. Then the `MATCH` tail |
+| P5 | Rules | Your rules first, in your order. Then subscription rules. Then the `MATCH` tail, whose target is your selected group, else the first `MATCH` rule's target, else `PROXY` |
 | P6 | Selected node | Your selection, by node id. Then the subscription's default |
+| P7 | Refresh interval | Your automatic-refresh setting. Then the subscription's `profile-update-interval`. Then 60 minutes. `0` in your setting means manual only |
 
 Two guarantees follow from this:
 
@@ -105,7 +138,12 @@ Rules decide where each connection goes. The engine checks them from top to bott
 
 1. Your rules, in the order you set.
 2. Subscription rules from app-managed subscriptions.
-3. `MATCH`, the catch-all. The app always places it last. If you write a `MATCH` rule yourself, the app drops it and writes its own.
+3. `MATCH`, the catch-all. The app always places it last. Its target is chosen in this order:
+   - the group you select on the Home page (your selected group), when that group exists;
+   - otherwise the target of the first `MATCH` rule, whether it comes from a subscription or from you, when that names an existing group or a built-in outbound such as `DIRECT`;
+   - otherwise the app's `PROXY` group.
+
+   So a subscription that ends with `MATCH,<its group>` sends unmatched traffic to that group, and the Home page shows that group first. Any rules written after the first `MATCH` are removed, and the build reports it.
 
 ### 5.1 Two editors
 
@@ -130,7 +168,7 @@ The meow grammar has 31 rule tokens (`crates/starpod-core/src/rules/grammar.rs`)
 | Logic | `AND`, `OR`, `NOT` |
 | Catch-all | `MATCH` (written by the app, not by you) |
 
-Not offered: `RULE-SET` and `SUB-RULE`. They name a rule provider and a named rule block. The app supplies neither, so a rule of either kind can never validate. A raw line with one is refused when you apply it, and the error says the feature is not supported yet.
+Not offered: `SUB-RULE`. It names a named rule block, and the app defines none, so it can never validate. A raw line with one is refused when you apply it. `RULE-SET` is accepted. It names a rule provider, which a subscription can declare. The rule validates only when some profile declares a provider with that name; otherwise the error says which name is missing.
 
 Things to know:
 
@@ -143,6 +181,7 @@ Things to know:
 
 | Setting | Default | Notes |
 |---|---|---|
+| Language | System | Settings > General > Language. System follows your Windows or Linux language: Russian when it is Russian, English otherwise. English and Русский pin the language; the tray follows it too |
 | Mixed port (HTTP and SOCKS) | 7890 | Used when you leave it unset |
 | SOCKS port | 7891 | Used when you leave it unset |
 | Port | unset | Optional |
@@ -151,6 +190,13 @@ Things to know:
 | Mode | Rule | Rule, Global or Direct. Global sends everything through the selected node. Direct sends everything directly |
 | Log level | Info | Silent, Error, Warning, Info or Debug |
 | TUN | Off | See below |
+| System proxy | Off | Points the operating system's proxy at the running engine. See 6.2 |
+| Proxy mode | Manual | Manual sets a fixed server. PAC serves a script instead. See 6.2 |
+| Bypass list | Local and private networks | Hosts the system proxy is skipped for |
+| PAC script | Private hosts direct, the rest through the engine | Used in PAC mode |
+| Start at login | Off | Starts Starpod when you log in. See 6.2 |
+| Silent start | Off | With Start at login, Starpod starts in the tray without its window |
+| Connect at start | Off | Connects once your saved state has loaded, when a subscription has servers |
 
 **Allow LAN is off by default, and why.** When it is on, other machines on your network can use the proxy ports. You did not ask for that, so the default is off.
 
@@ -159,6 +205,62 @@ Things to know:
 **TUN MTU** is the largest packet size the adapter carries, from 1280 to 9000 bytes, or 0 for the engine's default. The floor is 1280 because that is the smallest MTU IPv6 allows, and TUN carries IPv6 traffic as well as IPv4. A smaller value is refused.
 
 **TUN** sends all system traffic through a virtual network interface. It needs administrator rights on Windows, root on macOS, and root or `CAP_NET_ADMIN` on Linux. The app does not start the engine with those rights. Turning TUN on sends the setting to the running engine, which works only if the engine already has the privileges. The elevation helper described in `docs/research/ARCHITECTURE.md` section 4.5 is not implemented. Treat TUN as not yet usable.
+
+### 6.1 Engine settings
+
+Every setting below is optional. Leave it unset and the engine's own default applies, and nothing is written to the generated configuration. A value you set wins over the subscription's; the DNS block is the one exception, described below.
+
+| Setting | Default | Notes |
+|---|---|---|
+| TUN stack | Engine default | `gvisor`, `mixed` or `system`. Applies while TUN is on |
+| TUN strict route | Engine default | Drops unroutable traffic instead of letting it leak. Applies while TUN is on |
+| TUN auto-redirect | Engine default | Linux only. Installs firewall redirects for TUN |
+| TUN auto-detect interface | Engine default | Lets the engine find the outbound interface itself |
+| TUN endpoint-independent NAT | Engine default | Keeps UDP NAT mappings per destination |
+| TUN route addresses | Engine default | CIDRs routed through TUN, one per line |
+| TUN excluded addresses | None | CIDRs kept off TUN, one per line, such as your LAN |
+| TUN DNS hijack | Engine default | Targets as `host:port`, such as `any:53`. Validated on save |
+| IPv6 | Engine default | On or off. Off stops the engine handling IPv6 |
+| Unified delay | Engine default | Measures connection latency the same way for every protocol |
+| TCP concurrent | Engine default | Races several addresses for a TCP connection at once |
+| Find process mode | Engine default | `off`, `strict` or `always`. How the process behind a connection is looked up |
+| Keep-alive interval | Engine default | Seconds, 1 to 86400 |
+| DNS | Subscription's | Enable, enhanced mode (`fake-ip` or `redir-host`), fake-IP range (a CIDR), fake-IP filter, nameservers, fallback, default and proxy-server nameservers, nameserver policy (`domain: server, server`), use hosts. Only the settings you set are written |
+| Override subscription DNS | Off | When on, your DNS block replaces the subscription's. When off, the subscription's DNS block is used if it has one |
+| Hosts | None | Static `domain ip` entries, one per line |
+| Sniffer | Engine default | Enable, force DNS mapping, parse pure IP, override destination, sniffed ports per protocol (`HTTP: 80, 8080-8880`; protocols HTTP, TLS and QUIC), force domains and skip domains |
+| Geodata mode | Engine default | `dat` or `mmdb` |
+| Geodata sources | Engine default | URLs for GeoIP, geosite, the MMDB and the ASN database. Use `https://` |
+| Geodata auto-update | Engine default | The engine refreshes geodata in the background, every 1 to 8760 hours |
+| Update geodata now | Not run | Downloads the geodata databases and reloads the engine. The last refresh time is shown |
+| Latency test URL | `https://www.gstatic.com/generate_204` | The address each latency test measures against. Must be `http://` or `https://` |
+| Latency test timeout | 5000 ms | Between 100 and 60000 ms |
+| Test group latency | Not run | Measures every member of a proxy group at once and fills in the node latencies |
+| Engine channel | Stable | `stable` for tagged releases, or `alpha` for the rolling builds |
+| Check for engine update | Not run | Compares the installed engine with the newest one on the chosen channel |
+| Upgrade engine | Not run | Downloads and checks the newest engine on the channel, then restarts the proxy on it if it was running |
+| Log lines kept | 1000 | Engine log lines the Logs page keeps, from 100 to 2000 |
+
+**Engine updates are checked, not automatic.** An upgrade replaces the engine binary after its checksum matches the release. A running proxy stops for the install and starts again on the new engine. If the install fails, the proxy restarts on the old one.
+
+**Geodata files are written next to the generated configuration.** The engine's home directory is that same folder, so the engine reads the files the app downloads.
+
+### 6.2 System proxy and startup
+
+**System proxy** makes other programs use the engine without each being configured. It is set only while the engine runs. Turning it on while the engine is stopped does nothing until you connect. Disconnecting, quitting the app, or the engine stopping on its own restores your previous settings.
+
+- **Manual** sets the HTTP, HTTPS and SOCKS servers to `127.0.0.1` and the mixed port.
+- **PAC** tells the system to fetch a script from `127.0.0.1` on a port Starpod chooses. The script decides per host. The default sends private and loopback hosts direct and everything else through the engine, falling back to direct if the engine does not answer. The script must define `FindProxyForURL`, and `%mixed-port%` is replaced with the engine's port.
+
+Starpod saves your previous proxy settings before it changes them. If Starpod crashes or is killed while the proxy is set, the next start restores those settings. Until then, other programs may fail to reach the internet, so start Starpod again or turn the system proxy setting back to what you want.
+
+Where it works: **Windows** (the per-user proxy settings), **macOS** (every enabled network service, through `networksetup`), and **Linux** on GNOME (`gsettings`) or KDE (`kwriteconfig5` or `kwriteconfig6`). A desktop with none of these reports that the setting cannot be applied. Some applications read the proxy only at start, so they need a restart to use it.
+
+**Start at login** adds Starpod to your user account's start-up list: a Run entry on Windows, an autostart desktop entry on Linux, or a LaunchAgent on macOS. Nothing is installed for other users. Turning it off removes the entry. The entry is rewritten at each start, so it follows the app if you move it.
+
+**Silent start** applies only to a login start. The window stays hidden, and the tray icon is the way back in. If the desktop has no tray, the window opens anyway, since it is the only way to reach the app.
+
+**Connect at start** connects once your saved state has loaded. It does nothing when no subscription supplies servers or the engine is not installed.
 
 ## 7. Logs
 
@@ -171,10 +273,29 @@ Secrets never appear in an error message either. The app scrubs every error text
 
 ## 8. Tray and window
 
-- **Tray available.** Closing the window hides it to the system tray. The proxy keeps running. Quit in the tray menu stops the engine gracefully and exits. The engine gets a stop signal and 10 seconds to exit before it is killed.
+- **Tray available.** Closing the window hides it to the system tray. The proxy keeps running. Settings > General > Close to tray turns this off, so that closing the window quits instead. Quit in the tray menu stops the engine gracefully and exits. The engine gets a stop signal and 10 seconds to exit before it is killed.
 - **Tray not available.** Some Linux desktops have no tray host. Closing the window then stops the engine and exits. The app says so once at startup.
 
-The app does not start itself at login. There is no autostart setting yet.
+The app starts itself at login only when you turn on **Start at login** (see 6.2).
+
+### 8.1 One-click import
+
+A subscription can be added from a link. Open a link of this shape in a browser or a shell:
+
+```text
+starpod://install-config?url=<percent-encoded https address>&name=<optional name>
+```
+
+For example, on Windows: `start starpod://install-config?url=https%3A%2F%2Fexample.com%2Fsub`
+
+- The `url` must be an http or https address. Encode it so that its own `?`, `&` and `=` do not end the parameter. A literal `+` in the address must be sent as `%2B`, because a `+` in a link is read as a space.
+- The `name` is optional. When it is missing, the subscription is named after the address's host.
+- The links `clash://`, `mihomo://` and `koala-clash://` are also read when they are passed to Starpod on the command line. Starpod does not register them with the system, so they do not open Starpod from a browser.
+- Starpod asks before it adds anything. The window comes to the front with an "Add subscription?" dialog that names only the host of the address. The address itself is not shown, because it usually carries a private token. Choose **Add** to add the subscription and fetch it, or **Cancel** to do nothing.
+- If a subscription with the same address already exists, Add fetches it again instead of adding a copy.
+- If the link is wrong, the window shows a banner that says why, and nothing is added.
+- Only one Starpod runs at a time. A second launch, including one from a link, hands its request to the running app and exits.
+- On Windows and Linux, Starpod registers the `starpod://` scheme for your user each time it starts. On Linux this writes `starpod.desktop` under `~/.local/share/applications` and makes it the handler for `starpod://`. macOS needs an app bundle to register a scheme, so links do not open Starpod there yet.
 
 ## 9. Where your data is
 

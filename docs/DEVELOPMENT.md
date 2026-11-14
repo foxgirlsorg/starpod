@@ -1,6 +1,6 @@
 # Starpod Developer Guide
 
-This guide covers how the code is organised, how to build and test it on each platform, how CI runs, and what is still missing. For the design rationale, read `docs/research/ARCHITECTURE.md`. For the engine facts the code depends on, read `docs/research/meow-integration-contract.md`.
+This guide covers how the code is organized, how to build and test it on each platform, how CI runs, and what is still missing. For the design rationale, read `docs/research/ARCHITECTURE.md`. For the engine facts the code depends on, read `docs/research/meow-integration-contract.md`.
 
 ## 1. Architecture
 
@@ -76,6 +76,33 @@ Other operations: node selection is `PUT /proxies/{group}` on a running engine a
 - The controller binds to loopback. The secret is passed on the command line (`--secret`); the engine has no other way to receive it. On Unix, other users on the same machine can read it from the process table. This is an engine interface limit, recorded in ARCHITECTURE section 4.2.
 - A panic hook in `starpod-app/src/main.rs` stops the engine before the process exits.
 - Engine downloads are verified against the release's `.sha256` file. See `starpod-engine/src/download.rs`.
+
+### 1.6 Single instance and deep links
+
+- `starpod-app/src/instance.rs` keeps one primary instance. The primary binds `127.0.0.1` on a random port and writes `<data dir>/instance.json` with `{"port", "token"}` (the token is 32 random hex digits). It is written through a temporary file and removed on a clean exit.
+- A later launch reads that file and connects within 500 ms. If it connects, it sends `token\nCOMMAND\n`, where the command is `SHOW` or a deep link, and exits 0. If it cannot connect, the file is stale and that launch becomes the primary. The listener drops messages with the wrong token or over 8 KiB.
+- Links are parsed in `starpod-app/src/deeplink.rs`. The confirmation dialog is driven from `ui/runtime.rs` and `ui/callbacks.rs`, and it is declared at the end of `starpod-ui/ui/app.slint`.
+- `starpod-app/src/scheme.rs` registers only the `starpod` scheme, at every start. On Windows it writes `HKCU\Software\Classes\starpod`. On Linux it writes `starpod.desktop` and runs `xdg-mime`. Both are idempotent, and failures are only logged. macOS needs an app bundle with an Info.plist entry, which this build does not produce, so nothing is registered there.
+- To test the single instance by hand, start Starpod, then run `starpod.exe "starpod://install-config?url=https%3A%2F%2Fexample.com%2Fsub"` from a second terminal. The first window should come to the front with the dialog.
+
+### 1.7 System proxy and crash recovery
+
+The system proxy lives in `crates/starpod-app/src/sysproxy/`. `mod.rs` holds the controller (`SystemProxy`), the record file and the `Backend` trait. `win.rs`, `mac.rs` and `linux.rs` implement the trait for each platform, and `other.rs` refuses. `pac.rs` serves the PAC script on loopback. The service calls it from `sync_system_proxy`, which runs after connect, disconnect, every commit, and an engine that stopped on its own.
+
+The rules, in code:
+
+- **Set only while the engine runs and the setting is on.** `sync_system_proxy` computes the wanted state from the engine phase and `preferences.system_proxy`. It re-applies when the mode, port, bypass or script changes, and does nothing when the desired state already holds.
+- **The record is written before anything changes**, to `sysproxy-state.json` in the data directory, via a temporary file and a rename. It is written only when none exists. A second apply therefore never records Starpod's own settings as the user's.
+- **Restore on every exit path.** `request_quit` in `ui/runtime.rs` and the panic hook in `main.rs` both call `restore_system_proxy` after `disconnect`. A normal disconnect restores through `stop_engine`.
+- **Restore after a crash.** `load` finds the record and restores it when no engine is running. An engine that is still running (adopted from an earlier run) keeps the proxy and the record, since its settings are still in effect.
+- **A failed restore keeps the record**, so the next start tries again. A record that cannot be parsed, or that has another version, is an error and is not discarded.
+- **A failed apply rolls back** through the same release path before the error is returned.
+
+The platform writes go through `Backend::capture`, `apply` and `restore`. Each setting is a `SavedSetting` (location, key, optional value). Restoring a value that was absent removes it. No backend runs a shell: `networksetup`, `gsettings`, `kwriteconfig` and `dbus-send` get argument lists.
+
+Tests use a fake `Backend` (`sysproxy/mod.rs`), so the flow (apply, release, a second apply, crash recovery, rollback, the record format) runs on every platform. The platform code itself is not exercised in CI.
+
+Autostart is in `crates/starpod-app/src/autostart.rs`. The Windows entry is written through `sysproxy::set_run_value`, which owns the registry access. `service.save_preferences` applies a change to the login entry, and `main.rs` re-writes it at each start.
 
 ## 2. Building
 
@@ -160,7 +187,7 @@ Each crate tests its own pure logic:
 - `FakeEngine` implements `ProxyEngine`. It records every call, can reject validations on demand (`reject_validations`), can fail selections (`fail_selects`), and returns scripted latencies (`set_delay`).
 - `Scripted` implements `SubscriptionProvider` and returns canned responses, including errors, in order. It also records the requests it received, so tests can check the token is sent.
 
-Temporary directories (`tempfile`) hold the state. The test names describe the behaviour they pin. Examples:
+Temporary directories (`tempfile`) hold the state. The test names describe the behavior they pin. Examples:
 
 - `connect_validates_then_starts_with_namespaced_nodes_and_user_rules_in_order`
 - `a_user_preference_survives_a_refresh_with_a_different_payload`
@@ -201,7 +228,7 @@ If the engine is not installed, the test prints `skipped: the meow engine is not
 - The privileged TUN path. CI runners are not elevated, and the elevation helper is not implemented (section 5).
 - The Slint window, tray and screens. Nothing renders or clicks the UI in CI.
 - Real subscription providers. Tests use fixtures in the Clash/Mihomo shape.
-- Real meow behaviour beyond the one ignored test.
+- Real meow behavior beyond the one ignored test.
 
 ## 4. Formatting, linting and CI
 
@@ -218,7 +245,40 @@ Clippy runs with warnings as errors on all targets, including tests.
 - **Linux only:** the apt packages from section 2.1, and `cargo fmt --all --check`.
 - **Every platform:** the Rust toolchain 1.92.0 with `rustfmt` and `clippy` (`dtolnay/rust-toolchain`), the `Swatinem/rust-cache` cache, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`.
 
-CI does not run the ignored real-engine test, does not build a release, and does not check the UI visually.
+CI does not run the ignored real-engine test, does not build a release, and does not check the UI visually. Release builds have their own workflow (section 4.1).
+
+### 4.1 Release builds
+
+`.github/workflows/build.yml` builds the `starpod` binary in release mode for three targets:
+
+| Artifact | Runner | Target |
+|---|---|---|
+| `starpod-windows-x86_64.zip` | `windows-latest` | `x86_64-pc-windows-msvc` |
+| `starpod-linux-x86_64.tar.gz` | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` |
+| `starpod-macos-aarch64.tar.gz` | `macos-14` | `aarch64-apple-darwin` |
+
+Each archive holds one folder named after the artifact. The folder contains the binary (`starpod.exe` on Windows), `README.md`, and any license file present in the repository (`LICENSE*`, and `crates/starpod-app/assets/TWEMOJI-LICENSE.txt` once it is committed). Each archive has a `.sha256` file next to it, produced with `sha256sum` (or `shasum -a 256` on macOS).
+
+- **When it runs:** pushes to `main`, pull requests, tags matching `v*`, and manual runs (`workflow_dispatch`). Every run uploads its archives and checksums as workflow artifacts, kept for 14 days.
+- **How it builds:** `cargo build --release --locked -p starpod-app --target <triple>` with Rust 1.92.0. `--locked` fails the build if `Cargo.lock` is out of date. The Linux packages from section 2.1 are installed on the Linux job. The build job does not run tests, clippy or fmt; `ci.yml` does that.
+- **Why Ubuntu 22.04:** the Linux binary links against the glibc of the build machine, so the older image produces a binary that runs on more distributions.
+- **Concurrency:** a newer run on the same branch or pull request cancels the older one. Tag runs are never cancelled.
+- **Permissions:** the workflow defaults to `contents: read`. Only the release job has `contents: write`.
+
+**Cutting a release**
+
+1. Make sure `main` is green in `ci.yml` and `build.yml`.
+2. Tag the commit and push the tag:
+
+   ```sh
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+3. The tag run builds the three archives. The release job checks every `.sha256` file, then creates a GitHub Release for the tag with the archives, the checksums and generated release notes. The release is published, not left as a draft. A tag containing a hyphen, such as `v0.2.0-rc1`, is marked as a pre-release.
+4. Open the release page and download one archive to confirm it contains the expected files.
+
+**Limits of these builds.** The binaries are unsigned: Windows SmartScreen and macOS Gatekeeper will warn on first launch, and the macOS binary is not notarized. There is no installer and no `.app` bundle. The project has not yet run these binaries on real Windows, Linux or macOS machines, so a release is a build product, not a tested one.
 
 ## 5. Known limitations and remaining work
 
@@ -230,13 +290,13 @@ CI does not run the ignored real-engine test, does not build a release, and does
 
 **Engine-managed subscriptions.** Rule order is re-asserted every 30 s after an engine refresh (`GET /rules` → reorder → `POST /rules` only when it differs). Name shadowing of a user node is reported as a warning when the engine reports a different server/port. The response envelopes of `/api/subscriptions`, `/rules` and `/proxies` are not documented in the contract and are parsed defensively (assumptions are commented in `rest.rs`). The Authorization header cannot be sent for engine-managed subscriptions (the engine's declaration has no header field).
 
-**RULE-SET / SUB-RULE.** Not offered and rejected with a clear message: the app supplies no rule providers or sub-rule blocks.
+**SUB-RULE.** Not offered and rejected with a clear message: the app defines no sub-rule blocks. **RULE-SET** is accepted. Subscriptions declare `rule-providers` (only `http` and `inline`; `http` caches under `rule-providers/`), and `compose` refuses a `RULE-SET` whose name no declared provider has.
 
 **Latency probe.** `GET /proxies/{name}/delay?url=...&timeout=...` follows the mihomo convention; not checked against a live meow instance.
 
 **Tray on Linux.** Requires a StatusNotifierItem host. Tray availability is judged from creation errors only; a desktop without a host may report success and show nothing.
 
-**Autostart, release packaging, signing.** Not implemented. `docker compose run --rm windows` produces an unsigned `dist/starpod.exe` (x86_64-pc-windows-gnu). The engine download is checked against the release's SHA-256 file only (ARCHITECTURE R3).
+**Installers, signing.** Autostart is implemented (section 1.7). Installers are not. Release archives come from `build.yml` (section 4.1) and are unsigned. `docker compose run --rm windows` produces an unsigned `dist/starpod.exe` (x86_64-pc-windows-gnu). The engine download is checked against the release's SHA-256 file only (ARCHITECTURE R3).
 
 **Secret fallback.** On a machine with no platform store, subscription addresses and headers are kept in `secrets.json` without encryption (owner-only file permissions).
 

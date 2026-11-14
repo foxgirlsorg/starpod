@@ -1,0 +1,470 @@
+// ProxiesPage (ui-spec.md section 5.3): one collapsible section per proxy
+// group, each with a grid of server tiles. Sorting, the hide switch, the
+// group toggles and the latency tests are all handled here; the list itself
+// (order, hidden members, expanded state) is kept by Rust, which the Bridge
+// carries.
+
+import { Design } from "../design.slint";
+import { Bridge, MemberItem, TextRun } from "../bridge.slint";
+import {
+    Button, ButtonVariant, ButtonSize, IconButton, Input, Badge, BadgeVariant,
+    Card, EmptyState, PageHeader, PageFrame, Segmented, Switch, Separator, LatencyText
+} from "../primitives.slint";
+import { EmojiText } from "../emoji-text.slint";
+
+// One server tile: name on top, protocol and latency below. The selected tile
+// takes the primary border and soft fill; the located tile gets a light ring;
+// clickable tiles show a hover fill. The width is set by the grid that holds it.
+component ServerTile inherits Rectangle {
+    in property <string> name;
+    in property <[TextRun]> name-runs;
+    in property <string> protocol;
+    in property <int> latency-ms: -1;
+    in property <bool> selected: false;
+    in property <bool> located: false;
+    in property <bool> clickable: false;
+    callback clicked();
+
+    height: 60px;
+    border-radius: Design.radius-md;
+    border-width: 1px;
+    border-color: root.selected ? Design.primary : transparent;
+    background: root.selected ? Design.primary-soft
+        : (ta.has-hover && root.clickable ? Design.card-hover : Design.muted);
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 4px;
+
+        HorizontalLayout {
+            height: 18px;
+
+            EmojiText {
+                runs: root.name-runs;
+                fallback: root.name;
+                font-size: Design.font-base;
+                font-weight: 500;
+                color: Design.foreground;
+                wrap: false;
+                horizontal-stretch: 1;
+                min-width: 0px;
+            }
+        }
+
+        HorizontalLayout {
+            height: 18px;
+            spacing: 8px;
+
+            Text {
+                text: root.protocol;
+                color: Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-xs;
+                horizontal-stretch: 1;
+                min-width: 0px;
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+
+            LatencyText {
+                ms: root.latency-ms;
+                horizontal-stretch: 0;
+            }
+        }
+    }
+
+    // The ring that marks the located tile, 3px outside the tile edge.
+    if (root.located) : Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-radius: Design.radius-md + 3px;
+        border-width: 2px;
+        border-color: Design.foreground;
+        background: transparent;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: root.clickable ? pointer : default;
+        clicked => {
+            if (root.clickable) {
+                root.clicked();
+            }
+        }
+    }
+}
+
+// The tile grid of one group. Tiles fill the row:
+//   columns = max(1, floor((avail + 8px) / 228px))
+//   tile    = (avail - (columns - 1) * 8px) / columns
+// where avail is the grid's width less its 12px padding on each side. Each
+// visible cell is tile + 8px wide and the grid's right padding is 4px rather
+// than 12px, so `columns` cells exactly fill the row and the last tile ends at
+// the right edge. Hidden cells (no filter match) are 0 wide and take no room.
+//
+// The grid is a FlexboxLayout that wraps its cells. It reports no preferred
+// width of its own, so its width comes from the parent alone, and the cell
+// widths can depend on it without a loop.
+component ServerGrid inherits Rectangle {
+    in property <[MemberItem]> members;
+    in property <string> selected;
+    // Index into `members` of the tile to mark, or -1 for none.
+    in property <int> located-index: -1;
+    in property <bool> clickable;
+    // The filter, lowercased. Empty shows every member.
+    in property <string> filter-q;
+    callback select(string);
+
+    // The width the tiles are laid out in. It is copied from `width` by the
+    // handler below rather than read from it in a binding: the tile widths
+    // then do not feed back into the width the grid reports to its parent.
+    private property <length> laid-width: 0px;
+    init => {
+        root.laid-width = root.width;
+    }
+    changed width => {
+        root.laid-width = root.width;
+    }
+
+    private property <length> avail: root.laid-width - 24px;
+    private property <float> columns: max(1.0, floor((root.avail + 8px) / 228px));
+    private property <length> tile-w: max(0px, (root.avail - (root.columns - 1) * 8px) / root.columns);
+
+    // A member is shown when the filter matches its engine name or its label.
+    pure function matches(name: string) -> bool {
+        return root.filter-q == "" || name.to-lowercase().replace-all(root.filter-q, "") != name.to-lowercase();
+    }
+
+    pure function shows(name: string, label: string) -> bool {
+        return root.matches(name) || root.matches(label);
+    }
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    preferred-height: grid.preferred-height;
+
+    grid := FlexboxLayout {
+        width: root.width;
+        height: root.height;
+        padding-left: 12px;
+        padding-right: 4px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 0px;
+        cross-axis-alignment: start;
+
+        for member[mi] in root.members : Rectangle {
+            width: root.shows(member.name, member.label) ? root.tile-w + 8px : 0px;
+            height: root.shows(member.name, member.label) ? 68px : 0px;
+
+            if (root.shows(member.name, member.label)) : ServerTile {
+                x: 0px;
+                y: 0px;
+                width: root.tile-w;
+                name: member.label != "" ? member.label : member.name;
+                name-runs: member.label-runs;
+                protocol: member.protocol;
+                latency-ms: member.latency-ms;
+                selected: member.name == root.selected;
+                located: mi == root.located-index;
+                clickable: root.clickable;
+                clicked => {
+                    root.select(member.name);
+                }
+            }
+        }
+    }
+}
+
+export component ProxiesPage inherits Rectangle {
+    // The group whose selected tile is marked. Cleared by the timer below.
+    private property <string> locate-group: "";
+    // The filter, lowercased once for the case-insensitive match.
+    private property <string> filter-q: Bridge.node-filter.to-lowercase();
+
+    // The located mark lasts this long.
+    Timer {
+        interval: 1600ms;
+        running: root.locate-group != "";
+        triggered => {
+            root.locate-group = "";
+        }
+    }
+
+    pure function kind-label(kind: string) -> string {
+        return kind == "select" ? @tr("Select")
+            : kind == "url-test" ? @tr("Auto")
+            : kind == "fallback" ? @tr("Fallback")
+            : kind == "load-balance" ? @tr("Load balance")
+            : kind == "relay" ? @tr("Relay")
+            : kind;
+    }
+
+    PageFrame {
+
+        VerticalLayout {
+            spacing: 0px;
+
+            PageHeader {
+                title: @tr("Proxies");
+                description: @tr("Choose which server each group uses.");
+
+                Button {
+                    text: @tr("Test latency");
+                    variant: ButtonVariant.outline;
+                    size: ButtonSize.md;
+                    horizontal-stretch: 0;
+                    icon: @image-url("../assets/icons/gauge.svg");
+                    busy: Bridge.busy;
+                    clicked => {
+                        Bridge.test-latency();
+                    }
+                }
+            }
+
+            // The toolbar: the filter on the first row; the sort, the hide
+            // switch and the expand and collapse buttons on the second.
+            VerticalLayout {
+                spacing: 12px;
+                padding-bottom: 16px;
+
+                HorizontalLayout {
+                    Input {
+                        preferred-width: 280px;
+                        min-width: 140px;
+                        horizontal-stretch: 0;
+                        placeholder: @tr("Filter servers");
+                        icon: @image-url("../assets/icons/search.svg");
+                        text <=> Bridge.node-filter;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 16px;
+                    height: 36px;
+
+                    Segmented {
+                        options: [@tr("Default"), @tr("Latency"), @tr("Name")];
+                        current-index <=> Bridge.proxies-sort;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        horizontal-stretch: 0;
+
+                        VerticalLayout {
+                            alignment: center;
+
+                            Switch {
+                                checked: Bridge.hide-unavailable;
+                                toggled(value) => {
+                                    Bridge.hide-unavailable = value;
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+
+                            Text {
+                                text: @tr("Hide unavailable");
+                                color: Design.foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-sm;
+                                height: 20px;
+                                vertical-alignment: center;
+                                wrap: no-wrap;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Button {
+                        text: @tr("Expand all");
+                        variant: ButtonVariant.ghost;
+                        size: ButtonSize.sm;
+                        horizontal-stretch: 0;
+                        clicked => {
+                            Bridge.expand-all(true);
+                        }
+                    }
+
+                    Button {
+                        text: @tr("Collapse all");
+                        variant: ButtonVariant.ghost;
+                        size: ButtonSize.sm;
+                        horizontal-stretch: 0;
+                        clicked => {
+                            Bridge.expand-all(false);
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 16px;
+
+                if (Bridge.loaded && Bridge.groups.length == 0) : Card {
+                    inner-padding: 0px;
+
+                    EmptyState {
+                        icon: @image-url("../assets/icons/server.svg");
+                        title: @tr("No servers yet");
+                        text: @tr("Add a profile to get servers.");
+                        action-text: @tr("Go to Profiles");
+                        action => {
+                            Bridge.active-page = 1;
+                        }
+                    }
+                }
+
+                for group in Bridge.groups : Card {
+                    inner-padding: 0px;
+
+                    VerticalLayout {
+                        // The header row. The click area comes first, so the
+                        // controls laid over it take their own clicks.
+                        Rectangle {
+                            height: 44px;
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    Bridge.toggle-group(group.name);
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 8px;
+                                spacing: 8px;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
+
+                                    Image {
+                                        width: 16px;
+                                        height: 16px;
+                                        source: group.expanded
+                                            ? @image-url("../assets/icons/chevron-down.svg")
+                                            : @image-url("../assets/icons/chevron-right.svg");
+                                        colorize: Design.muted-foreground;
+                                    }
+                                }
+
+                                EmojiText {
+                                    runs: group.label-runs;
+                                    fallback: group.label != "" ? group.label : group.name;
+                                    font-size: Design.font-base + 1px;
+                                    font-weight: 600;
+                                    color: Design.foreground;
+                                    wrap: false;
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    max-width: 240px;
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
+
+                                    HorizontalLayout {
+                                        Badge {
+                                            horizontal-stretch: 0;
+                                            text: root.kind-label(group.kind);
+                                            variant: BadgeVariant.neutral;
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: @tr("{n} server" | "{n} servers" % group.members.length);
+                                    color: Design.muted-foreground;
+                                    font-family: Design.font-family;
+                                    font-size: Design.font-sm;
+                                    horizontal-stretch: 0;
+                                    vertical-alignment: center;
+                                    wrap: no-wrap;
+                                }
+
+                                // The selected member's name, right-aligned, with the
+                                // same label its tile shows. It and the group label
+                                // share the free width (EmojiText has no natural width).
+                                if (group.selected-index >= 0) : EmojiText {
+                                    runs: group.members[group.selected-index].label-runs;
+                                    fallback: group.members[group.selected-index].label != ""
+                                        ? group.members[group.selected-index].label
+                                        : group.members[group.selected-index].name;
+                                    font-size: Design.font-sm;
+                                    color: Design.foreground;
+                                    wrap: false;
+                                    horizontal-alignment: right;
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    max-width: 240px;
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
+
+                                    IconButton {
+                                        icon: @image-url("../assets/icons/circle-dot.svg");
+                                        size: ButtonSize.sm;
+                                        tooltip: @tr("Show the current server");
+                                        enabled: group.selected-index >= 0;
+                                        clicked => {
+                                            if (!group.expanded) {
+                                                Bridge.toggle-group(group.name);
+                                            }
+                                            root.locate-group = group.name;
+                                        }
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
+
+                                    IconButton {
+                                        icon: @image-url("../assets/icons/gauge.svg");
+                                        size: ButtonSize.sm;
+                                        tooltip: @tr("Test latency in this group");
+                                        clicked => {
+                                            Bridge.test-group(group.name);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (group.expanded) : VerticalLayout {
+                            Separator {}
+
+                            ServerGrid {
+                                members: group.members;
+                                selected: group.selected;
+                                located-index: root.locate-group == group.name ? group.selected-index : -1;
+                                clickable: group.kind == "select";
+                                filter-q: root.filter-q;
+                                select(name) => {
+                                    Bridge.select-member(group.name, name);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::connections::{ConnectionsReply, parse_connections};
 use crate::error::{EngineError, EngineResult};
 use crate::reassert::{EngineSubscription, LiveProxy};
 
@@ -150,6 +151,36 @@ impl ControllerClient {
             .ok_or_else(|| EngineError::Internal("the engine returned no delay".to_string()))
     }
 
+    /// Measure every member of a proxy group at once.
+    ///
+    /// `GET /group/{name}/delay?url=&timeout=`. The engine answers with an
+    /// object that maps each member's name to its delay in milliseconds. A
+    /// member that did not answer is absent from the object, or its value is
+    /// `null`; such a member is left out of the result rather than given zero.
+    pub async fn group_delay(
+        &self,
+        group: &str,
+        url: &str,
+        timeout_ms: u32,
+    ) -> EngineResult<std::collections::BTreeMap<String, u32>> {
+        let path = format!(
+            "/group/{}/delay?url={}&timeout={timeout_ms}",
+            encode_path_segment(group),
+            encode_path_segment(url),
+        );
+        let value = self.get(&path).await?;
+        let object = value.as_object().ok_or_else(|| {
+            EngineError::Internal("the engine returned no group delays".to_string())
+        })?;
+        Ok(object
+            .iter()
+            .filter_map(|(name, delay)| {
+                let delay = u32::try_from(delay.as_u64()?).ok()?;
+                Some((name.clone(), delay))
+            })
+            .collect())
+    }
+
     /// Reload the configuration from a file the engine can read.
     ///
     /// The engine closes its open connections as part of a reload, so the
@@ -225,6 +256,24 @@ impl ControllerClient {
     /// The proxies in the engine's live configuration. `GET /proxies`.
     pub async fn proxies(&self) -> EngineResult<Vec<LiveProxy>> {
         parse_proxies(&self.get("/proxies").await?)
+    }
+
+    /// The engine's open connections, with the traffic totals. `GET /connections`.
+    pub async fn connections(&self) -> EngineResult<ConnectionsReply> {
+        parse_connections(&self.get("/connections").await?)
+    }
+
+    /// Close one connection. `DELETE /connections/{id}`.
+    pub async fn close_connection(&self, id: &str) -> EngineResult<()> {
+        let path = format!("/connections/{}", encode_path_segment(id));
+        self.delete(&path).await?;
+        Ok(())
+    }
+
+    /// Close every connection. `DELETE /connections`.
+    pub async fn close_all_connections(&self) -> EngineResult<()> {
+        self.delete("/connections").await?;
+        Ok(())
     }
 
     /// Send one request and interpret the answer.
@@ -364,6 +413,11 @@ fn live_proxy(entry: &Value, key: Option<&str>) -> EngineResult<LiveProxy> {
             .get("port")
             .and_then(Value::as_u64)
             .and_then(|port| u16::try_from(port).ok()),
+        now: entry
+            .get("now")
+            .and_then(Value::as_str)
+            .filter(|now| !now.is_empty())
+            .map(str::to_string),
     })
 }
 
@@ -523,6 +577,25 @@ mod tests {
         assert_eq!(parse_proxies(&array).unwrap()[0].name, "Node B");
     }
 
+    #[test]
+    fn a_groups_current_member_is_read_as_now() {
+        let listed = serde_json::json!({
+            "proxies": {
+                "Proxy": { "type": "Selector", "now": "Node A", "all": ["Node A"] },
+                "Node A": { "type": "trojan", "server": "a.example", "port": 443 },
+                "Blank": { "type": "Selector", "now": "" }
+            }
+        });
+        let mut listed = parse_proxies(&listed).expect("the map form parses");
+        listed.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(listed[0].name, "Blank");
+        assert_eq!(listed[0].now, None, "an empty now is no selection");
+        assert_eq!(listed[1].name, "Node A");
+        assert_eq!(listed[1].now, None, "a node has no current member");
+        assert_eq!(listed[2].name, "Proxy");
+        assert_eq!(listed[2].now.as_deref(), Some("Node A"));
+    }
+
     #[tokio::test]
     async fn the_rule_order_is_posted_as_a_rules_list_with_the_secret_in_the_header() {
         use wiremock::matchers::{body_json, header, method, path};
@@ -589,6 +662,52 @@ mod tests {
             vec!["MATCH,PROXY".to_string()]
         );
         assert_eq!(client.proxies().await.unwrap()[0].name, "Node A");
+    }
+
+    #[tokio::test]
+    async fn connections_are_listed_and_closed_by_their_routes() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/connections"))
+            .and(header("authorization", "Bearer s"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "uploadTotal": 7,
+                "downloadTotal": 9,
+                "connections": [{ "id": "c1", "metadata": {}, "chains": ["Proxy"] }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/connections/c1"))
+            .and(header("authorization", "Bearer s"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/connections"))
+            .and(header("authorization", "Bearer s"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = ControllerClient::new(server.uri(), "s");
+        let reply = client.connections().await.expect("the list is read");
+        assert_eq!(reply.upload_total, 7);
+        assert_eq!(reply.connections[0].chains, vec!["Proxy".to_string()]);
+        client
+            .close_connection("c1")
+            .await
+            .expect("one connection closes");
+        client
+            .close_all_connections()
+            .await
+            .expect("all connections close");
     }
 
     #[tokio::test]

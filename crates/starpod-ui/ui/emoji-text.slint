@@ -1,0 +1,255 @@
+// EmojiText: a string drawn with its emoji as Twemoji pictures.
+//
+// The Slint software renderer cannot draw colour emoji, so every display
+// string arrives as runs (see bridge.slint, TextRun): text runs of one word
+// each with the space after it, and emoji runs with the picture in `icon`.
+// A run with an empty icon is drawn as its text.
+//
+// Two modes:
+//   - wrap: false (default). One line, clipped at the edge of the box, never
+//     wrapped. The box height is the caller's; the default is 1.4 times the
+//     font size.
+//   - wrap: true. The words wrap at their boundaries at the width the box is
+//     given. The preferred height is the wrapped height at that width, so the
+//     caller should give a width (or stretch) and leave the height to the
+//     parent, or set a max-height to cap it (the overflow is clipped).
+//
+// When `runs` is empty the `fallback` string is drawn as plain text.
+// `font-family` is empty for the UI font; set it (e.g. Design.font-mono) for
+// monospace text.
+//
+// Usage:
+//   EmojiText {
+//       runs: Bridge.busy-message-runs;
+//       fallback: Bridge.busy-message;
+//       font-size: Design.font-sm;
+//       color: Design.muted-foreground;
+//       wrap: true;
+//   }
+
+import { Design } from "design.slint";
+import { TextRun } from "bridge.slint";
+
+// One run as a box: a Text, or an Image for an emoji with a picture. The box
+// is as wide as its content and as tall as `box-height`; the content sits on
+// the box's centre line, so text and emoji line up. The colour is `ink`
+// (Rectangle already has a deprecated `color`, so the name is taken).
+component EmojiRun inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> emoji: false;
+    in property <length> font-size;
+    in property <color> ink;
+    in property <int> font-weight: 400;
+    in property <string> font-family;
+    in property <length> box-height;
+    in property <length> icon-size;
+
+    private property <bool> picture: root.emoji && root.icon.width > 0;
+    private property <length> content-w: root.picture ? root.icon-size : label.preferred-width;
+
+    background: transparent;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    preferred-width: root.content-w;
+    min-width: root.content-w;
+    height: root.box-height;
+
+    if (root.picture) : Image {
+        x: 0px;
+        y: (parent.height - self.height) / 2;
+        width: root.icon-size;
+        height: root.icon-size;
+        source: root.icon;
+        image-fit: contain;
+    }
+
+    label := Text {
+        visible: !root.picture;
+        x: 0px;
+        y: 0px;
+        width: self.preferred-width;
+        height: parent.height;
+        text: root.text;
+        color: root.ink;
+        font-family: root.font-family;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+}
+
+// The wrapped flow of runs. It is a component whose root is a FlexboxLayout on
+// purpose: Slint gives such a component a height-for-width entry point, which
+// its parent calls with the width the parent has assigned. A flexbox placed
+// directly in a plain element reads its width late, and the height came out
+// wrong (zero, or a tall blank block) inside a HorizontalLayout.
+component EmojiFlow inherits FlexboxLayout {
+    in property <[TextRun]> runs;
+    in property <string> font-family;
+    in property <length> font-size;
+    in property <color> ink;
+    in property <int> font-weight: 400;
+    in property <length> line-h;
+    in property <length> icon-size;
+    in property <LayoutAlignment> align: LayoutAlignment.start;
+
+    spacing: 0px;
+    flex-direction: FlexboxLayoutDirection.row;
+    flex-wrap: FlexboxLayoutWrap.wrap;
+    alignment: root.align;
+    cross-axis-alignment: CrossAxisAlignment.start;
+
+    for run in root.runs : EmojiRun {
+        text: run.text;
+        icon: run.icon;
+        emoji: run.emoji;
+        font-size: root.font-size;
+        ink: root.ink;
+        font-weight: root.font-weight;
+        font-family: root.font-family;
+        box-height: root.line-h;
+        icon-size: root.icon-size;
+    }
+}
+
+// A word-wrapped Text, for the fallback string in wrap mode. As a VerticalLayout
+// it gets the same height-for-width entry point as EmojiFlow.
+component PlainWrap inherits VerticalLayout {
+    in property <string> text;
+    in property <string> font-family;
+    in property <length> font-size;
+    in property <color> ink;
+    in property <int> font-weight: 400;
+    in property <TextHorizontalAlignment> horizontal-alignment: TextHorizontalAlignment.left;
+
+    spacing: 0px;
+
+    Text {
+        text: root.text;
+        color: root.ink;
+        font-family: root.font-family;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        horizontal-alignment: root.horizontal-alignment;
+        wrap: word-wrap;
+    }
+}
+
+// The root inherits Flickable, not Rectangle or Image: those already have a `color`
+// or a `horizontal-alignment`, and this element takes both names. A Flickable draws
+// nothing and clips its viewport; it is not interactive, so it takes no input.
+export component EmojiText inherits Flickable {
+    interactive: false;
+    content-width: root.width;
+    content-height: root.height;
+    in property <[TextRun]> runs;
+    in property <string> fallback;
+    in property <string> font-family;
+    in property <length> font-size: Design.font-base;
+    in property <color> color: Design.foreground;
+    in property <int> font-weight: 400;
+    in property <bool> wrap: false;
+    in property <TextHorizontalAlignment> horizontal-alignment: TextHorizontalAlignment.left;
+
+    private property <bool> has-runs: root.runs.length > 0;
+    private property <string> face: root.font-family != "" ? root.font-family : Design.font-family;
+    private property <length> line-h: root.font-size * 1.4;
+    // A picture is a little taller than the text, as an emoji is.
+    private property <length> icon-size: root.font-size * 1.15;
+    private property <LayoutAlignment> align: root.horizontal-alignment == TextHorizontalAlignment.center ? LayoutAlignment.center
+        : root.horizontal-alignment == TextHorizontalAlignment.right ? LayoutAlignment.end
+        : LayoutAlignment.start;
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    // One line: the sum of the runs, so a box with no stretch still has its width.
+    preferred-width: root.wrap ? 0px : line.preferred-width;
+    preferred-height: root.wrap
+        ? (root.has-runs ? flow.preferred-height : plain.preferred-height)
+        : root.line-h;
+
+    // Clips whatever overflows the box (a single line never wraps).
+    box := Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: transparent;
+        clip: true;
+
+        // Single line: the runs in a row, clipped at the right edge.
+        line := HorizontalLayout {
+            visible: !root.wrap && root.has-runs;
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            spacing: 0px;
+            alignment: root.align;
+
+            for run in root.runs : EmojiRun {
+                text: run.text;
+                icon: run.icon;
+                emoji: run.emoji;
+                font-size: root.font-size;
+                ink: root.color;
+                font-weight: root.font-weight;
+                font-family: root.face;
+                box-height: root.height;
+                icon-size: root.icon-size;
+            }
+        }
+
+        // Wrapped: the runs flow in lines and break at the word boundaries.
+        flow := EmojiFlow {
+            visible: root.wrap && root.has-runs;
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            runs: root.runs;
+            font-family: root.face;
+            font-size: root.font-size;
+            ink: root.color;
+            font-weight: root.font-weight;
+            line-h: root.line-h;
+            icon-size: root.icon-size;
+            align: root.align;
+        }
+
+        // No runs, wrapped: the fallback string, word-wrapped.
+        plain := PlainWrap {
+            visible: root.wrap && !root.has-runs;
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            text: root.fallback;
+            font-family: root.face;
+            font-size: root.font-size;
+            ink: root.color;
+            font-weight: root.font-weight;
+            horizontal-alignment: root.horizontal-alignment;
+        }
+
+        // No runs, one line: the fallback string as plain text.
+        fallback-text := Text {
+            visible: !root.wrap && !root.has-runs;
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            text: root.fallback;
+            color: root.color;
+            font-family: root.face;
+            font-size: root.font-size;
+            font-weight: root.font-weight;
+            horizontal-alignment: root.horizontal-alignment;
+            vertical-alignment: center;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+    }
+}

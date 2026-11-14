@@ -246,3 +246,77 @@ async fn a_redirect_is_followed() {
 
     assert_eq!(response.body, BODY.as_bytes());
 }
+
+fn device() -> starpod_subscription::DeviceHeaders {
+    starpod_subscription::DeviceHeaders {
+        hwid: "0123456789abcdef0123456789abcdef".to_string(),
+        os: "Windows".to_string(),
+        os_version: "10.0.26200".to_string(),
+        model: "x86_64".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn a_request_with_device_headers_carries_all_four_of_them() {
+    let server = MockServer::start().await;
+    Mock::given(path("/sub"))
+        .and(header("x-hwid", "0123456789abcdef0123456789abcdef"))
+        .and(header("x-device-os", "Windows"))
+        .and(header("x-ver-os", "10.0.26200"))
+        .and(header("x-device-model", "x86_64"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(BODY))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let response = provider()
+        .fetch(&FetchRequest::new(format!("{}/sub", server.uri())).with_device(device()))
+        .await
+        .expect("the request matched every device header");
+    assert_eq!(response.body, BODY.as_bytes());
+}
+
+#[tokio::test]
+async fn a_request_without_device_headers_sends_none_of_them() {
+    let server = MockServer::start().await;
+    Mock::given(path("/sub"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(BODY))
+        .mount(&server)
+        .await;
+
+    provider()
+        .fetch(&FetchRequest::new(format!("{}/sub", server.uri())))
+        .await
+        .expect("the fetch succeeds");
+
+    let received = server.received_requests().await.expect("recording is on");
+    let request = received.last().expect("one request arrived");
+    for name in ["x-hwid", "x-device-os", "x-ver-os", "x-device-model"] {
+        assert!(
+            request.headers.get(name).is_none(),
+            "{name} must be omitted when device identification is off"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_user_agent_is_sent_on_every_fetch() {
+    let server = MockServer::start().await;
+    Mock::given(path("/sub"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(BODY))
+        .mount(&server)
+        .await;
+
+    provider()
+        .fetch(&FetchRequest::new(format!("{}/sub", server.uri())))
+        .await
+        .expect("the fetch succeeds");
+
+    let received = server.received_requests().await.expect("recording is on");
+    let agent = received
+        .last()
+        .and_then(|request| request.headers.get("user-agent"))
+        .and_then(|value| value.to_str().ok())
+        .expect("a user agent is sent");
+    assert!(agent.starts_with("starpod/"), "{agent}");
+}

@@ -28,6 +28,7 @@
 
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use crate::error::{EngineError, EngineResult};
@@ -175,12 +176,22 @@ pub async fn install_in(data_dir: &Path) -> EngineResult<PathBuf> {
             "no engine build is published for this platform; install one manually".to_string(),
         )
     })?;
+    install_asset_in(data_dir, &asset, ENGINE_VERSION).await
+}
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .user_agent(concat!("starpod/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| EngineError::Install(e.to_string()))?;
+/// Download, verify and install one release asset under `data_dir`, and record
+/// `version` as the installed version.
+///
+/// The install slot is the same for every release (`<data>/engine/<ENGINE_VERSION>`),
+/// so an upgrade replaces the binary the engine is already pointed at. The
+/// caller must stop a running engine first: Windows will not replace a
+/// running executable.
+pub async fn install_asset_in(
+    data_dir: &Path,
+    asset: &Asset,
+    version: &str,
+) -> EngineResult<PathBuf> {
+    let client = http_client()?;
 
     let expected = fetch_checksum(&client, &asset.checksum_url).await?;
     let bytes = fetch_bytes(&client, &asset.url).await?;
@@ -228,7 +239,199 @@ pub async fn install_in(data_dir: &Path) -> EngineResult<PathBuf> {
     }
     let _ = std::fs::remove_dir_all(&staging);
 
+    write_installed_version(data_dir, version)?;
     Ok(target)
+}
+
+/// The HTTP client every download uses.
+fn http_client() -> EngineResult<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .user_agent(concat!("starpod/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| EngineError::Install(e.to_string()))
+}
+
+/// The file, inside the install slot, that names the installed release.
+const VERSION_FILE: &str = "VERSION";
+
+/// The version label of the installed engine, or `None` when none is installed.
+///
+/// A binary installed before the marker existed is the pinned version.
+pub fn installed_version_in(data_dir: &Path) -> Option<String> {
+    if !is_installed_in(data_dir) {
+        return None;
+    }
+    let marker = install_dir_in(data_dir).join(VERSION_FILE);
+    match std::fs::read_to_string(marker) {
+        Ok(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
+        _ => Some(ENGINE_VERSION.to_string()),
+    }
+}
+
+/// Record which release is installed.
+fn write_installed_version(data_dir: &Path, version: &str) -> EngineResult<()> {
+    let marker = install_dir_in(data_dir).join(VERSION_FILE);
+    std::fs::write(&marker, format!("{version}\n")).map_err(|e| EngineError::Install(e.to_string()))
+}
+
+/// A release that can be installed, and the version label it carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatestRelease {
+    /// The label the app shows: `0.29.0` for stable, `alpha-<commit>` for alpha.
+    pub version: String,
+    /// The asset for this platform.
+    pub asset: Asset,
+}
+
+/// The GitHub API listing of the engine's releases.
+pub const RELEASES_API: &str = "https://api.github.com/repos/meow-rs/meow-rs/releases?per_page=30";
+
+/// The newest release of `channel` that has a build for this platform.
+///
+/// Stable is the newest non-prerelease whose tag is `v<version>`. Alpha is the
+/// newest release carrying a `meow-alpha-<commit>-<target>` asset.
+pub async fn latest_release(
+    channel: starpod_core::domain::EngineChannel,
+) -> EngineResult<LatestRelease> {
+    let (target, archive) = target_triple().ok_or_else(|| {
+        EngineError::NotInstalled(
+            "no engine build is published for this platform; install one manually".to_string(),
+        )
+    })?;
+    let client = http_client()?;
+    let text = client
+        .get(RELEASES_API)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| EngineError::Install(format!("could not list the engine releases: {e}")))?
+        .error_for_status()
+        .map_err(|e| EngineError::Install(format!("could not list the engine releases: {e}")))?
+        .text()
+        .await
+        .map_err(|e| EngineError::Install(format!("could not read the engine releases: {e}")))?;
+    let releases: Value = serde_json::from_str(&text)
+        .map_err(|e| EngineError::Install(format!("the engine release list is not JSON: {e}")))?;
+    pick_release(&releases, channel, target, archive).ok_or_else(|| {
+        EngineError::Install(format!(
+            "no {} engine build is published for this platform",
+            match channel {
+                starpod_core::domain::EngineChannel::Stable => "stable",
+                starpod_core::domain::EngineChannel::Alpha => "alpha",
+            }
+        ))
+    })
+}
+
+/// Pick the newest matching release out of the API listing. Pure, so the
+/// selection rules are tested without the network.
+pub fn pick_release(
+    releases: &Value,
+    channel: starpod_core::domain::EngineChannel,
+    target: &str,
+    archive: &str,
+) -> Option<LatestRelease> {
+    let suffix = format!("-{target}.{archive}");
+    for release in releases.as_array()? {
+        let Some(assets) = release.get("assets").and_then(Value::as_array) else {
+            continue;
+        };
+        let find = |name: &str| {
+            assets
+                .iter()
+                .find(|asset| asset.get("name").and_then(Value::as_str) == Some(name))
+                .and_then(|asset| asset.get("browser_download_url"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        match channel {
+            starpod_core::domain::EngineChannel::Stable => {
+                if release.get("prerelease").and_then(Value::as_bool) == Some(true)
+                    || release.get("draft").and_then(Value::as_bool) == Some(true)
+                {
+                    continue;
+                }
+                let Some(tag) = release.get("tag_name").and_then(Value::as_str) else {
+                    continue;
+                };
+                if !tag.starts_with('v') {
+                    continue;
+                }
+                let file_name = format!("meow-{tag}{suffix}");
+                let (Some(url), Some(checksum_url)) =
+                    (find(&file_name), find(&format!("{file_name}.sha256")))
+                else {
+                    continue;
+                };
+                return Some(LatestRelease {
+                    version: tag.trim_start_matches('v').to_string(),
+                    asset: Asset {
+                        file_name,
+                        url,
+                        checksum_url,
+                    },
+                });
+            }
+            starpod_core::domain::EngineChannel::Alpha => {
+                let found = assets.iter().find_map(|asset| {
+                    let name = asset.get("name")?.as_str()?;
+                    let stem = name.strip_prefix("meow-alpha-")?.strip_suffix(&suffix)?;
+                    (!stem.is_empty()).then(|| name.to_string())
+                });
+                let Some(file_name) = found else {
+                    continue;
+                };
+                let (Some(url), Some(checksum_url)) =
+                    (find(&file_name), find(&format!("{file_name}.sha256")))
+                else {
+                    continue;
+                };
+                let stem = file_name
+                    .strip_prefix("meow-")
+                    .and_then(|rest| rest.strip_suffix(&suffix))
+                    .unwrap_or(&file_name)
+                    .to_string();
+                return Some(LatestRelease {
+                    version: stem,
+                    asset: Asset {
+                        file_name,
+                        url,
+                        checksum_url,
+                    },
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Download a file to `dest`, replacing it only when the download is complete.
+///
+/// Used for the geodata databases, which publish no checksum the app can
+/// verify against, so the check is that the transfer finished and is not empty.
+pub async fn download_file(url: &str, dest: &Path) -> EngineResult<u64> {
+    let client = http_client()?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| EngineError::Install(format!("could not download {url}: {e}")))?
+        .error_for_status()
+        .map_err(|e| EngineError::Install(format!("could not download {url}: {e}")))?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| EngineError::Install(format!("could not download {url}: {e}")))?;
+    if bytes.is_empty() {
+        return Err(EngineError::Install(format!(
+            "the download from {url} was empty"
+        )));
+    }
+    let partial = dest.with_extension("part");
+    std::fs::write(&partial, &bytes).map_err(|e| EngineError::Io(e.to_string()))?;
+    std::fs::rename(&partial, dest).map_err(|e| EngineError::Io(e.to_string()))?;
+    Ok(bytes.len() as u64)
 }
 
 /// Fetch a checksum file and read the hash out of it.
@@ -434,6 +637,94 @@ mod tests {
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    fn release_feed() -> Value {
+        serde_json::json!([
+            {
+                "tag_name": "v0.30.0-rc1",
+                "prerelease": true,
+                "assets": [
+                    {"name": "meow-v0.30.0-rc1-x86_64-pc-windows-msvc.zip", "browser_download_url": "https://example.test/rc.zip"},
+                    {"name": "meow-v0.30.0-rc1-x86_64-pc-windows-msvc.zip.sha256", "browser_download_url": "https://example.test/rc.zip.sha256"}
+                ]
+            },
+            {
+                "tag_name": "alpha",
+                "prerelease": true,
+                "assets": [
+                    {"name": "meow-alpha-9f9dc68-x86_64-pc-windows-msvc.zip", "browser_download_url": "https://example.test/alpha.zip"},
+                    {"name": "meow-alpha-9f9dc68-x86_64-pc-windows-msvc.zip.sha256", "browser_download_url": "https://example.test/alpha.zip.sha256"}
+                ]
+            },
+            {
+                "tag_name": "v0.29.0",
+                "prerelease": false,
+                "assets": [
+                    {"name": "meow-v0.29.0-x86_64-pc-windows-msvc.zip", "browser_download_url": "https://example.test/stable.zip"},
+                    {"name": "meow-v0.29.0-x86_64-pc-windows-msvc.zip.sha256", "browser_download_url": "https://example.test/stable.zip.sha256"}
+                ]
+            }
+        ])
+    }
+
+    #[test]
+    fn the_stable_channel_skips_prereleases_and_takes_the_newest_tagged_build() {
+        let pick = pick_release(
+            &release_feed(),
+            starpod_core::domain::EngineChannel::Stable,
+            "x86_64-pc-windows-msvc",
+            "zip",
+        )
+        .expect("a stable build");
+        assert_eq!(pick.version, "0.29.0");
+        assert_eq!(pick.asset.url, "https://example.test/stable.zip");
+        assert_eq!(
+            pick.asset.checksum_url,
+            "https://example.test/stable.zip.sha256"
+        );
+    }
+
+    #[test]
+    fn the_alpha_channel_takes_the_newest_rolling_build_and_labels_it_by_commit() {
+        let pick = pick_release(
+            &release_feed(),
+            starpod_core::domain::EngineChannel::Alpha,
+            "x86_64-pc-windows-msvc",
+            "zip",
+        )
+        .expect("an alpha build");
+        assert_eq!(pick.version, "alpha-9f9dc68");
+        assert_eq!(
+            pick.asset.file_name,
+            "meow-alpha-9f9dc68-x86_64-pc-windows-msvc.zip"
+        );
+        assert_eq!(pick.asset.url, "https://example.test/alpha.zip");
+    }
+
+    #[test]
+    fn a_platform_with_no_build_gets_no_release() {
+        let none = pick_release(
+            &release_feed(),
+            starpod_core::domain::EngineChannel::Stable,
+            "riscv64gc-unknown-linux-gnu",
+            "tar.gz",
+        );
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn an_installed_version_is_the_pinned_one_until_an_upgrade_records_another() {
+        let dir = std::env::temp_dir().join(format!("starpod-version-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let slot = install_dir_in(&dir);
+        std::fs::create_dir_all(&slot).expect("a slot");
+        std::fs::write(slot.join(binary_name()), b"not really an engine").expect("a binary");
+        assert_eq!(installed_version_in(&dir).as_deref(), Some(ENGINE_VERSION));
+        write_installed_version(&dir, "alpha-9f9dc68").expect("recorded");
+        assert_eq!(installed_version_in(&dir).as_deref(), Some("alpha-9f9dc68"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(installed_version_in(&dir), None);
     }
 
     #[test]

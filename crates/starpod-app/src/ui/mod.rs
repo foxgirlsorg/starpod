@@ -7,7 +7,11 @@
 //!   results from the tokio runtime to the Slint thread.
 
 pub mod callbacks;
+pub mod demo;
+pub mod emoji;
+pub mod hotkeys;
 pub mod mapping;
 pub mod runtime;
+pub mod tray;
 
-pub use runtime::run;
+pub use runtime::{Launch, run};

@@ -338,6 +338,14 @@ fn build_service(
     })
 }
 
+/// Saves the English language preference, so the Rust-side strings a snapshot
+/// builds do not follow the machine's locale.
+async fn pin_english(service: &mut AppService) {
+    let mut prefs = service.user_state().preferences.clone();
+    prefs.language = "en".to_string();
+    service.save_preferences(prefs).await.unwrap();
+}
+
 fn rule(line: &str) -> RuleSpec {
     parse_line(line).expect("the test rule parses")
 }
@@ -433,9 +441,9 @@ async fn connect_validates_then_starts_with_namespaced_nodes_and_user_rules_in_o
             "DOMAIN-SUFFIX,example.org,DIRECT".to_string(),
             "DOMAIN,api.example.net,Airport / Auto".to_string(),
             "DOMAIN,example.com,DIRECT".to_string(),
-            "MATCH,PROXY".to_string(),
+            "MATCH,DIRECT".to_string(),
         ],
-        "the user's rules come first, in the user's order, then the subscription's"
+        "the user's rules come first, in the user's order, then the subscription's, then the subscription's MATCH target as the tail"
     );
     assert_eq!(
         started.mixed_port,
@@ -454,7 +462,7 @@ async fn connect_validates_then_starts_with_namespaced_nodes_and_user_rules_in_o
     assert_eq!(
         snapshot.subscription_rules.len(),
         2,
-        "every rule the subscription supplies is listed, including the MATCH the app replaces"
+        "every rule the subscription supplies is listed, including its MATCH"
     );
 }
 
@@ -1131,6 +1139,7 @@ async fn connecting_without_a_subscription_is_refused_before_the_engine_is_touch
         Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
     let mut service = build_service(&dir, &engine, provider);
     service.load().await.unwrap();
+    pin_english(&mut service).await;
     assert_eq!(
         service.snapshot().connect_blocked.as_deref(),
         Some(NO_SUBSCRIPTION)
@@ -1157,6 +1166,7 @@ async fn a_subscription_that_never_fetched_blocks_connecting_until_it_has_server
         Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
     let mut service = build_service(&dir, &engine, provider);
     service.load().await.unwrap();
+    pin_english(&mut service).await;
     let id = add_airport(&mut service, None).await;
     assert_eq!(
         service.snapshot().connect_blocked.as_deref(),
@@ -1213,6 +1223,7 @@ async fn connecting_is_refused_while_the_engine_is_not_installed() {
         engine_installed: false,
     });
     service.load().await.unwrap();
+    pin_english(&mut service).await;
     let id = add_airport(&mut service, None).await;
     service.refresh_subscription(&id).await.unwrap();
 
@@ -1536,6 +1547,7 @@ async fn an_engine_managed_node_that_shadows_a_users_node_is_reported_in_the_sna
         name: "Home".to_string(),
         server: Some("remote.example".to_string()),
         port: Some(443),
+        now: None,
     }]);
     service.check_engine_subscriptions().await;
 
@@ -1559,6 +1571,7 @@ async fn an_engine_managed_node_that_shadows_a_users_node_is_reported_in_the_sna
         name: "Home".to_string(),
         server: Some("home.example".to_string()),
         port: Some(443),
+        now: None,
     }]);
     service.check_engine_subscriptions().await;
     assert!(
@@ -1568,5 +1581,324 @@ async fn an_engine_managed_node_that_shadows_a_users_node_is_reported_in_the_sna
             .iter()
             .any(|warning| warning.contains("“Home”")),
         "a resolved shadow is no longer reported"
+    );
+}
+
+/// A subscription with a `select` group the user can choose a member of.
+const PICK_FIXTURE: &str = "\
+proxies:
+  - name: \"Node A\"
+    type: trojan
+    server: a.example.com
+    port: 443
+    password: hunter2-trojan
+  - name: \"Node B\"
+    type: trojan
+    server: b.example.com
+    port: 443
+    password: hunter2-trojan
+proxy-groups:
+  - name: \"Pick\"
+    type: select
+    proxies:
+      - \"Node A\"
+      - \"Node B\"
+rules:
+  - MATCH,Pick
+";
+
+#[tokio::test]
+async fn a_chosen_member_of_a_select_group_is_saved_and_shown() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(StaticSubscriptionProvider::new(
+        PICK_FIXTURE.as_bytes().to_vec(),
+    ));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+
+    let snap = service.snapshot();
+    let group = snap
+        .groups
+        .iter()
+        .find(|group| group.name == "Airport / Pick")
+        .expect("the select group is listed");
+    assert_eq!(group.kind, "select");
+    assert_eq!(
+        group.selected.as_deref(),
+        Some("Airport / Node A"),
+        "first member by default"
+    );
+    assert_eq!(
+        snap.primary_group.as_deref(),
+        Some("Airport / Pick"),
+        "the subscription's own MATCH names the group the Home page offers first"
+    );
+    let shown = snap
+        .groups
+        .iter()
+        .find(|group| group.name == "Airport / Pick")
+        .expect("the group is listed");
+    assert_eq!(
+        shown.label, "Pick",
+        "the subscription's prefix is not shown"
+    );
+    assert_eq!(shown.members[0].label, "Node A");
+    assert_eq!(
+        shown.members[0].name, "Airport / Node A",
+        "the engine name is kept"
+    );
+
+    service
+        .select_member("Airport / Pick", "Airport / Node B")
+        .await
+        .unwrap();
+    let snap = service.snapshot();
+    let group = snap
+        .groups
+        .iter()
+        .find(|group| group.name == "Airport / Pick")
+        .unwrap();
+    assert_eq!(group.selected.as_deref(), Some("Airport / Node B"));
+    assert_eq!(
+        group.members.first().map(|member| member.name.as_str()),
+        Some("Airport / Node B"),
+        "the chosen member is first in the built configuration"
+    );
+    assert_eq!(
+        service
+            .user_state()
+            .preferences
+            .group_selections
+            .get("Airport / Pick")
+            .map(String::as_str),
+        Some("Airport / Node B")
+    );
+}
+
+#[tokio::test]
+async fn a_member_choice_is_refused_for_an_auto_group_or_an_unknown_member() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+
+    assert!(matches!(
+        service
+            .select_member("Airport / Auto", "Airport / Node A")
+            .await,
+        Err(AppError::Invalid(_))
+    ));
+    assert!(matches!(
+        service.select_member("Nowhere", "Airport / Node A").await,
+        Err(AppError::Invalid(_))
+    ));
+    assert!(service.user_state().preferences.group_selections.is_empty());
+}
+
+#[tokio::test]
+async fn a_running_engines_live_choice_is_what_a_group_shows() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(StaticSubscriptionProvider::new(
+        PICK_FIXTURE.as_bytes().to_vec(),
+    ));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+    service.connect().await.unwrap();
+
+    engine.set_live_proxies(vec![LiveProxy {
+        name: "Airport / Pick".to_string(),
+        server: None,
+        port: None,
+        now: Some("Airport / Node B".to_string()),
+    }]);
+    service.refresh_engine_status().await;
+
+    let group = service
+        .snapshot()
+        .groups
+        .into_iter()
+        .find(|group| group.name == "Airport / Pick")
+        .unwrap();
+    assert_eq!(group.selected.as_deref(), Some("Airport / Node B"));
+}
+
+#[tokio::test]
+async fn a_subscriptions_announcement_and_profile_title_reach_the_snapshot() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::with_response(
+            FetchResponse::new(PICK_FIXTURE.as_bytes().to_vec())
+                .with_header("profile-title", "Foxgirls VPN")
+                .with_header("announce", "Maintenance on Nov 20")
+                .with_header("support-url", "https://help.example.com"),
+        ));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+
+    let snap = service.snapshot();
+    assert_eq!(snap.subscriptions[0].title, "Foxgirls VPN");
+    assert_eq!(snap.announcements.len(), 1);
+    let announcement = &snap.announcements[0];
+    assert_eq!(announcement.title, "Foxgirls VPN");
+    assert_eq!(announcement.text, "Maintenance on Nov 20");
+    assert_eq!(
+        announcement.support_url.as_deref(),
+        Some("https://help.example.com")
+    );
+    assert_eq!(announcement.web_url, None);
+}
+
+#[tokio::test]
+async fn a_refresh_sends_the_device_headers_until_the_user_turns_them_off() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider = Arc::new(Scripted::new(vec![
+        Ok(FetchResponse::new(PICK_FIXTURE.as_bytes().to_vec())),
+        Ok(FetchResponse::new(PICK_FIXTURE.as_bytes().to_vec())),
+    ]));
+    let mut service = build_service(&dir, &engine, provider.clone());
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+
+    let mut prefs = service.user_state().preferences.clone();
+    assert!(
+        prefs.send_device_id,
+        "device identification is on by default"
+    );
+    prefs.send_device_id = false;
+    service.save_preferences(prefs).await.unwrap();
+    service.refresh_subscription(&id).await.unwrap();
+
+    let requests = provider.requests();
+    let device = requests[0]
+        .device
+        .as_ref()
+        .expect("the first refresh carries the device headers");
+    assert_eq!(device.hwid.len(), 32);
+    assert!(!device.os.is_empty() && !device.os_version.is_empty() && !device.model.is_empty());
+    assert!(
+        requests[1].device.is_none(),
+        "with the setting off, no device header is sent"
+    );
+}
+
+#[tokio::test]
+async fn a_device_limit_keeps_the_payload_and_shows_the_support_link() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(Scripted::new(vec![
+        Ok(FetchResponse::new(PICK_FIXTURE.as_bytes().to_vec())),
+        Ok(FetchResponse::new(PICK_FIXTURE.as_bytes().to_vec())
+            .with_header("x-hwid-limit", "true")
+            .with_header("support-url", "https://help.example.com")),
+    ]));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+    let nodes_before = service.snapshot().subscriptions[0].node_count;
+
+    let error = service
+        .refresh_subscription(&id)
+        .await
+        .expect_err("the device limit fails the refresh");
+    assert!(error.to_string().contains("device limit"), "{error}");
+
+    let snap = service.snapshot();
+    assert!(snap.subscriptions[0].device_limit);
+    assert_eq!(
+        snap.subscriptions[0].node_count, nodes_before,
+        "the payload from before the limit is still in use"
+    );
+    assert!(snap.announcements.iter().any(|announcement| {
+        announcement.text == starpod_app::snapshot::DEVICE_LIMIT_MESSAGE
+            && announcement.support_url.as_deref() == Some("https://help.example.com")
+    }));
+    let card = snap
+        .profile_card
+        .expect("the active subscription has a card");
+    assert!(card.device_limit);
+}
+
+#[tokio::test]
+async fn a_subscription_that_forbids_global_mode_blocks_it_and_turns_a_saved_global_into_rule() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::with_response(
+            FetchResponse::new(PICK_FIXTURE.as_bytes().to_vec())
+                .with_header("global-mode", "false"),
+        ));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+
+    assert!(!service.snapshot().global_mode_allowed);
+    assert!(
+        service
+            .set_mode(starpod_core::ProxyMode::Global)
+            .await
+            .is_err(),
+        "the Global mode is refused while the subscription forbids it"
+    );
+
+    let mut prefs = service.user_state().preferences.clone();
+    prefs.mode = Some(starpod_core::ProxyMode::Global);
+    service.save_preferences(prefs).await.unwrap();
+    assert_eq!(
+        service.snapshot().mode,
+        starpod_core::ProxyMode::Rule,
+        "a saved Global choice runs as Rule while the subscription forbids it"
+    );
+}
+
+#[tokio::test]
+async fn the_profile_headers_reach_the_card_and_the_provider_interval_becomes_the_schedule() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::with_response(
+            FetchResponse::new(PICK_FIXTURE.as_bytes().to_vec())
+                .with_header("profile-title", "Foxgirls VPN")
+                .with_header("profile-web-page-name", "Cabinet")
+                .with_header("profile-web-page-url", "https://example.com/account")
+                .with_header("announce-url", "https://example.com/news")
+                .with_header("profile-update-interval", "6"),
+        ));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+
+    let snap = service.snapshot();
+    assert_eq!(snap.subscriptions[0].interval_secs, 6 * 3600);
+    assert_eq!(
+        snap.subscriptions[0].web_page_name.as_deref(),
+        Some("Cabinet")
+    );
+    let card = snap
+        .profile_card
+        .expect("the active subscription has a card");
+    assert_eq!(card.title, "Foxgirls VPN");
+    assert_eq!(card.web_url.as_deref(), Some("https://example.com/account"));
+    assert_eq!(card.web_page_name.as_deref(), Some("Cabinet"));
+    assert_eq!(
+        card.announce_url.as_deref(),
+        Some("https://example.com/news")
     );
 }

@@ -21,7 +21,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use starpod_app::{AppError, AppService, SharedAppService, ui};
+use starpod_app::instance::{self, Startup};
+use starpod_app::{AppError, AppService, SharedAppService, autostart, deeplink, scheme, ui};
 use starpod_store::AppPaths;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -40,8 +41,41 @@ static ENGINE: OnceLock<(tokio::runtime::Handle, SharedAppService)> = OnceLock::
 fn main() -> Result<(), Box<dyn Error>> {
     // The hook goes first so that a panic anywhere in startup is recorded.
     install_panic_hook();
+
+    // One running Starpod at a time. This runs before anything that writes to
+    // disk or changes the system: a second launch hands its link (or a request
+    // to show the window) to the first and exits. It must not rotate the first
+    // run's log file, nor re-register the scheme.
+    let link = deeplink::find_in_args(std::env::args().skip(1));
+    let mut startup_warnings = Vec::new();
+    let (_instance_guard, forwards) = match AppPaths::resolve() {
+        Ok(paths) => match instance::start(paths.data_dir(), link.as_deref()) {
+            Ok(Startup::Forwarded) => return Ok(()),
+            Ok(Startup::Primary { forwards, guard }) => (Some(guard), Some(forwards)),
+            Err(error) => {
+                startup_warnings.push(format!(
+                    "could not set up the single-instance channel; starting without it: {error}"
+                ));
+                (None, None)
+            }
+        },
+        Err(error) => {
+            startup_warnings.push(format!(
+                "could not resolve the data directory; starting without the single-instance channel: {error}"
+            ));
+            (None, None)
+        }
+    };
+
     init_logging();
     info!(version = env!("CARGO_PKG_VERSION"), "starpod starting");
+    for warning in &startup_warnings {
+        warn!("{warning}");
+    }
+
+    // Registered at every start by the run that owns the app; a failure is
+    // only logged.
+    scheme::register();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -54,10 +88,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     let service = AppService::open_default()?;
     info!("service opened");
     let service = runtime.block_on(load_service(service))?;
+    // Set before auto-connect, so a panic while connecting still stops the
+    // engine and restores the system proxy.
     let _ = ENGINE.set((runtime.handle().clone(), service.clone()));
+    runtime.block_on(connect_at_start(&service));
+    let start_hidden = autostart::launched_by_autostart()
+        && runtime.block_on(async { service.lock().await.user_state().preferences.silent_start });
 
     select_renderer();
-    let outcome = ui::run(runtime.handle().clone(), service);
+    let outcome = ui::run(
+        runtime.handle().clone(),
+        service,
+        ui::Launch {
+            link,
+            forwards,
+            start_hidden,
+        },
+    );
     match &outcome {
         Ok(()) => info!("event loop ended normally; shutting down the runtime"),
         Err(error) => error!(%error, "event loop ended with an error; shutting down the runtime"),
@@ -93,10 +140,25 @@ fn select_renderer() {
 }
 
 /// Load the saved state into the opened service.
+///
+/// The login entry is re-written here, since the executable may have moved.
 async fn load_service(mut service: AppService) -> Result<SharedAppService, AppError> {
     service.load().await?;
     info!("state loaded");
+    service.sync_autostart();
     Ok(service.into_shared())
+}
+
+/// When the user chose it and a subscription supplies servers, connect now.
+async fn connect_at_start(service: &SharedAppService) {
+    let mut svc = service.lock().await;
+    if !svc.user_state().preferences.auto_connect_on_start {
+        return;
+    }
+    match svc.connect().await {
+        Ok(()) => info!("connected at start, as the settings ask"),
+        Err(error) => warn!(%error, "did not connect at start"),
+    }
 }
 
 /// Send tracing to stderr and to the run's log file.
@@ -218,7 +280,12 @@ fn stop_engine_after_panic(handle: &tokio::runtime::Handle, service: &SharedAppS
     std::thread::spawn(move || {
         let stop = handle.block_on(async {
             tokio::time::timeout(PANIC_STOP_TIMEOUT, async {
-                service.lock().await.disconnect().await
+                let mut svc = service.lock().await;
+                let result = svc.disconnect().await;
+                // Restored here too: if the engine did not stop, the next start
+                // still finds the record and restores the system proxy.
+                svc.restore_system_proxy().await;
+                result
             })
             .await
         });

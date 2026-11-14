@@ -25,16 +25,26 @@
 //! The crate has no GUI dependency and no engine-specific names. It talks to
 //! the engine only through [`starpod_engine::ProxyEngine`].
 
+pub mod autostart;
 mod compose;
+pub mod connections;
+pub mod deeplink;
+pub mod device;
+pub mod engine_form;
 pub mod error;
+pub mod i18n;
+pub mod instance;
 mod reassert;
+pub mod scheme;
 pub mod service;
 pub mod snapshot;
+pub mod sysproxy;
 pub mod ui;
+pub mod update;
 
 pub use error::{AppError, RuleLineError};
 pub use service::{AppService, ConfigCheck, ServiceDeps, SharedAppService};
 pub use snapshot::{
-    AppSnapshot, EngineView, NodeView, NoticeKind, RuleKindView, RuleView, SubscriptionStatus,
-    SubscriptionView,
+    AnnouncementView, AppSnapshot, EngineView, GroupView, Latency, MemberView, NodeView,
+    NoticeKind, RuleKindView, RuleView, SubscriptionStatus, SubscriptionView,
 };

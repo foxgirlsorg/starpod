@@ -7,9 +7,28 @@
 // Enumerated values are plain strings, so the Rust side can map them from
 // its domain enums without a second set of Slint enums.
 
+// One piece of a display string. Text runs are one word each, with the space
+// after it; emoji runs carry the Twemoji picture in `icon` and the original
+// emoji in `text`. Every string the app shows has a runs list next to it,
+// so emoji render inline. Empty for an empty string.
+export struct TextRun {
+    text: string,
+    // the Twemoji image; empty for text runs and for emoji with no image
+    icon: image,
+    emoji: bool,
+}
+
+// One warning from the last successful build.
+export struct WarningItem {
+    text: string,
+    runs: [TextRun],
+}
+
 export struct SubscriptionItem {
     id: string,
     label: string,
+    // The profile-title header, or the label
+    title: string,
     // "app-managed" | "engine-managed"
     mode: string,
     // "ok" | "error" | "syncing" | "never"
@@ -21,6 +40,10 @@ export struct SubscriptionItem {
     quota-used-fraction: float,
     quota-text: string,
     expires: string,
+    // runs of `title`
+    title-runs: [TextRun],
+    // runs of `error`
+    error-runs: [TextRun],
 }
 
 export struct NodeItem {
@@ -31,6 +54,9 @@ export struct NodeItem {
     // -1 = untested
     latency-ms: int,
     selected: bool,
+    // runs of `name` and of `group`
+    name-runs: [TextRun],
+    group-runs: [TextRun],
 }
 
 export struct RuleItem {
@@ -43,6 +69,11 @@ export struct RuleItem {
     enabled: bool,
     from-subscription: bool,
     error: string,
+    // runs of `target`, `payload`, `line` and `error`
+    target-runs: [TextRun],
+    payload-runs: [TextRun],
+    line-runs: [TextRun],
+    error-runs: [TextRun],
 }
 
 export struct LogItem {
@@ -50,6 +81,9 @@ export struct LogItem {
     level: string,
     source: string,
     message: string,
+    // runs of `message` and of `source`
+    message-runs: [TextRun],
+    source-runs: [TextRun],
 }
 
 // The settings form. A number that is not set is -1 and shows as an empty
@@ -69,13 +103,248 @@ export struct SettingsModel {
     tun-device: string,
     // -1 = not set (the engine default); 1280-9000 = MTU
     tun-mtu: int,
+    // Install the routes on startup. Off leaves the routes to the user
+    tun-auto-route: bool,
+    // One DNS hijack target per line, as host:port, such as any:53. "" = not set
+    tun-dns-hijack: string,
     // -1 = not set (the app default, 60); 0 = manual only; otherwise minutes
     auto-refresh-minutes: int,
+    // true = choosing a group's member closes the connections through that group
+    auto-close-connections-on-switch: bool,
+    // Point the operating system's proxy at the engine while it runs
+    system-proxy: bool,
+    // "manual" (a fixed server) | "pac" (a script Starpod serves)
+    sysproxy-mode: string,
+    // The hosts the proxy is skipped for, in the operating system's syntax
+    sysproxy-bypass: string,
+    // The PAC script; %mixed-port% stands for the engine's mixed port
+    pac-script: string,
+    // Start Starpod when the user logs in
+    autostart: bool,
+    // A login start stays in the tray instead of showing the window
+    silent-start: bool,
+    // Connect once the saved state has loaded, when a subscription has servers
+    auto-connect: bool,
+    // Closing the window hides Starpod to the tray; off, closing quits
+    close-to-tray: bool,
+    // "" = follow the system locale; "en" or "ru" pin the language
+    language: string,
+}
+
+// The engine settings beyond the core ones. Conventions:
+//   - a tri-state (int): -1 = not set (the engine default), 0 = off, 1 = on
+//   - a number: -1 = not set
+//   - a string: "" = not set
+//   - a list: one entry per line; "domain: server, server" for a policy;
+//     "HTTP: 80, 8080-8880" for a sniff protocol; "domain ip" for a host
+export struct EngineSettingsModel {
+    // TUN extras (take effect with TUN on)
+    // "" = not set; "gvisor" | "mixed" | "system"
+    tun-stack: string,
+    tun-strict-route: int,
+    tun-auto-redirect: int,
+    tun-auto-detect-interface: int,
+    tun-endpoint-independent-nat: int,
+    // one CIDR per line
+    tun-route-address: string,
+    tun-route-exclude-address: string,
+    // IPv6, latency and connection behaviour
+    ipv6: int,
+    unified-delay: int,
+    tcp-concurrent: int,
+    // "" = not set; "off" | "strict" | "always"
+    find-process-mode: string,
+    // -1 = not set; 1-86400 seconds
+    keep-alive-interval: int,
+    // the user's DNS block replaces the subscription's when true
+    override-dns: bool,
+    dns-enable: int,
+    // "" = not set; "fake-ip" | "redir-host"
+    dns-enhanced-mode: string,
+    dns-fake-ip-range: string,
+    // one entry per line for the list fields below
+    dns-fake-ip-filter: string,
+    dns-nameserver: string,
+    dns-fallback: string,
+    dns-default-nameserver: string,
+    dns-proxy-server-nameserver: string,
+    dns-nameserver-policy: string,
+    dns-use-hosts: int,
+    hosts: string,
+    // sniffer
+    sniffer-enable: int,
+    sniffer-force-dns-mapping: int,
+    sniffer-parse-pure-ip: int,
+    sniffer-override-destination: int,
+    sniffer-sniff: string,
+    sniffer-force-domain: string,
+    sniffer-skip-domain: string,
+    // geodata
+    // "" = not set; "dat" | "mmdb"
+    geodata-mode: string,
+    // "" = the engine's default source
+    geox-geoip: string,
+    geox-geosite: string,
+    geox-mmdb: string,
+    geox-asn: string,
+    geodata-auto-update: int,
+    // -1 = not set; 1-8760 hours
+    geodata-update-interval-hours: int,
+    // latency test and logs
+    // "" = the app default (https://www.gstatic.com/generate_204)
+    delay-test-url: string,
+    // -1 = the app default (5000)
+    delay-test-timeout-ms: int,
+    // -1 = the app default (1000); 100-2000
+    log-retention-lines: int,
+    // "stable" | "alpha"
+    engine-channel: string,
+}
+
+// One connection on the Connections page, open or closed. Byte figures and
+// speeds are already formatted ("12.3 MB", "4 KB/s"). `start` is the clock
+// time the connection opened, and `duration` how long it has been open.
+export struct ConnectionItem {
+    id: string,
+    // the host, or the destination IP when the connection had no host
+    host: string,
+    // "ip:port" of the destination; "" when the engine gave no IP
+    destination: string,
+    // "tcp" or "udp"
+    network: string,
+    // the inbound type, such as "HTTPS"
+    kind: string,
+    // the process name; "" when it is not known
+    process: string,
+    // the outbounds joined with arrows: "A → B → C"
+    chain: string,
+    // the matched rule as "RULE,payload", or "RULE" with no payload
+    rule: string,
+    upload: string,
+    download: string,
+    upload-speed: string,
+    download-speed: string,
+    // the clock time it opened, "12:03:44"; "" when unknown
+    start: string,
+    // how long it has been open, for example "4m 09s"
+    duration: string,
+    // true once the connection has ended (the closed history)
+    closed: bool,
+    // runs of `host` and of `chain`
+    host-runs: [TextRun],
+    chain-runs: [TextRun],
+}
+
+export struct MemberItem {
+    name: string,
+    protocol: string,
+    latency-ms: int,
+    label: string,
+    // runs of `label`
+    label-runs: [TextRun],
+}
+
+// One row of a Select. `detail` is a right-aligned secondary text, for
+// example a latency; `detail-color` colours it.
+export struct SelectItem {
+    text: string,
+    detail: string,
+    detail-color: color,
+    // runs of `text`
+    text-runs: [TextRun],
+}
+
+export struct GroupItem {
+    // the engine name, used to select a member
+    name: string,
+    // "select" | "url-test" | "fallback" | "load-balance" | "relay"
+    kind: string,
+    // the member the group currently uses ("" when unknown)
+    selected: string,
+    members: [MemberItem],
+    // the name to show: name without its subscription's "<label> / " prefix
+    label: string,
+    // one row per member, for the member Select: text is the member's label,
+    // detail its latency
+    member-choices: [SelectItem],
+    // runs of `label`, and of `selected`
+    label-runs: [TextRun],
+    selected-runs: [TextRun],
+    // whether the group's members are listed; false = collapsed. Rust keeps it
+    // and changes it with toggle-group and expand-all.
+    expanded: bool,
+    // the index of `selected` in `members` and in `member-choices`, in the order
+    // they are shown (after sorting and hiding); -1 when there is none
+    selected-index: int,
+}
+
+export struct AnnouncementItem {
+    subscription-id: string,
+    title: string,        // profile-title header, or the profile's label
+    text: string,
+    // the link shown with the announcement; "" when there is none
+    announce-url: string,
+    support-url: string,
+    web-url: string,
+    // runs of `title` and of `text`
+    title-runs: [TextRun],
+    text-runs: [TextRun],
+}
+
+// The Home page profile card of the active subscription. `present` is false
+// when there is no subscription. Empty strings mean "not sent".
+export struct ProfileCardItem {
+    present: bool,
+    subscription-id: string,
+    title: string,
+    // runs of `title`
+    title-runs: [TextRun],
+    // the cached logo. `has-logo` is true only when `logo` loaded from `logo-path`.
+    has-logo: bool,
+    logo: image,
+    logo-path: string,
+    // the announcement text, with its runs, and the link shown with it
+    announce: string,
+    announce-runs: [TextRun],
+    announce-url: string,
+    support-url: string,
+    web-url: string,
+    web-page-name: string,
+    // "12.3 GB of 100 GB", or "12.3 GB used" when there is no total
+    traffic-text: string,
+    // "87.7 GB left", or "Unlimited" when there is no total
+    remaining-text: string,
+    // "Expires 2026-12-31" or "Expired 2026-12-31"; "" when there is no expiry
+    expires-text: string,
+    // whole days until the plan ends, rounded toward zero; -1 when there is no
+    // expiry; -2 or less when the plan has ended
+    days-remaining: int,
+    // true within three days of the end, or after it
+    expiring-soon: bool,
+    // true when the provider reports this device at its device limit
+    device-limit: bool,
+    // true when the provider reported a quota at all
+    has-quota: bool,
+    // used / total, from 0 to 1, for a progress bar; 0 when there is no total
+    quota-used-fraction: float,
+}
+
+// The global keyboard shortcuts, one accelerator per action, written as
+// `global-hotkey` reads them, for example "Ctrl+Alt+KeyS". "" = no shortcut.
+// Rust refuses a bad or duplicate one on save; the error goes to settings-error.
+export struct HotkeyModel {
+    show-window: string,
+    toggle-connect: string,
+    toggle-system-proxy: string,
+    mode-rule: string,
+    mode-global: string,
+    mode-direct: string,
 }
 
 export global Bridge {
     // --- navigation ---------------------------------------------------------
-    // 0 Dashboard, 1 Servers, 2 Rules, 3 Settings, 4 Logs
+    // 0 Home, 1 Profiles, 2 Proxies, 3 Rules, 4 Logs, 5 Settings, 6 Connections
+    // (CONNECTIONS_PAGE in ui/runtime.rs; app.slint has no page 6 yet)
     in-out property <int> active-page: 0;
 
     // --- engine -------------------------------------------------------------
@@ -105,6 +374,25 @@ export global Bridge {
     in-out property <[SubscriptionItem]> subscriptions: [];
     in-out property <[NodeItem]> nodes: [];
     in-out property <string> node-filter: "";
+    in-out property <[GroupItem]> groups: [];
+    in-out property <string> primary-group: "";
+    // one row per group, for the group Select: text is the group's label
+    in-out property <[SelectItem]> group-choices: [];
+    in-out property <[AnnouncementItem]> announcements: [];
+    // The profile card of the active subscription (see ProfileCardItem).
+    in-out property <ProfileCardItem> profile-card;
+    // false while the active subscription forbids the Global mode. Rust moves the
+    // mode to Rule in that case; the UI should hide or disable the Global choice.
+    in-out property <bool> global-mode-allowed: true;
+    // Live traffic while connected: the totals since the engine started, as
+    // text such as "12.3 GB". Empty and `session-traffic-visible` false when
+    // the engine is not running.
+    in-out property <bool> session-traffic-visible: false;
+    in-out property <string> session-upload: "";
+    in-out property <string> session-download: "";
+    // Whether the app sends device identification (x-hwid and the device
+    // headers) with subscription fetches. The Settings switch sets it.
+    in-out property <bool> send-device-id: true;
 
     // --- rules --------------------------------------------------------------
     in-out property <[RuleItem]> user-rules: [];
@@ -118,6 +406,30 @@ export global Bridge {
     in-out property <[LogItem]> logs: [];
     in-out property <string> log-level-filter: "all";
 
+    // --- connections --------------------------------------------------------
+    // Polled about once a second while the Connections page is open and not
+    // paused. The lists are filtered and sorted by Rust.
+    in-out property <[ConnectionItem]> connections: [];
+    // the connections that have ended, newest first; at most 200
+    in-out property <[ConnectionItem]> closed-connections: [];
+    // a case-insensitive substring of the host, process, chain or rule
+    in-out property <string> connections-filter: "";
+    // 0 newest, 1 upload, 2 download, 3 host
+    in-out property <int> connections-sort: 0;
+    // true freezes the lists; the page keeps what it showed
+    in-out property <bool> connections-paused: false;
+    in-out property <int> connections-active-count: 0;
+    // the engine's totals since it started, formatted
+    in-out property <string> connections-total-upload: "";
+    in-out property <string> connections-total-download: "";
+
+    // --- proxies list -------------------------------------------------------
+    // 0 as configured, 1 by latency (untested and timed-out last), 2 by name.
+    // Saved by Rust from the value the page sets.
+    in-out property <int> proxies-sort: 0;
+    // true hides the members whose last latency test timed out
+    in-out property <bool> hide-unavailable: false;
+
     // --- settings -----------------------------------------------------------
     in-out property <SettingsModel> settings;
     in-out property <string> settings-error: "";
@@ -128,10 +440,41 @@ export global Bridge {
     in-out property <string> secret-fallback-reason: "";
     in-out property <string> data-dir: "";
 
+    // --- system proxy -------------------------------------------------------
+    // True while Starpod has pointed the system proxy at the engine. False
+    // while the engine is stopped, even when the setting is on.
+    in-out property <bool> system-proxy-active: false;
+    // Why the last system proxy change failed, or "" when it did not.
+    in-out property <string> system-proxy-error: "";
+    // The global shortcuts as saved. Set by Rust; saved with save-hotkeys.
+    in-out property <HotkeyModel> hotkeys;
+    // Whether the app checks GitHub for a newer release at startup.
+    in-out property <bool> check-updates: true;
+
+    // --- update check ------------------------------------------------------
+    // Set when the latest release is newer than this build. update-url is
+    // the release page: open it with open-url. Nothing is downloaded.
+    in-out property <bool> update-available: false;
+    in-out property <string> update-version: "";
+    in-out property <string> update-url: "";
+
     // --- shell --------------------------------------------------------------
     in-out property <bool> tray-available: false;
     // Non-blocking findings from the last successful build, for the Dashboard.
     in-out property <[string]> warnings: [];
+
+    // Runs of the display strings above. Each one is the runs of the plain
+    // string property next to it, empty when that string is empty.
+    in-out property <[TextRun]> banner-runs: [];
+    in-out property <[TextRun]> engine-error-runs: [];
+    in-out property <[TextRun]> busy-message-runs: [];
+    in-out property <[TextRun]> connect-blocked-reason-runs: [];
+    in-out property <[TextRun]> current-node-runs: [];
+    in-out property <[TextRun]> primary-group-runs: [];
+    in-out property <[TextRun]> rules-error-runs: [];
+    in-out property <[TextRun]> settings-error-runs: [];
+    // one entry per warning, in the same order as `warnings`
+    in-out property <[WarningItem]> warning-items: [];
 
     // --- callbacks: engine --------------------------------------------------
     callback connect();
@@ -149,7 +492,14 @@ export global Bridge {
     // subscription id, mode
     callback set-subscription-mode(string, string);
     callback select-node(string);
+    // group, member
+    callback select-member(string, string);
     callback test-latency();
+    callback open-url(string);
+    // group name: flips between expanded and collapsed
+    callback toggle-group(string);
+    // true expands every group, false collapses every group
+    callback expand-all(bool);
 
     // --- callbacks: rules ---------------------------------------------------
     // kind, payload, target
@@ -165,13 +515,63 @@ export global Bridge {
 
     // --- callbacks: settings and logs ---------------------------------------
     callback save-settings(SettingsModel);
+    // on or off
+    callback toggle-system-proxy(bool);
+    // TUN on or off, saved through the same path as save-settings.
+    callback toggle-tun(bool);
+    // Send device identification with subscription fetches, saved on its own.
+    callback set-send-device-id(bool);
+    callback save-hotkeys(HotkeyModel);
+    callback set-check-updates(bool);
+    // Ask GitHub for the latest release now (the startup check runs by itself).
+    callback check-for-updates();
+    // Put the proxy command (for the visible proxy port) on the clipboard.
+    callback copy-proxy-env();
     callback clear-cache();
     callback copy-logs();
     callback clear-logs();
+
+    // --- callbacks: connections ---------------------------------------------
+    // connection id; closes it at the engine
+    callback close-connection(string);
+    callback close-all-connections();
+    // forgets the closed history only
+    callback clear-closed-connections();
 
     // --- callbacks: shell ---------------------------------------------------
     callback dismiss-banner();
     callback show-window();
     callback hide-window();
     callback quit();
+
+    // --- engine parity: updates, geodata, group latency ---------------------
+    // The installed engine release and the newest one on the chosen channel;
+    // "" until a check or install has run. Shown when they differ.
+    in-out property <string> engine-installed-version: "";
+    in-out property <string> engine-latest-version: "";
+    in-out property <bool> engine-update-available: false;
+    // Unix seconds of the last geodata refresh; 0 = never.
+    in-out property <int> geo-updated-at: 0;
+    // The engine settings the form shows.
+    in-out property <EngineSettingsModel> engine-settings;
+    callback save-engine-settings(EngineSettingsModel);
+    // Ask the release feed for the newest engine on the chosen channel.
+    callback check-engine-update();
+    // Download, verify and install that engine; a running proxy restarts on it.
+    callback upgrade-engine();
+    // Download the geodata databases and reload the engine.
+    callback update-geo-data();
+    // Measure every member of the named proxy group; results fill the node latencies.
+    callback test-group(string);
+
+    // --- install from a starpod:// link -------------------------------------
+    // Set by Rust when a link asks to add a subscription. The dialog in
+    // app.slint shows the host only, never the address, and nothing is added
+    // until confirm-install.
+    in property <bool> install-pending: false;
+    in property <string> install-name: "";
+    in property <string> install-host: "";
+    in property <string> install-error: "";
+    callback confirm-install();
+    callback cancel-install();
 }

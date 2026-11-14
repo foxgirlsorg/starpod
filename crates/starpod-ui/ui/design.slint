@@ -1,65 +1,91 @@
 // The design tokens.
 //
-// Every colour, radius and duration the app uses is declared once here.
-// The screens refer to these names, never to a literal value, so that a
-// change to the palette is a change in one file.
+// Every colour, radius, space and font size the app uses is declared once
+// here. Screens and primitives refer to these names, never to a literal
+// value, so a change to the look is a change in this file.
 //
-// The values are the foxgirls.org tokens, extracted in
-// `docs/research/foxgirls-design.md` (ARCHITECTURE §1.11). The theme is
-// dark-only, because the reference site is dark-only.
+// The values are the ones in docs/design/ui-spec.md section 2: a zinc dark
+// theme with the Starpod brand red. The theme is dark only.
 
 export global Design {
     // --- surfaces -----------------------------------------------------------
-    in property <color> background: #161616;
-    in property <color> foreground: #ededed;
-    in property <color> card: #1c1c1c;
-    in property <color> popover: #1c1c1c;
-    in property <color> secondary: #262626;
-    in property <color> muted: #232323;
-    in property <color> accent: #262626;
+    // window ground
+    in property <color> background: #111113;
+    // sidebar ground
+    in property <color> sidebar: #0c0c0e;
+    // cards and list rows
+    in property <color> card: #18181b;
+    // hovered rows and tiles
+    in property <color> card-hover: #1f1f23;
+    // select popups and dialogs
+    in property <color> popover: #1c1c1f;
+    // secondary button, segmented track
+    in property <color> secondary: #27272a;
+    // secondary button hover
+    in property <color> secondary-hover: #323236;
+    // subtle fills
+    in property <color> muted: #1f1f23;
+    // hover in menus
+    in property <color> accent: #27272a;
 
-    // --- brand --------------------------------------------------------------
+    // --- brand and state ----------------------------------------------------
+    // primary action, selection, connected
     in property <color> primary: #de6161;
+    in property <color> primary-hover: #e57a7a;
+    in property <color> primary-pressed: #c95454;
+    // selected tile fill, connected ring (12% alpha)
+    in property <color> primary-soft: #de61611f;
     in property <color> primary-foreground: #ffffff;
+    // latency under 200 ms, connected dot
+    in property <color> success: #4ade80;
+    // latency 200 to 499 ms
+    in property <color> warning: #fbbf24;
+    // errors, delete, latency 500 ms and up, timeout
+    in property <color> destructive: #ef4444;
+    // focus ring
+    in property <color> ring: #de6161;
 
     // --- text ---------------------------------------------------------------
-    in property <color> muted-foreground: #a3a3a3;
-
-    // --- status -------------------------------------------------------------
-    in property <color> destructive: #e5484d;
-    in property <color> success: #4a9e5c;
-    in property <color> warning: #c99a3f;
-    in property <color> info: #a3a3a3;
+    in property <color> foreground: #fafafa;
+    in property <color> muted-foreground: #a1a1aa;
+    in property <color> subtle-foreground: #71717a;
+    // kept for the info banner and other neutral status text
+    in property <color> info: #a1a1aa;
 
     // --- lines --------------------------------------------------------------
-    in property <color> border: rgba(255, 255, 255, 0.08);
-    in property <color> input: rgba(255, 255, 255, 0.12);
-    in property <color> ring: #de6161;
+    // card borders, dividers
+    in property <color> border: #27272a;
+    // input and select borders
+    in property <color> input: #3f3f46;
 
     // --- radii --------------------------------------------------------------
     in property <length> radius-sm: 6px;
     in property <length> radius-md: 8px;
-    in property <length> radius-lg: 10px;
-    in property <length> radius-xl: 14px;
+    in property <length> radius-lg: 12px;
+    in property <length> radius-full: 9999px;
 
-    // --- spacing ------------------------------------------------------------
+    // --- spacing (4px grid) -------------------------------------------------
     in property <length> space-xs: 4px;
     in property <length> space-sm: 8px;
     in property <length> space-md: 12px;
     in property <length> space-lg: 16px;
+    in property <length> space-5: 20px;
     in property <length> space-xl: 24px;
     in property <length> space-2xl: 32px;
+    in property <length> space-12: 48px;
 
     // --- type ---------------------------------------------------------------
     in property <string> font-family: "Inter Variable";
-    // Monospace, for rule lines and log text. Consolas ships with Windows.
-    // Slint takes one family name, not a list, and falls back to its default
-    // face where the family is missing, so the text still lays out.
+    // Monospace, for logs and raw rules only. Consolas ships with Windows.
     in property <string> font-mono: "Consolas";
     in property <length> font-xs: 12px;
-    in property <length> font-sm: 14px;
-    in property <length> font-md: 16px;
-    in property <length> font-lg: 18px;
-    in property <length> font-xl: 24px;
-    in property <length> font-hero: 48px;
+    in property <length> font-sm: 13px;
+    in property <length> font-base: 14px;
+    in property <length> font-lg: 16px;
+    in property <length> font-xl: 20px;
+    in property <length> font-2xl: 28px;
+
+    // --- effects ------------------------------------------------------------
+    // drop shadow of floating surfaces (select popups, dialogs)
+    in property <color> shadow: #00000080;
 }

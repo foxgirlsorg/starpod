@@ -1,0 +1,1278 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: starpod-ui\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : 2);\n"
+
+
+msgid "Connected"
+msgstr "Подключено"
+
+msgid "Connecting…"
+msgstr "Подключение…"
+
+msgid "Disconnecting…"
+msgstr "Отключение…"
+
+msgid "Failed"
+msgstr "Ошибка"
+
+msgid "Not connected"
+msgstr "Не подключено"
+
+msgid "Global mode"
+msgstr "Глобальный режим"
+
+msgid "Direct mode"
+msgstr "Прямой режим"
+
+msgid "Rule mode"
+msgstr "Режим правил"
+
+msgid "Up {}"
+msgstr "Работает {}"
+
+msgid "Home"
+msgstr "Главная"
+
+msgid "Profiles"
+msgstr "Профили"
+
+msgid "Proxies"
+msgstr "Прокси"
+
+msgid "Rules"
+msgstr "Правила"
+
+msgid "Logs"
+msgstr "Журнал"
+
+msgid "Connections"
+msgstr "Соединения"
+
+msgid "Settings"
+msgstr "Настройки"
+
+msgid "Update available: v{}"
+msgstr "Доступно обновление: v{}"
+
+msgid "Add subscription?"
+msgstr "Добавить подписку?"
+
+msgid "Add the subscription from {}?"
+msgstr "Добавить подписку из {}?"
+
+msgid "Add the subscription from {}?\nName: {}"
+msgstr "Добавить подписку из {}?\nИмя: {}"
+
+msgid "Add"
+msgstr "Добавить"
+
+msgid "timeout"
+msgstr "таймаут"
+
+msgid " ms"
+msgstr " мс"
+
+msgid "Show less"
+msgstr "Свернуть"
+
+msgid "Show more"
+msgstr "Подробнее"
+
+msgid "Confirm"
+msgstr "Подтвердить"
+
+msgid "Cancel"
+msgstr "Отмена"
+
+msgid "Close this connection"
+msgstr "Закрыть это соединение"
+
+msgid "Newest"
+msgstr "Новые"
+
+msgid "Upload"
+msgstr "Отдача"
+
+msgid "Download"
+msgstr "Загрузка"
+
+msgid "Host"
+msgstr "Хост"
+
+msgid "No closed connections"
+msgstr "Нет закрытых соединений"
+
+msgid "No matches"
+msgstr "Ничего не найдено"
+
+msgid "No connections"
+msgstr "Нет соединений"
+
+msgid "Connections that end show up here."
+msgstr "Завершённые соединения появятся здесь."
+
+msgid "Connect to see the connections that pass through the proxy."
+msgstr "Подключитесь, чтобы увидеть соединения через прокси."
+
+msgid "No connection matches the filter."
+msgstr "Ни одно соединение не подходит под фильтр."
+
+msgid "Connections show up here as apps use the proxy."
+msgstr "Соединения появятся здесь, когда приложения будут использовать прокси."
+
+msgid "Close all connections?"
+msgstr "Закрыть все соединения?"
+
+msgid "Every open connection is closed now. Apps can open new ones."
+msgstr "Все открытые соединения закрыты. Приложения могут открыть новые."
+
+msgid "Close all"
+msgstr "Закрыть все"
+
+msgid "{} active"
+msgstr "Активных: {}"
+
+msgid " · {} uploaded"
+msgstr " · отдано {}"
+
+msgid " · {} downloaded"
+msgstr " · загружено {}"
+
+msgid "Filter by host, process, chain or rule"
+msgstr "Фильтр по хосту, процессу, цепочке или правилу"
+
+msgid "Paused"
+msgstr "Приостановлено"
+
+msgid "Pause"
+msgstr "Пауза"
+
+msgid "Active"
+msgstr "Активные"
+
+msgid "Closed"
+msgstr "Закрытые"
+
+msgid "Clear"
+msgstr "Очистить"
+
+msgid "Go to Home"
+msgstr "Перейти на главную"
+
+msgid "Learn more"
+msgstr "Подробнее"
+
+msgid "Couldn't connect"
+msgstr "Не удалось подключиться"
+
+msgid "Up {} · {}"
+msgstr "Работает {} · {}"
+
+msgid "Your subscription has ended"
+msgstr "Подписка закончилась"
+
+msgid "Your subscription expires today"
+msgstr "Подписка истекает сегодня"
+
+msgid "Your subscription expires in 1 day"
+msgstr "Подписка истекает завтра"
+
+msgid "Your subscription expires in {n} day"
+msgid_plural "Your subscription expires in {n} days"
+msgstr[0] "Подписка истекает через {n} день"
+msgstr[1] "Подписка истекает через {n} дня"
+msgstr[2] "Подписка истекает через {n} дней"
+
+msgid "Rule"
+msgstr "Правила"
+
+msgid "Global"
+msgstr "Глобальный"
+
+msgid "Direct"
+msgstr "Прямой"
+
+msgid "Support"
+msgstr "Поддержка"
+
+msgid "Website"
+msgstr "Сайт"
+
+msgid "Refresh profile"
+msgstr "Обновить профиль"
+
+msgid "Renew"
+msgstr "Продлить"
+
+msgid "Device limit reached"
+msgstr "Достигнут лимит устройств"
+
+msgid "This device is at the device limit set by your provider. Contact support to free a slot."
+msgstr "Достигнут лимит устройств, заданный провайдером. Свяжитесь с поддержкой, чтобы освободить место."
+
+msgid "Contact support"
+msgstr "Связаться с поддержкой"
+
+msgid "Install engine"
+msgstr "Установить ядро"
+
+msgid "Add a profile"
+msgstr "Добавить профиль"
+
+msgid "System proxy"
+msgstr "Системный прокси"
+
+msgid "TUN"
+msgstr "TUN"
+
+msgid "Test latency"
+msgstr "Проверить задержку"
+
+msgid "Group"
+msgstr "Группа"
+
+msgid "Server"
+msgstr "Сервер"
+
+msgid "Chosen automatically"
+msgstr "Выбран автоматически"
+
+msgid "ERROR"
+msgstr "ОШИБКА"
+
+msgid "WARN"
+msgstr "ВНИМ."
+
+msgid "DEBUG"
+msgstr "ОТЛАДКА"
+
+msgid "INFO"
+msgstr "ИНФО"
+
+msgid "What Starpod and the engine are doing."
+msgstr "Что делают Starpod и ядро."
+
+msgid "Copy all"
+msgstr "Копировать всё"
+
+msgid "All"
+msgstr "Все"
+
+msgid "Info"
+msgstr "Информация"
+
+msgid "Warnings"
+msgstr "Предупреждения"
+
+msgid "Errors"
+msgstr "Ошибки"
+
+msgid "Engine error:"
+msgstr "Ошибка ядра:"
+
+msgid "No logs yet"
+msgstr "Записей пока нет"
+
+msgid "Engine startup and shutdown, validation failures and subscription errors appear here."
+msgstr "Здесь появляются запуск и остановка ядра, ошибки проверки и ошибки подписок."
+
+msgid "No lines at this level. Choose All to see every line."
+msgstr "На этом уровне записей нет. Выберите «Все», чтобы увидеть все строки."
+
+msgid "Paste the subscription link."
+msgstr "Вставьте ссылку на подписку."
+
+msgid "The link must start with https://"
+msgstr "Ссылка должна начинаться с https://"
+
+msgid "app-managed"
+msgstr "управляется приложением"
+
+msgid "engine-managed"
+msgstr "управляется ядром"
+
+msgid "Updating…"
+msgstr "Обновление…"
+
+msgid "Update failed"
+msgstr "Ошибка обновления"
+
+msgid "Not updated yet"
+msgstr "Ещё не обновлялась"
+
+msgid "Up to date"
+msgstr "Актуально"
+
+msgid "Remove “{}”?"
+msgstr "Удалить «{}»?"
+
+msgid "Its servers and rules will no longer be used. You can add the link again later."
+msgstr "Её серверы и правила больше не будут использоваться. Ссылку можно добавить снова позже."
+
+msgid "Remove"
+msgstr "Удалить"
+
+msgid "Subscriptions that supply your servers and rules."
+msgstr "Подписки: серверы и правила."
+
+msgid "Update all"
+msgstr "Обновить все"
+
+msgid "Add profile"
+msgstr "Добавить профиль"
+
+msgid "Subscription URL"
+msgstr "Адрес подписки"
+
+msgid "Name"
+msgstr "Имя"
+
+msgid "Optional — taken from the link"
+msgstr "Необязательно — берётся из ссылки"
+
+msgid "Advanced"
+msgstr "Дополнительно"
+
+msgid "Authorization header"
+msgstr "Заголовок авторизации"
+
+msgid "Optional"
+msgstr "Необязательно"
+
+msgid "Sent with every update, stored in your system keychain"
+msgstr "Отправляется при каждом обновлении, хранится в системной связке ключей"
+
+msgid "Updated by"
+msgstr "Обновляется"
+
+msgid "Engine"
+msgstr "Ядро"
+
+msgid "No traffic/expiry info, the engine refreshes it itself"
+msgstr "Нет данных о трафике и сроке действия, ядро обновляет его само"
+
+msgid "No profiles yet"
+msgstr "Профилей пока нет"
+
+msgid "Add your subscription link to get servers."
+msgstr "Добавьте ссылку на подписку, чтобы получить серверы."
+
+msgid "Update now"
+msgstr "Обновить сейчас"
+
+msgid "{n} server"
+msgid_plural "{n} servers"
+msgstr[0] "{n} сервер"
+msgstr[1] "{n} сервера"
+msgstr[2] "{n} серверов"
+
+msgid " · Updated {}"
+msgstr " · обновлено {}"
+
+msgid " · Updated by the engine"
+msgstr " · обновляется ядром"
+
+msgid "Expires {}"
+msgstr "Истекает {}"
+
+msgid "Select"
+msgstr "Выбор"
+
+msgid "Auto"
+msgstr "Авто"
+
+msgid "Fallback"
+msgstr "Резерв"
+
+msgid "Load balance"
+msgstr "Балансировка"
+
+msgid "Relay"
+msgstr "Цепочка"
+
+msgid "Choose which server each group uses."
+msgstr "Выберите, какой сервер использует каждая группа."
+
+msgid "Filter servers"
+msgstr "Фильтр серверов"
+
+msgid "Default"
+msgstr "По умолчанию"
+
+msgid "Latency"
+msgstr "Задержка"
+
+msgid "Hide unavailable"
+msgstr "Скрыть недоступные"
+
+msgid "Expand all"
+msgstr "Развернуть все"
+
+msgid "Collapse all"
+msgstr "Свернуть все"
+
+msgid "No servers yet"
+msgstr "Серверов пока нет"
+
+msgid "Add a profile to get servers."
+msgstr "Добавьте профиль, чтобы получить серверы."
+
+msgid "Go to Profiles"
+msgstr "Перейти к профилям"
+
+msgid "Show the current server"
+msgstr "Показать текущий сервер"
+
+msgid "Test latency in this group"
+msgstr "Проверить задержку в этой группе"
+
+msgid "Move up"
+msgstr "Вверх"
+
+msgid "Move down"
+msgstr "Вниз"
+
+msgid "Edit"
+msgstr "Изменить"
+
+msgid "Delete"
+msgstr "Удалить"
+
+msgid "Decide where traffic goes. Your rules run before the profile's rules."
+msgstr "Определите, куда идёт трафик. Ваши правила применяются раньше правил профиля."
+
+msgid "Your rules ({})"
+msgstr "Ваши правила ({})"
+
+msgid "From profiles ({})"
+msgstr "Из профилей ({})"
+
+msgid "Edit as text"
+msgstr "Изменить как текст"
+
+msgid "Kind"
+msgstr "Тип"
+
+msgid "Target"
+msgstr "Цель"
+
+msgid "No rules of your own"
+msgstr "Своих правил нет"
+
+msgid "Profile rules still apply. Add one to override them."
+msgstr "Правила профиля всё ещё действуют. Добавьте свое правило, чтобы переопределить их."
+
+msgid "Save"
+msgstr "Сохранить"
+
+msgid "{n} rule from your profiles, applied after yours."
+msgid_plural "{n} rules from your profiles, applied after yours."
+msgstr[0] "{n} правило из профилей, применяется после ваших."
+msgstr[1] "{n} правила из профилей, применяются после ваших."
+msgstr[2] "{n} правил из профилей, применяются после ваших."
+
+msgid "No profile rules"
+msgstr "Правил профиля нет"
+
+msgid "Rules that come with a profile are listed here once it has been fetched."
+msgstr "Правила из профиля появятся здесь, когда он будет загружен."
+
+msgid "One rule per line, for example DOMAIN-SUFFIX,example.com,DIRECT"
+msgstr "Одно правило в строке, например DOMAIN-SUFFIX,example.com,DIRECT"
+
+msgid "Revert"
+msgstr "Вернуть"
+
+msgid "Apply"
+msgstr "Применить"
+
+msgid "Delete this rule?"
+msgstr "Удалить это правило?"
+
+msgid "\"{}\" will be removed from your rules. This cannot be undone."
+msgstr "«{}» будет удалено из ваших правил. Это нельзя отменить."
+
+msgid "General"
+msgstr "Основные"
+
+msgid "Network"
+msgstr "Сеть"
+
+msgid "DNS"
+msgstr "DNS"
+
+msgid "Sniffer"
+msgstr "Сниффер"
+
+msgid "Geo data"
+msgstr "Гео-данные"
+
+msgid "Privacy"
+msgstr "Приватность"
+
+msgid "Hotkeys"
+msgstr "Горячие клавиши"
+
+msgid "Storage"
+msgstr "Хранение"
+
+msgid "Startup, routing, subscriptions and updates"
+msgstr "Запуск, маршрутизация, подписки и обновления"
+
+msgid "Ports, LAN access, IPv6 and the system proxy"
+msgstr "Порты, доступ из сети, IPv6 и системный прокси"
+
+msgid "The virtual adapter that routes all system traffic"
+msgstr "Виртуальный адаптер, направляющий весь системный трафик"
+
+msgid "How the engine resolves names"
+msgstr "Как ядро разрешает имена"
+
+msgid "Reads domain names from the traffic"
+msgstr "Определяет доменные имена по трафику"
+
+msgid "The GeoIP and GeoSite databases"
+msgstr "Базы GeoIP и GeoSite"
+
+msgid "The proxy engine: version, logs, tests and connections"
+msgstr "Ядро прокси: версия, журнал, проверки и соединения"
+
+msgid "How proxy groups behave"
+msgstr "Поведение групп прокси"
+
+msgid "What is sent to subscription providers"
+msgstr "Что отправляется провайдерам подписок"
+
+msgid "Global keyboard shortcuts"
+msgstr "Глобальные горячие клавиши"
+
+msgid "Where secrets and data are kept"
+msgstr "Где хранятся секреты и данные"
+
+msgid "Fix the highlighted fields first."
+msgstr "Сначала исправьте выделенные поля."
+
+msgid "Another operation is running."
+msgstr "Выполняется другая операция."
+
+msgid "Rule-based"
+msgstr "По правилам"
+
+msgid "Silent"
+msgstr "Без записей"
+
+msgid "Error"
+msgstr "Ошибки"
+
+msgid "Warning"
+msgstr "Предупреждения"
+
+msgid "Debug"
+msgstr "Отладка"
+
+msgid "Never"
+msgstr "Никогда"
+
+msgid "30 min"
+msgstr "30 мин"
+
+msgid "1 hour (default)"
+msgstr "1 час (по умолчанию)"
+
+msgid "6 hours"
+msgstr "6 часов"
+
+msgid "12 hours"
+msgstr "12 часов"
+
+msgid "24 hours"
+msgstr "24 часа"
+
+msgid "Manual"
+msgstr "Вручную"
+
+msgid "PAC script"
+msgstr "PAC-скрипт"
+
+msgid "Mixed"
+msgstr "Смешанный"
+
+msgid "System"
+msgstr "Системный"
+
+msgid "Fake IP"
+msgstr "Fake IP"
+
+msgid "Redir host"
+msgstr "Redir host"
+
+msgid "Off"
+msgstr "Выкл."
+
+msgid "Strict"
+msgstr "Строгий"
+
+msgid "Always"
+msgstr "Всегда"
+
+msgid "Stable"
+msgstr "Стабильный"
+
+msgid "Alpha"
+msgstr "Альфа"
+
+msgid "Last updated {} (UTC)"
+msgstr "Обновлено {} (UTC)"
+
+msgid "Loading settings"
+msgstr "Загрузка настроек"
+
+msgid "Waiting for the proxy engine to report its settings."
+msgstr "Ожидаем, пока ядро прокси передаст свои настройки."
+
+msgid "Interface"
+msgstr "Интерфейс"
+
+msgid "Language"
+msgstr "Язык"
+
+msgid "Applies to the whole app, including the tray."
+msgstr "Применяется ко всему приложению, включая трей."
+
+msgid "Startup"
+msgstr "Запуск"
+
+msgid "Start at login"
+msgstr "Запускать при входе в систему"
+
+msgid "Starts Starpod when you log in."
+msgstr "Запускает Starpod при входе в систему."
+
+msgid "Start in the tray"
+msgstr "Запускать в трее"
+
+msgid "A start at login stays in the tray instead of showing the window."
+msgstr "Запуск при входе остаётся в трее и не открывает окно."
+
+msgid "Close to tray"
+msgstr "Закрывать в трей"
+
+msgid "Closing the window hides Starpod to the tray and the proxy keeps running. Off quits Starpod and stops the engine."
+msgstr "Закрытие окна прячет Starpod в трей, прокси продолжает работать. Если выключено, Starpod закрывается и останавливает ядро."
+
+msgid "This desktop has no tray, so closing always quits."
+msgstr "На этом рабочем столе нет трея, поэтому закрытие всегда завершает программу."
+
+msgid "Connect on start"
+msgstr "Подключаться при запуске"
+
+msgid "Connects once the saved state has loaded, when a subscription has servers."
+msgstr "Подключается после загрузки сохранённого состояния, если в подписке есть серверы."
+
+msgid "Routing and subscriptions"
+msgstr "Маршрутизация и подписки"
+
+msgid "Routing mode"
+msgstr "Режим маршрутизации"
+
+msgid "Rule-based follows your rules. Global sends everything through the selected server. Direct uses no proxy."
+msgstr "По правилам — трафик идёт по вашим правилам. Глобальный — весь трафик через выбранный сервер. Прямой — без прокси."
+
+msgid "The active subscription does not allow Global. Rule-based follows your rules."
+msgstr "Текущая подписка не разрешает глобальный режим. Работает режим по правилам."
+
+msgid "Auto-update every"
+msgstr "Автообновление каждые"
+
+msgid "How often subscriptions are refreshed in the background."
+msgstr "Как часто подписки обновляются в фоновом режиме."
+
+msgid "Custom"
+msgstr "Свой"
+
+msgid "Updates"
+msgstr "Обновления"
+
+msgid "Check for updates at startup"
+msgstr "Проверять обновления при запуске"
+
+msgid "Asks GitHub for a newer release when Starpod starts. Nothing is downloaded."
+msgstr "При запуске Starpod спрашивает GitHub о новой версии. Ничего не загружается."
+
+msgid "Check now"
+msgstr "Проверить сейчас"
+
+msgid "Looks for a newer release on GitHub."
+msgstr "Ищет новую версию на GitHub."
+
+msgid "Check for updates"
+msgstr "Проверить обновления"
+
+msgid "Update available"
+msgstr "Доступно обновление"
+
+msgid "Version {} is on GitHub. It is not installed for you."
+msgstr "Версия {} есть на GitHub. Она не установлена автоматически."
+
+msgid "Open release page"
+msgstr "Открыть страницу релиза"
+
+msgid "Ports"
+msgstr "Порты"
+
+msgid "Mixed port"
+msgstr "Смешанный порт"
+
+msgid "HTTP and SOCKS5 on one port. Empty uses the default."
+msgstr "HTTP и SOCKS5 на одном порту. Пусто — порт по умолчанию."
+
+msgid "Another listener already uses this port."
+msgstr "Этот порт уже занят другим слушателем."
+
+msgid "SOCKS5 port"
+msgstr "Порт SOCKS5"
+
+msgid "SOCKS5 only. Empty uses the default."
+msgstr "Только SOCKS5. Пусто — порт по умолчанию."
+
+msgid "HTTP port"
+msgstr "Порт HTTP"
+
+msgid "HTTP only. Empty turns it off."
+msgstr "Только HTTP. Пусто — выключает его."
+
+msgid "Access"
+msgstr "Доступ"
+
+msgid "Allow LAN"
+msgstr "Разрешить доступ из сети"
+
+msgid "Lets other devices on your network use the proxy."
+msgstr "Позволяет другим устройствам в сети использовать прокси."
+
+msgid "Exposed: any device on your network can use it."
+msgstr "Открыто: любое устройство в сети может им пользоваться."
+
+msgid "Bind address"
+msgstr "Адрес привязки"
+
+msgid "The address the listeners bind to. Empty uses 127.0.0.1."
+msgstr "Адрес, к которому привязываются слушатели. Пусто — 127.0.0.1."
+
+msgid "Turn on Allow LAN to change the bind address."
+msgstr "Включите «Разрешить доступ из сети», чтобы изменить адрес привязки."
+
+msgid "IPv6"
+msgstr "IPv6"
+
+msgid "Default leaves the engine's choice."
+msgstr "По умолчанию — выбор ядра."
+
+msgid "Set the system proxy"
+msgstr "Настраивать системный прокси"
+
+msgid "Active. The system proxy points at Starpod."
+msgstr "Включено. Системный прокси указывает на Starpod."
+
+msgid "Not active. The system proxy follows the engine while this is on."
+msgstr "Выключено. Пока это включено, системный прокси следует за ядром."
+
+msgid "Proxy mode"
+msgstr "Режим прокси"
+
+msgid "Manual points the system at one server. PAC uses a script that Starpod serves."
+msgstr "Ручной — система использует один сервер. PAC — скрипт, который раздаёт Starpod."
+
+msgid "Bypass list"
+msgstr "Список исключений"
+
+msgid "Hosts the proxy is skipped for, in the operating system's syntax. Used in manual mode."
+msgstr "Хосты, для которых прокси пропускается, в синтаксисе операционной системы. Используется в ручном режиме."
+
+msgid "The script for PAC mode. %mixed-port% stands for the engine's mixed port."
+msgstr "Скрипт для режима PAC. %mixed-port% означает смешанный порт ядра."
+
+msgid "Terminal"
+msgstr "Терминал"
+
+msgid "Proxy command"
+msgstr "Команда для прокси"
+
+msgid "Copies the command that points a terminal at Starpod's ports."
+msgstr "Копирует команду, которая направляет терминал на порты Starpod."
+
+msgid "Copy proxy command"
+msgstr "Копировать команду прокси"
+
+msgid "Adapter"
+msgstr "Адаптер"
+
+msgid "Enable TUN"
+msgstr "Включить TUN"
+
+msgid "Routes all system traffic. Needs administrator rights."
+msgstr "Направляет весь системный трафик. Нужны права администратора."
+
+msgid "Device name"
+msgstr "Имя устройства"
+
+msgid "The name of the virtual adapter. Empty uses the engine default."
+msgstr "Имя виртуального адаптера. Пусто — значение ядра по умолчанию."
+
+msgid "Automatic"
+msgstr "Автоматически"
+
+msgid "MTU"
+msgstr "MTU"
+
+msgid "Largest packet size in bytes. Empty uses the engine default."
+msgstr "Максимальный размер пакета в байтах. Пусто — значение ядра по умолчанию."
+
+msgid "Stack"
+msgstr "Стек"
+
+msgid "How the engine handles the packets that TUN captures."
+msgstr "Как ядро обрабатывает пакеты, которые перехватывает TUN."
+
+msgid "Routes"
+msgstr "Маршруты"
+
+msgid "Auto route"
+msgstr "Авто-маршрут"
+
+msgid "Installs the routes when TUN starts. Off leaves the routes to you."
+msgstr "Устанавливает маршруты при запуске TUN. Выключено — маршруты настраиваете вы."
+
+msgid "DNS hijack"
+msgstr "Перехват DNS"
+
+msgid "DNS queries to these targets go to the engine, one host:port per line, such as any:53. Empty uses the engine default."
+msgstr "DNS-запросы к этим адресам идут в ядро, по одному host:port в строке, например any:53. Пусто — значение ядра по умолчанию."
+
+msgid "Strict route"
+msgstr "Строгий маршрут"
+
+msgid "Keeps traffic that is outside the TUN routes from leaving the adapter."
+msgstr "Не пускает трафик вне маршрутов TUN через адаптер."
+
+msgid "Auto redirect"
+msgstr "Авто-перенаправление"
+
+msgid "Forwards traffic through an automatic redirect where the platform supports one."
+msgstr "Перенаправляет трафик через автоматическое перенаправление, где платформа его поддерживает."
+
+msgid "Auto-detect interface"
+msgstr "Автоопределение интерфейса"
+
+msgid "Finds the network interface that carries outbound traffic by itself."
+msgstr "Само находит сетевой интерфейс, по которому идёт исходящий трафик."
+
+msgid "Endpoint-independent NAT"
+msgstr "NAT, не зависящий от конечной точки"
+
+msgid "Keeps one UDP mapping per source port, whatever the destination."
+msgstr "Оставляет одно UDP-сопоставление на исходный порт, независимо от адреса назначения."
+
+msgid "Included routes"
+msgstr "Включённые маршруты"
+
+msgid "CIDR ranges sent through TUN, one per line. Empty uses the engine's routes."
+msgstr "Диапазоны CIDR, которые идут через TUN, по одному в строке. Пусто — маршруты ядра."
+
+msgid "Excluded routes"
+msgstr "Исключённые маршруты"
+
+msgid "CIDR ranges that stay off TUN, one per line."
+msgstr "Диапазоны CIDR, которые не идут через TUN, по одному в строке."
+
+msgid "DNS server"
+msgstr "DNS-сервер"
+
+msgid "Replace the subscription's DNS"
+msgstr "Заменить DNS подписки"
+
+msgid "Uses the DNS settings below instead of the ones the subscription sends."
+msgstr "Использует настройки DNS ниже вместо тех, что присылает подписка."
+
+msgid "Enable DNS server"
+msgstr "Включить DNS-сервер"
+
+msgid "Runs the engine's own DNS server."
+msgstr "Запускает собственный DNS-сервер ядра."
+
+msgid "Enhanced mode"
+msgstr "Расширенный режим"
+
+msgid "Fake IP answers with addresses from a private range. Redir host answers with real ones."
+msgstr "Fake IP отвечает адресами из частного диапазона. Redir host отвечает настоящими адресами."
+
+msgid "Fake IP range"
+msgstr "Диапазон Fake IP"
+
+msgid "The CIDR range that fake addresses come from. Empty uses the engine default."
+msgstr "Диапазон CIDR, из которого берутся фиктивные адреса. Пусто — значение ядра по умолчанию."
+
+msgid "Fake IP filter"
+msgstr "Фильтр Fake IP"
+
+msgid "Domains that always get a real address, one per line."
+msgstr "Домены, которые всегда получают настоящий адрес, по одному в строке."
+
+msgid "Upstream servers"
+msgstr "Вышестоящие серверы"
+
+msgid "Nameservers"
+msgstr "DNS-серверы"
+
+msgid "The servers the DNS server asks, one per line."
+msgstr "Серверы, к которым обращается DNS-сервер, по одному в строке."
+
+msgid "Fallback servers"
+msgstr "Резервные серверы"
+
+msgid "Servers asked when the nameservers fail, one per line."
+msgstr "Серверы, к которым обращаются, если DNS-серверы не отвечают, по одному в строке."
+
+msgid "Default nameservers"
+msgstr "DNS-серверы по умолчанию"
+
+msgid "Plain IP servers that resolve the names of the other servers, one per line."
+msgstr "Обычные IP-серверы, которые разрешают имена других серверов, по одному в строке."
+
+msgid "Proxy server nameservers"
+msgstr "DNS-серверы для прокси"
+
+msgid "Servers used to resolve the names of proxy servers, one per line."
+msgstr "Серверы для разрешения имён прокси-серверов, по одному в строке."
+
+msgid "Nameserver policy"
+msgstr "Политика DNS-серверов"
+
+msgid "Which servers answer for which domains, one per line: domain: server, server."
+msgstr "Какие серверы отвечают за какие домены, по одному в строке: домен: сервер, сервер."
+
+msgid "Hosts"
+msgstr "Хосты"
+
+msgid "Use hosts"
+msgstr "Использовать hosts"
+
+msgid "Answers names from the hosts list below."
+msgstr "Отвечает именами из списка hosts ниже."
+
+msgid "One entry per line: domain ip."
+msgstr "Одна запись в строке: домен ip."
+
+msgid "Enable sniffer"
+msgstr "Включить сниффер"
+
+msgid "Reads the domain name from the first bytes of TLS and HTTP traffic."
+msgstr "Читает доменное имя из первых байт трафика TLS и HTTP."
+
+msgid "Force DNS mapping"
+msgstr "Принудительное сопоставление DNS"
+
+msgid "Uses the DNS mapping to name connections that have only an address."
+msgstr "Использует сопоставление DNS, чтобы назвать соединения, у которых есть только адрес."
+
+msgid "Parse pure IP"
+msgstr "Разбирать чистые IP"
+
+msgid "Sniffs connections that were opened to a bare IP address."
+msgstr "Анализирует соединения, открытые по голому IP-адресу."
+
+msgid "Override destination"
+msgstr "Подменять адрес назначения"
+
+msgid "Replaces the address with the sniffed domain name."
+msgstr "Заменяет адрес перехваченным доменным именем."
+
+msgid "Protocols and domains"
+msgstr "Протоколы и домены"
+
+msgid "Sniff protocols"
+msgstr "Протоколы для анализа"
+
+msgid "One per line: a protocol and its ports, for example HTTP: 80, 8080-8880."
+msgstr "По одному в строке: протокол и его порты, например HTTP: 80, 8080-8880."
+
+msgid "Force domains"
+msgstr "Домены для анализа"
+
+msgid "Domains to sniff even when the sniffer would skip them, one per line."
+msgstr "Домены, которые анализируются, даже если сниффер их пропустил бы, по одному в строке."
+
+msgid "Skip domains"
+msgstr "Пропускаемые домены"
+
+msgid "Domains the sniffer leaves alone, one per line."
+msgstr "Домены, которые сниффер не трогает, по одному в строке."
+
+msgid "Databases"
+msgstr "Базы данных"
+
+msgid "Format"
+msgstr "Формат"
+
+msgid "The database format the engine reads."
+msgstr "Формат баз данных, который читает ядро."
+
+msgid "GeoIP source"
+msgstr "Источник GeoIP"
+
+msgid "A URL. Empty uses the default source."
+msgstr "Адрес. Пусто — источник по умолчанию."
+
+msgid "Default source"
+msgstr "Источник по умолчанию"
+
+msgid "GeoSite source"
+msgstr "Источник GeoSite"
+
+msgid "MMDB source"
+msgstr "Источник MMDB"
+
+msgid "ASN source"
+msgstr "Источник ASN"
+
+msgid "Update automatically"
+msgstr "Обновлять автоматически"
+
+msgid "Refreshes the databases in the background."
+msgstr "Обновляет базы в фоновом режиме."
+
+msgid "Update every"
+msgstr "Обновлять каждые"
+
+msgid "Hours between automatic refreshes. Empty uses the app default."
+msgstr "Часов между автоматическими обновлениями. Пусто — значение приложения по умолчанию."
+
+msgid "Hours"
+msgstr "ч"
+
+msgid "Refresh now"
+msgstr "Обновить сейчас"
+
+msgid "Version"
+msgstr "Версия"
+
+msgid "Installed"
+msgstr "Установлено"
+
+msgid "Not installed"
+msgstr "Не установлено"
+
+msgid "Reinstall"
+msgstr "Переустановить"
+
+msgid "Install"
+msgstr "Установить"
+
+msgid "Channel"
+msgstr "Канал"
+
+msgid "Alpha releases come first and may be less stable."
+msgstr "Альфа-версии выходят первыми и могут быть менее стабильными."
+
+msgid "Latest"
+msgstr "Последняя"
+
+msgid "Not checked yet"
+msgstr "Ещё не проверялось"
+
+msgid "Version {} is available on this channel"
+msgstr "Версия {} доступна в этом канале"
+
+msgid "Up to date on this channel"
+msgstr "В этом канале актуально"
+
+msgid "Check"
+msgstr "Проверить"
+
+msgid "Upgrade"
+msgstr "Обновить"
+
+msgid "Logs and tests"
+msgstr "Журнал и проверки"
+
+msgid "Log level"
+msgstr "Уровень журнала"
+
+msgid "How much the engine writes to the Logs screen."
+msgstr "Сколько ядро записывает в журнал."
+
+msgid "Choose"
+msgstr "Выбрать"
+
+msgid "Log retention"
+msgstr "Хранение журнала"
+
+msgid "Lines kept on the Logs screen. Empty uses the app default."
+msgstr "Строк сохраняется в журнале. Пусто — значение приложения по умолчанию."
+
+msgid "Lines"
+msgstr "строк"
+
+msgid "Delay test URL"
+msgstr "Адрес проверки задержки"
+
+msgid "The address latency tests request. Empty uses the app default."
+msgstr "Адрес, к которому обращаются проверки задержки. Пусто — значение приложения по умолчанию."
+
+msgid "Delay test timeout"
+msgstr "Таймаут проверки задержки"
+
+msgid "How long a latency test waits for an answer. Empty uses the app default."
+msgstr "Сколько проверка задержки ждёт ответа. Пусто — значение приложения по умолчанию."
+
+msgid "ms"
+msgstr "мс"
+
+msgid "Find process"
+msgstr "Определять процесс"
+
+msgid "When the engine names the program behind a connection."
+msgstr "Когда ядро называет программу, стоящую за соединением."
+
+msgid "Unified delay"
+msgstr "Единая задержка"
+
+msgid "Measures latency after the first handshake, so the results compare fairly."
+msgstr "Измеряет задержку после первого рукопожатия, чтобы результаты были сравнимы."
+
+msgid "TCP concurrent"
+msgstr "Параллельный TCP"
+
+msgid "Tries several addresses at once to connect faster."
+msgstr "Пробует сразу несколько адресов, чтобы подключаться быстрее."
+
+msgid "Keep-alive interval"
+msgstr "Интервал keep-alive"
+
+msgid "How often idle connections are probed, in seconds. Empty uses the engine default."
+msgstr "Как часто проверяются простаивающие соединения, в секундах. Пусто — значение ядра по умолчанию."
+
+msgid "Seconds"
+msgstr "сек"
+
+msgid "Proxy groups"
+msgstr "Группы прокси"
+
+msgid "Close connections on switch"
+msgstr "Закрывать соединения при переключении"
+
+msgid "When you pick a server in a group, closes the connections that went through the old one."
+msgstr "Когда вы выбираете сервер в группе, закрываются соединения, шедшие через прежний."
+
+msgid "Device identification"
+msgstr "Идентификация устройства"
+
+msgid "Send device identification"
+msgstr "Отправлять данные об устройстве"
+
+msgid "With each subscription request, sends a device ID, the operating system, its version and the device model, so the provider can count your devices. Off sends none of them."
+msgstr "С каждым запросом подписки отправляются ID устройства, операционная система, её версия и модель устройства, чтобы провайдер мог посчитать ваши устройства. Выключено — ничего не отправляется."
+
+msgid "Global shortcuts"
+msgstr "Глобальные горячие клавиши"
+
+msgid "They work from any app. Write them as Ctrl+Alt+KeyS. Empty turns a shortcut off."
+msgstr "Работают из любого приложения. Записывайте их как Ctrl+Alt+KeyS. Пусто — горячая клавиша выключена."
+
+msgid "Show the window"
+msgstr "Показать окно"
+
+msgid "Brings the Starpod window to the front."
+msgstr "Выводит окно Starpod на передний план."
+
+msgid "Connect or disconnect"
+msgstr "Подключить или отключить"
+
+msgid "Starts or stops the engine."
+msgstr "Запускает или останавливает ядро."
+
+msgid "Turn the system proxy on or off"
+msgstr "Включить или выключить системный прокси"
+
+msgid "Changes the system proxy setting."
+msgstr "Меняет настройку системного прокси."
+
+msgid "Rule-based mode"
+msgstr "Режим по правилам"
+
+msgid "Switches the routing mode."
+msgstr "Переключает режим маршрутизации."
+
+msgid "Discard"
+msgstr "Отменить"
+
+msgid "Save shortcuts"
+msgstr "Сохранить горячие клавиши"
+
+msgid "Secrets stored in"
+msgstr "Секреты хранятся в"
+
+msgid "Not encrypted. Anyone with access to your user profile can read them."
+msgstr "Не зашифровано. Любой, у кого есть доступ к вашему профилю пользователя, может их прочитать."
+
+msgid "Not reported yet"
+msgstr "Пока не сообщено"
+
+msgid "Data folder"
+msgstr "Папка данных"
+
+msgid "Cached profiles"
+msgstr "Кэш профилей"
+
+msgid "Removes downloaded subscription content. It is fetched again on the next refresh."
+msgstr "Удаляет загруженное содержимое подписок. Оно будет загружено снова при следующем обновлении."
+
+msgid "You have unsaved changes."
+msgstr "Есть несохранённые изменения."
+
+msgid "Clear cached profiles?"
+msgstr "Очистить кэш профилей?"
+
+msgid "This deletes the downloaded subscription content. Your subscriptions stay configured."
+msgstr "Загруженное содержимое подписок будет удалено. Сами подписки останутся настроенными."
+
+msgid "Clear cache"
+msgstr "Очистить кэш"
+
+msgid "On"
+msgstr "Вкл."
+
+msgid "Enter a whole number from {} to {}"
+msgstr "Введите целое число от {} до {}"
+
+msgid ", or leave it empty."
+msgstr " или оставьте поле пустым."
+
+msgid "."
+msgstr "."
+
+msgid "Show Starpod"
+msgstr "Показать Starpod"
+
+msgid "Disconnect"
+msgstr "Отключиться"
+
+msgid "Connect"
+msgstr "Подключиться"
+
+msgid "TUN mode"
+msgstr "Режим TUN"
+
+msgid "Mode"
+msgstr "Режим"
+
+msgid "No proxy groups"
+msgstr "Групп прокси нет"
+
+msgid "Quit"
+msgstr "Выход"

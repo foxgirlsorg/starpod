@@ -16,7 +16,11 @@
 //! as absent, never as `0 / 0 GB`: a fabricated zero is a lie the user
 //! cannot detect.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use starpod_core::SubscriptionMode;
+
+use crate::provider::FetchResponse;
 
 /// The traffic quota a subscription's provider reports.
 ///
@@ -187,6 +191,10 @@ impl SubscriptionMetadata {
     /// here. A provider that reported no expiry produces `None`, never a
     /// fabricated date.
     ///
+    /// The profile headers ([`ProfileInfo`]) are not part of this record; the
+    /// app stores them on the core record itself after a refresh, so they are
+    /// `None` here.
+    ///
     /// `has_auth_header` is always `false`: whether a subscription
     /// carries an `Authorization` header is a property of the *secret
     /// store*, which this crate deliberately does not read. The app sets
@@ -209,8 +217,197 @@ impl SubscriptionMetadata {
             node_count: self.node_count,
             group_count: self.group_count,
             last_error: self.last_error.clone(),
+            profile_title: None,
+            announce: None,
+            support_url: None,
+            web_url: None,
+            web_page_name: None,
+            announce_url: None,
+            logo_file: None,
+            global_mode_disabled: false,
+            expand_proxy_groups: None,
+            device_limit: false,
         }
     }
+}
+
+/// The longest announcement the app keeps, in characters.
+pub const ANNOUNCE_MAX_CHARS: usize = 2000;
+
+/// The profile information a subscription response carries in its headers.
+///
+/// Every field is optional or empty by default: a header that is absent,
+/// empty, undecodable or (for the URLs) not http or https reads as its
+/// default, never as a fabricated value. A successful refresh replaces all of
+/// them; a failed one keeps the previous values.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProfileInfo {
+    /// The `profile-title` header, or the file name in `content-disposition`
+    /// when the title header is absent.
+    pub title: Option<String>,
+    /// The `profile-web-page-name` header: the label for the web page link.
+    pub web_page_name: Option<String>,
+    /// The `announce` header, with the two-character sequence `\n` read as a
+    /// line break, capped at [`ANNOUNCE_MAX_CHARS`].
+    pub announce: Option<String>,
+    /// The `announce-url` header: a link shown with the announcement.
+    pub announce_url: Option<String>,
+    /// The `support-url` header.
+    pub support_url: Option<String>,
+    /// The `profile-web-page-url` header.
+    pub web_url: Option<String>,
+    /// The `profile-logo` header: an http or https URL of the profile's logo.
+    /// The logo is fetched separately; see [`crate::logo`].
+    pub logo_url: Option<String>,
+    /// The `profile-update-interval` header, in whole hours. Only a value above
+    /// zero is kept.
+    pub update_interval_hours: Option<u64>,
+    /// `true` when the `global-mode` header is `false`: the provider does not
+    /// allow the Global routing mode while this subscription is active.
+    pub global_mode_disabled: bool,
+    /// The `expand-proxy-groups` header. `Some(false)` means groups start
+    /// collapsed; `None` means the header was absent or unreadable.
+    pub expand_proxy_groups: Option<bool>,
+    /// `true` when the `x-hwid-limit` or `x-hwid-max-devices-reached` header is
+    /// `true`: this device has no slot left on the provider.
+    pub device_limit: bool,
+}
+
+impl ProfileInfo {
+    /// Read the profile headers from a response.
+    ///
+    /// Text headers are plain text, or `base64:<standard base64>` which is
+    /// decoded. A value that fails to decode is ignored.
+    pub fn from_response(response: &FetchResponse) -> Self {
+        Self {
+            title: header_text(response, "profile-title")
+                .or_else(|| content_disposition_filename(response)),
+            web_page_name: header_text(response, "profile-web-page-name"),
+            announce: header_text(response, "announce").map(|text| {
+                text.replace(r"\n", "\n")
+                    .trim()
+                    .chars()
+                    .take(ANNOUNCE_MAX_CHARS)
+                    .collect()
+            }),
+            announce_url: header_url(response, "announce-url"),
+            support_url: header_url(response, "support-url"),
+            web_url: header_url(response, "profile-web-page-url"),
+            logo_url: header_url(response, "profile-logo"),
+            update_interval_hours: response
+                .header("profile-update-interval")
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .filter(|hours| *hours > 0),
+            global_mode_disabled: response
+                .header("global-mode")
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("false")),
+            expand_proxy_groups: response.header("expand-proxy-groups").and_then(
+                |value| match value.trim().to_ascii_lowercase().as_str() {
+                    "false" => Some(false),
+                    "true" => Some(true),
+                    _ => None,
+                },
+            ),
+            device_limit: is_true(response, "x-hwid-limit")
+                || is_true(response, "x-hwid-max-devices-reached"),
+        }
+    }
+}
+
+/// Whether a header carries the value `true`.
+fn is_true(response: &FetchResponse, name: &str) -> bool {
+    response
+        .header(name)
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+}
+
+const BASE64_PREFIX: &str = "base64:";
+
+/// A header's text, trimmed, decoded from base64 when it carries the prefix.
+fn header_text(response: &FetchResponse, name: &str) -> Option<String> {
+    let raw = response.header(name)?.trim();
+    let text = match raw.get(..BASE64_PREFIX.len()) {
+        Some(prefix) if prefix.eq_ignore_ascii_case(BASE64_PREFIX) => {
+            let bytes = BASE64_STANDARD
+                .decode(raw[BASE64_PREFIX.len()..].trim())
+                .ok()?;
+            String::from_utf8(bytes).ok()?
+        }
+        _ => raw.to_string(),
+    };
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// A header's text, kept only when it is an http or https URL with a host.
+fn header_url(response: &FetchResponse, name: &str) -> Option<String> {
+    let text = header_text(response, name)?;
+    let url = reqwest::Url::parse(&text).ok()?;
+    (matches!(url.scheme(), "http" | "https") && url.host_str().is_some()).then_some(text)
+}
+
+/// The file name in a `content-disposition` header, without a YAML or text
+/// extension, used as the title when the provider sent no `profile-title`.
+///
+/// `filename*=UTF-8''<percent-encoded>` wins over `filename=`, as RFC 6266
+/// asks. Only UTF-8 is decoded; any other charset reads as absent.
+fn content_disposition_filename(response: &FetchResponse) -> Option<String> {
+    let value = response.header("content-disposition")?;
+    let mut plain = None;
+    let mut encoded = None;
+    for parameter in value.split(';').skip(1) {
+        let Some((key, raw)) = parameter.trim().split_once('=') else {
+            continue;
+        };
+        let raw = raw.trim();
+        if key.trim().eq_ignore_ascii_case("filename*") {
+            encoded = decode_extended_value(raw);
+        } else if key.trim().eq_ignore_ascii_case("filename") {
+            plain = Some(raw.trim_matches('"').to_string());
+        }
+    }
+    let name = encoded.or(plain)?;
+    let name = strip_text_extension(name.trim());
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Decode an RFC 5987 extended value: `charset'language'percent-encoded`.
+fn decode_extended_value(raw: &str) -> Option<String> {
+    let mut parts = raw.splitn(3, '\'');
+    let charset = parts.next()?;
+    let _language = parts.next()?;
+    let value = parts.next()?;
+    if !charset.eq_ignore_ascii_case("utf-8") {
+        return None;
+    }
+    percent_decode(value)
+}
+
+/// Percent-decode text as UTF-8. A malformed escape or invalid UTF-8 is `None`.
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let digits = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
+            out.push(u8::from_str_radix(digits, 16).ok()?);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Drop a `.yaml`, `.yml` or `.txt` extension from a file name.
+fn strip_text_extension(name: &str) -> &str {
+    let lower = name.to_ascii_lowercase();
+    [".yaml", ".yml", ".txt"]
+        .iter()
+        .find(|extension| lower.ends_with(*extension))
+        .map_or(name, |extension| &name[..name.len() - extension.len()])
 }
 
 /// Render a unix timestamp as an RFC 3339 string.
@@ -379,5 +576,228 @@ mod tests {
         let mut metadata = SubscriptionMetadata::new("sub-1", "Airport");
         metadata.mode = SubscriptionMode::EngineManaged;
         assert_eq!(metadata.to_core().quota, None);
+    }
+
+    fn response_with(name: &str, value: &str) -> FetchResponse {
+        FetchResponse::new(b"body".to_vec()).with_header(name, value)
+    }
+
+    #[test]
+    fn a_plain_text_announcement_is_trimmed_and_kept() {
+        let info =
+            ProfileInfo::from_response(&response_with("Announce", "  Maintenance tonight  "));
+        assert_eq!(info.announce.as_deref(), Some("Maintenance tonight"));
+    }
+
+    #[test]
+    fn a_base64_header_is_decoded_for_every_profile_field() {
+        let encoded = format!("base64:{}", BASE64_STANDARD.encode("Фоксгёрлз VPN"));
+        let response = FetchResponse::new(b"body".to_vec())
+            .with_header("profile-title", encoded)
+            .with_header(
+                "announce",
+                format!("base64:{}", BASE64_STANDARD.encode("Hello")),
+            );
+        let info = ProfileInfo::from_response(&response);
+        assert_eq!(info.title.as_deref(), Some("Фоксгёрлз VPN"));
+        assert_eq!(info.announce.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn an_undecodable_base64_header_is_ignored_not_kept_raw() {
+        let info = ProfileInfo::from_response(&response_with("announce", "base64:not*base64!!"));
+        assert_eq!(info.announce, None);
+    }
+
+    #[test]
+    fn an_absent_header_reads_as_none() {
+        let info = ProfileInfo::from_response(&FetchResponse::new(b"body".to_vec()));
+        assert_eq!(info, ProfileInfo::default());
+    }
+
+    #[test]
+    fn an_empty_header_reads_as_none() {
+        let info = ProfileInfo::from_response(&response_with("profile-title", "   "));
+        assert_eq!(info.title, None);
+    }
+
+    #[test]
+    fn an_announcement_is_capped_at_two_thousand_characters() {
+        let long = "я".repeat(ANNOUNCE_MAX_CHARS + 50);
+        let info = ProfileInfo::from_response(&response_with("announce", &long));
+        assert_eq!(
+            info.announce.as_deref().map(|text| text.chars().count()),
+            Some(ANNOUNCE_MAX_CHARS)
+        );
+    }
+
+    #[test]
+    fn only_http_and_https_urls_are_kept() {
+        let good = ProfileInfo::from_response(&response_with(
+            "support-url",
+            "https://help.example.com/x?a=1",
+        ));
+        assert_eq!(
+            good.support_url.as_deref(),
+            Some("https://help.example.com/x?a=1")
+        );
+
+        let web = ProfileInfo::from_response(&response_with(
+            "profile-web-page-url",
+            "http://example.com",
+        ));
+        assert_eq!(web.web_url.as_deref(), Some("http://example.com"));
+
+        for bad in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "not a url",
+            "https://",
+        ] {
+            let info = ProfileInfo::from_response(&response_with("support-url", bad));
+            assert_eq!(info.support_url, None, "{bad} must be dropped");
+        }
+    }
+
+    #[test]
+    fn the_profile_header_names_match_case_insensitively() {
+        let response = FetchResponse::new(b"body".to_vec())
+            .with_header("PROFILE-TITLE", "Upper")
+            .with_header("Support-URL", "https://example.com");
+        let info = ProfileInfo::from_response(&response);
+        assert_eq!(info.title.as_deref(), Some("Upper"));
+        assert_eq!(info.support_url.as_deref(), Some("https://example.com"));
+    }
+
+    #[test]
+    fn the_two_character_sequence_backslash_n_becomes_a_line_break() {
+        let info = ProfileInfo::from_response(&response_with(
+            "announce",
+            r"Maintenance\nTonight\n\nBring a charger",
+        ));
+        assert_eq!(
+            info.announce.as_deref(),
+            Some("Maintenance\nTonight\n\nBring a charger")
+        );
+    }
+
+    #[test]
+    fn a_base64_announcement_also_has_its_line_breaks_read() {
+        let encoded = format!("base64:{}", BASE64_STANDARD.encode(r"One\nTwo"));
+        let info = ProfileInfo::from_response(&response_with("announce", &encoded));
+        assert_eq!(info.announce.as_deref(), Some("One\nTwo"));
+    }
+
+    #[test]
+    fn the_announce_url_is_kept_only_as_http_or_https() {
+        let good = ProfileInfo::from_response(&response_with(
+            "announce-url",
+            "https://news.example.com/post",
+        ));
+        assert_eq!(
+            good.announce_url.as_deref(),
+            Some("https://news.example.com/post")
+        );
+        let bad = ProfileInfo::from_response(&response_with("announce-url", "javascript:x"));
+        assert_eq!(bad.announce_url, None);
+    }
+
+    #[test]
+    fn the_web_page_name_is_decoded_like_the_title() {
+        let encoded = format!("base64:{}", BASE64_STANDARD.encode("Личный кабинет"));
+        let info = ProfileInfo::from_response(&response_with("profile-web-page-name", &encoded));
+        assert_eq!(info.web_page_name.as_deref(), Some("Личный кабинет"));
+    }
+
+    #[test]
+    fn the_logo_is_kept_only_as_an_http_or_https_url() {
+        let good = ProfileInfo::from_response(&response_with(
+            "profile-logo",
+            "https://cdn.example.com/logo.png",
+        ));
+        assert_eq!(
+            good.logo_url.as_deref(),
+            Some("https://cdn.example.com/logo.png")
+        );
+        let bad = ProfileInfo::from_response(&response_with("profile-logo", "file:///x.png"));
+        assert_eq!(bad.logo_url, None);
+    }
+
+    #[test]
+    fn the_update_interval_is_whole_hours_above_zero() {
+        let hours = ProfileInfo::from_response(&response_with("profile-update-interval", "6"));
+        assert_eq!(hours.update_interval_hours, Some(6));
+        for bad in ["0", "-1", "1.5", "soon", ""] {
+            let info = ProfileInfo::from_response(&response_with("profile-update-interval", bad));
+            assert_eq!(info.update_interval_hours, None, "{bad:?} must be ignored");
+        }
+    }
+
+    #[test]
+    fn global_mode_is_disabled_only_by_the_value_false() {
+        let off = ProfileInfo::from_response(&response_with("global-mode", "false"));
+        assert!(off.global_mode_disabled);
+        let on = ProfileInfo::from_response(&response_with("global-mode", "true"));
+        assert!(!on.global_mode_disabled);
+        let absent = ProfileInfo::from_response(&FetchResponse::new(b"body".to_vec()));
+        assert!(!absent.global_mode_disabled, "absent means allowed");
+    }
+
+    #[test]
+    fn expand_proxy_groups_is_stored_as_sent() {
+        let collapsed = ProfileInfo::from_response(&response_with("expand-proxy-groups", "false"));
+        assert_eq!(collapsed.expand_proxy_groups, Some(false));
+        let expanded = ProfileInfo::from_response(&response_with("expand-proxy-groups", "TRUE"));
+        assert_eq!(expanded.expand_proxy_groups, Some(true));
+        let other = ProfileInfo::from_response(&response_with("expand-proxy-groups", "maybe"));
+        assert_eq!(other.expand_proxy_groups, None);
+    }
+
+    #[test]
+    fn either_hwid_limit_header_set_to_true_reports_the_device_limit() {
+        for name in ["x-hwid-limit", "x-hwid-max-devices-reached"] {
+            let info = ProfileInfo::from_response(&response_with(name, "true"));
+            assert!(info.device_limit, "{name}: true means the limit is reached");
+        }
+        let no = ProfileInfo::from_response(&response_with("x-hwid-limit", "false"));
+        assert!(!no.device_limit);
+    }
+
+    #[test]
+    fn the_content_disposition_filename_is_the_title_when_there_is_no_profile_title() {
+        let info = ProfileInfo::from_response(&response_with(
+            "content-disposition",
+            r#"attachment; filename="Airport.yaml""#,
+        ));
+        assert_eq!(info.title.as_deref(), Some("Airport"));
+    }
+
+    #[test]
+    fn the_extended_filename_wins_and_is_percent_decoded() {
+        let info = ProfileInfo::from_response(&response_with(
+            "content-disposition",
+            "attachment; filename=\"fallback.yaml\"; filename*=UTF-8''%D0%90%D1%8D%D1%80%D0%BE.yml",
+        ));
+        assert_eq!(info.title.as_deref(), Some("Аэро"));
+    }
+
+    #[test]
+    fn a_profile_title_beats_the_content_disposition_filename() {
+        let response = FetchResponse::new(b"body".to_vec())
+            .with_header("profile-title", "Foxgirls VPN")
+            .with_header("content-disposition", r#"attachment; filename="x.yaml""#);
+        assert_eq!(
+            ProfileInfo::from_response(&response).title.as_deref(),
+            Some("Foxgirls VPN")
+        );
+    }
+
+    #[test]
+    fn a_malformed_extended_filename_reads_as_absent() {
+        let info = ProfileInfo::from_response(&response_with(
+            "content-disposition",
+            "attachment; filename*=latin1''%E9.yaml",
+        ));
+        assert_eq!(info.title, None, "a non-UTF-8 charset is not decoded");
     }
 }

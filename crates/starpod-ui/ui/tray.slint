@@ -4,6 +4,11 @@
 // are its own copy, not shared with `AppWindow` (builtin_elements.rs:4037),
 // so Rust must push engine state to, and wire callbacks on, the tray's own
 // `Bridge` instance as well as the window's.
+//
+// Check marks are written into the title ("✓ Rule"), not with MenuItem's
+// `checkable`/`checked`. Slint sets `checked` itself when an item is
+// activated, and that assignment removes any binding, so a checked state
+// bound to Bridge would go stale after the first click.
 
 import { Bridge } from "bridge.slint";
 
@@ -14,6 +19,10 @@ export component AppTray inherits SystemTrayIcon {
     tooltip: "Starpod - " + Bridge.engine-phase;
     title: "Starpod";
 
+    // The routing mode in effect: the engine's when it reports one, otherwise
+    // the saved one.
+    private property <string> current-mode: Bridge.mode != "" ? Bridge.mode : Bridge.settings.mode;
+
     // A left-click restores the window (on platforms that report it; macOS
     // opens the menu instead while a menu is attached).
     clicked => {
@@ -22,7 +31,7 @@ export component AppTray inherits SystemTrayIcon {
 
     Menu {
         MenuItem {
-            title: "Show Starpod";
+            title: @tr("Show Starpod");
             activated => {
                 Bridge.show-window();
             }
@@ -30,27 +39,109 @@ export component AppTray inherits SystemTrayIcon {
 
         MenuSeparator {}
 
+        // One item for both directions: Connect when stopped or failed,
+        // Disconnect when running. Blocked Connect is disabled, as on the
+        // Home page.
         MenuItem {
-            title: "Connect";
-            enabled: (Bridge.engine-phase == "stopped" || Bridge.engine-phase == "failed")
-                && Bridge.connect-blocked-reason == "";
+            title: Bridge.engine-phase == "running" ? @tr("Disconnect") : @tr("Connect");
+            enabled: Bridge.engine-phase == "running"
+                || ((Bridge.engine-phase == "stopped" || Bridge.engine-phase == "failed")
+                    && Bridge.connect-blocked-reason == "");
             activated => {
-                Bridge.connect();
+                if (Bridge.engine-phase == "running") {
+                    Bridge.disconnect();
+                } else {
+                    Bridge.connect();
+                }
             }
         }
 
         MenuItem {
-            title: "Disconnect";
-            enabled: Bridge.engine-phase == "running";
+            title: (Bridge.system-proxy-active ? "✓ " : "   ") + @tr("System proxy");
             activated => {
-                Bridge.disconnect();
+                Bridge.toggle-system-proxy(!Bridge.system-proxy-active);
+            }
+        }
+
+        MenuItem {
+            title: (Bridge.settings.tun-enabled ? "✓ " : "   ") + @tr("TUN mode");
+            activated => {
+                Bridge.toggle-tun(!Bridge.settings.tun-enabled);
+            }
+        }
+
+        MenuSeparator {}
+
+        Menu {
+            title: @tr("Mode");
+
+            MenuItem {
+                title: (current-mode == "rule" ? "✓ " : "   ") + @tr("Rule");
+                activated => {
+                    Bridge.set-mode("rule");
+                }
+            }
+
+            // Left out while the active profile forbids Global.
+            if (Bridge.global-mode-allowed) : MenuItem {
+                title: (current-mode == "global" ? "✓ " : "   ") + @tr("Global");
+                activated => {
+                    Bridge.set-mode("global");
+                }
+            }
+
+            MenuItem {
+                title: (current-mode == "direct" ? "✓ " : "   ") + @tr("Direct");
+                activated => {
+                    Bridge.set-mode("direct");
+                }
+            }
+        }
+
+        // One submenu per proxy group. The member the group uses has the check
+        // mark; each member shows its last latency test.
+        Menu {
+            title: @tr("Proxies");
+
+            if (Bridge.groups.length == 0) : MenuItem {
+                title: @tr("No proxy groups");
+                enabled: false;
+            }
+
+            for group in Bridge.groups : Menu {
+                title: group.label;
+
+                for member in group.members : MenuItem {
+                    title: (member.name == group.selected ? "✓ " : "   ")
+                        + member.label
+                        + (member.latency-ms >= 0 ? "    " + member.latency-ms + @tr(" ms") : "");
+                    activated => {
+                        Bridge.select-member(group.name, member.name);
+                    }
+                }
+            }
+
+            MenuSeparator {}
+
+            MenuItem {
+                title: @tr("Test latency");
+                activated => {
+                    Bridge.test-latency();
+                }
+            }
+        }
+
+        MenuItem {
+            title: @tr("Copy proxy command");
+            activated => {
+                Bridge.copy-proxy-env();
             }
         }
 
         MenuSeparator {}
 
         MenuItem {
-            title: "Quit";
+            title: @tr("Quit");
             activated => {
                 Bridge.quit();
             }

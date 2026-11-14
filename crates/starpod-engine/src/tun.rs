@@ -197,6 +197,7 @@ mod tests {
             rules: vec!["MATCH,DIRECT".to_string()],
             rule_providers: Vec::new(),
             subscriptions: Vec::new(),
+            engine: Default::default(),
         };
         config.tun.enabled = true;
         let plain = without_tun(&config);

@@ -44,6 +44,9 @@ pub struct LiveProxy {
     pub server: Option<String>,
     /// The server port, when the engine reports one.
     pub port: Option<u16>,
+    /// For a group, the member it is using right now (the engine's `now`).
+    /// `None` for a node, and for a group the engine does not report on.
+    pub now: Option<String>,
 }
 
 /// Whether a rule is a `MATCH` rule, the terminal catch-all.

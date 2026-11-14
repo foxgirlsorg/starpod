@@ -125,6 +125,31 @@ impl AppPaths {
             .join(safe_file_name("subscription", id)?))
     }
 
+    /// The directory holding the cached profile logos.
+    ///
+    /// A sibling of [`Self::subscription_cache_dir`], not a child of it: the
+    /// payload cache lists its directory to find the subscriptions it holds,
+    /// and a logo must not show up there as one.
+    pub fn subscription_logo_dir(&self) -> PathBuf {
+        self.cache_dir.join("subscription-logos")
+    }
+
+    /// The cached logo of one subscription, with the given extension
+    /// (`png`, `jpg` or `svg`). The id is validated like the payload's.
+    pub fn subscription_logo_file(&self, id: &str, extension: &str) -> Result<PathBuf, StoreError> {
+        let name = safe_file_name("subscription", id)?;
+        Ok(self
+            .subscription_logo_dir()
+            .join(format!("{name}.{extension}")))
+    }
+
+    /// The file that holds this device's fallback identifier, used for the
+    /// `x-hwid` header when the platform has no machine id. It lives in the
+    /// data directory: it is state the app keeps, not a setting or a cache.
+    pub fn device_id_file(&self) -> PathBuf {
+        self.data_dir.join("device-id")
+    }
+
     /// The file the generated engine configuration is written to.
     ///
     /// It lives in the *data* directory rather than the config directory

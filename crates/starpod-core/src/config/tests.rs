@@ -61,8 +61,10 @@ fn payload(subscription_id: &str, nodes: Vec<Node>, rules: Vec<RuleSpec>) -> Sub
         nodes,
         groups: Vec::new(),
         rules,
+        rule_providers: Vec::new(),
         settings: SubscriptionSettings::default(),
         dropped_entries: 0,
+        dns: None,
     }
 }
 
@@ -292,6 +294,288 @@ fn a_default_group_is_always_created() {
             .any(|g| g.name == DEFAULT_GROUP_NAME),
         "there must always be a group to select a node from"
     );
+}
+
+/// A group of the given type with the given members.
+fn typed_group(name: &str, group_type: &str, members: &[&str]) -> ProxyGroup {
+    ProxyGroup {
+        group_type: group_type.to_string(),
+        ..group(name, members)
+    }
+}
+
+/// The names of the groups in configuration order.
+fn group_names(config: &crate::domain::RuntimeConfig) -> Vec<&str> {
+    config
+        .proxy_groups
+        .iter()
+        .map(|g| g.name.as_str())
+        .collect()
+}
+
+#[test]
+fn groups_are_listed_in_the_order_they_were_written_not_by_name() {
+    let mut input = base_input();
+    input.user_nodes.push(node("u1"));
+    input.user_groups.push(group("Bravo", &["u1"]));
+    let mut sub = payload("s1", vec![node("n2"), node("n1")], Vec::new());
+    sub.groups.push(group("Zeta", &["n2", "n1"]));
+    sub.groups.push(typed_group("Alpha", "url-test", &["n1"]));
+    sub.groups.push(group("Mid", &["n1", "n2"]));
+    input.subscriptions.push(sub);
+
+    let config = build(&input).config.expect("the build should succeed");
+    assert_eq!(
+        group_names(&config),
+        vec!["PROXY", "Zeta", "Alpha", "Mid", "Bravo"],
+        "the app's default first, then the subscription's groups in YAML order, then the user's"
+    );
+    let zeta = config
+        .proxy_groups
+        .iter()
+        .find(|g| g.name == "Zeta")
+        .unwrap();
+    assert_eq!(
+        zeta.members,
+        vec!["n2", "n1"],
+        "members keep their YAML order"
+    );
+    let proxy = config
+        .proxy_groups
+        .iter()
+        .find(|g| g.name == "PROXY")
+        .unwrap();
+    assert_eq!(
+        proxy.members,
+        vec!["u1", "n2", "n1"],
+        "the default group lists the nodes in the order they were written"
+    );
+}
+
+#[test]
+fn a_subscription_match_moves_the_default_group_after_the_subscriptions_groups() {
+    let mut input = base_input();
+    let mut sub = payload(
+        "s1",
+        vec![node("n1")],
+        vec![RuleSpec::Match {
+            target: RuleTarget::new("Alpha"),
+        }],
+    );
+    sub.groups.push(group("Zeta", &["n1"]));
+    sub.groups.push(typed_group("Alpha", "url-test", &["n1"]));
+    input.subscriptions.push(sub);
+
+    let config = build(&input).config.expect("the build should succeed");
+    assert_eq!(
+        group_names(&config),
+        vec!["Zeta", "Alpha", "PROXY"],
+        "PROXY is listed after the subscription's groups when it supplies a MATCH"
+    );
+}
+
+#[test]
+fn user_groups_come_after_the_subscriptions_groups() {
+    let mut input = base_input();
+    input.user_nodes.push(node("u1"));
+    input.user_groups.push(group("Mine", &["u1"]));
+    let mut sub = payload("s1", vec![node("n1")], Vec::new());
+    sub.groups.push(group("Theirs", &["n1"]));
+    input.subscriptions.push(sub);
+
+    let config = build(&input).config.expect("the build should succeed");
+    let names = group_names(&config);
+    let theirs = names.iter().position(|n| *n == "Theirs").unwrap();
+    let mine = names.iter().position(|n| *n == "Mine").unwrap();
+    assert!(
+        theirs < mine,
+        "subscription groups come before the user's: {names:?}"
+    );
+}
+
+// --- primary group ----------------------------------------------------------
+
+#[test]
+fn the_primary_group_is_the_target_of_a_subscriptions_own_match() {
+    let mut input = base_input();
+    let mut sub = payload(
+        "s1",
+        vec![node("n1")],
+        vec![RuleSpec::Match {
+            target: RuleTarget::new("Alpha"),
+        }],
+    );
+    sub.groups.push(group("Zeta", &["n1"]));
+    sub.groups.push(typed_group("Alpha", "url-test", &["n1"]));
+    input.subscriptions.push(sub);
+
+    let outcome = build(&input);
+    assert!(outcome.is_ok(), "{:?}", outcome.findings);
+    assert_eq!(outcome.primary_group.as_deref(), Some("Alpha"));
+}
+
+#[test]
+fn without_a_match_the_primary_group_is_the_tail_group_the_app_default() {
+    let mut input = base_input();
+    input.user_nodes.push(node("u1"));
+    input.user_groups.push(group("Bravo", &["u1"]));
+    let mut sub = payload("s1", vec![node("n1")], Vec::new());
+    sub.groups.push(typed_group("Alpha", "url-test", &["n1"]));
+    sub.groups.push(group("Zeta", &["n1"]));
+    input.subscriptions.push(sub);
+
+    let outcome = build(&input);
+    assert!(outcome.is_ok(), "{:?}", outcome.findings);
+    assert_eq!(
+        outcome.primary_group.as_deref(),
+        Some(DEFAULT_GROUP_NAME),
+        "with no MATCH the tail is PROXY, so the picker must offer PROXY"
+    );
+    let config = outcome.config.expect("the build should succeed");
+    assert_eq!(config.rules.last().map(String::as_str), Some("MATCH,PROXY"));
+}
+
+// --- the MATCH tail's target -----------------------------------------------
+
+/// The tail rule of a built configuration.
+fn tail(config: &crate::domain::RuntimeConfig) -> &str {
+    config.rules.last().expect("there is a tail rule")
+}
+
+#[test]
+fn a_subscriptions_own_match_is_the_tail_target() {
+    let mut input = base_input();
+    let mut sub = payload(
+        "s1",
+        vec![node("n1")],
+        vec![RuleSpec::Match {
+            target: RuleTarget::new("Airport / Main"),
+        }],
+    );
+    sub.groups.push(group("Airport / Main", &["n1"]));
+    sub.groups.push(group("Airport / Other", &["n1"]));
+    input.subscriptions.push(sub);
+
+    let outcome = build(&input);
+    assert!(outcome.is_ok(), "{:?}", outcome.findings);
+    let config = outcome.config.expect("the build should succeed");
+    assert_eq!(tail(&config), "MATCH,Airport / Main");
+    assert_eq!(outcome.primary_group.as_deref(), Some("Airport / Main"));
+}
+
+#[test]
+fn the_users_selected_group_is_the_tail_target_over_a_subscriptions_match() {
+    let mut input = base_input();
+    input.preferences.selected_group = Some("Pick".to_string());
+    input.user_nodes.push(node("u1"));
+    input.user_groups.push(group("Pick", &["u1"]));
+    let mut sub = payload(
+        "s1",
+        vec![node("n1")],
+        vec![RuleSpec::Match {
+            target: RuleTarget::new("Alpha"),
+        }],
+    );
+    sub.groups.push(group("Alpha", &["n1"]));
+    input.subscriptions.push(sub);
+
+    let outcome = build(&input);
+    assert!(outcome.is_ok(), "{:?}", outcome.findings);
+    let config = outcome.config.expect("the build should succeed");
+    assert_eq!(tail(&config), "MATCH,Pick");
+    assert_eq!(outcome.primary_group.as_deref(), Some("Pick"));
+}
+
+#[test]
+fn a_selected_group_that_does_not_exist_falls_back_to_the_subscriptions_match() {
+    let mut input = base_input();
+    input.preferences.selected_group = Some("Gone".to_string());
+    let mut sub = payload(
+        "s1",
+        vec![node("n1")],
+        vec![RuleSpec::Match {
+            target: RuleTarget::new("Alpha"),
+        }],
+    );
+    sub.groups.push(group("Alpha", &["n1"]));
+    input.subscriptions.push(sub);
+
+    let outcome = build(&input);
+    assert!(outcome.is_ok(), "{:?}", outcome.findings);
+    let config = outcome.config.expect("the build should succeed");
+    assert_eq!(tail(&config), "MATCH,Alpha");
+    assert!(
+        outcome.findings.iter().any(|f| f.message.contains("Gone")),
+        "the missing selection is still reported"
+    );
+}
+
+#[test]
+fn a_match_naming_a_builtin_outbound_is_the_tail_target() {
+    let mut input = base_input();
+    input.subscriptions.push(payload(
+        "s1",
+        vec![node("n1")],
+        vec![RuleSpec::Match {
+            target: RuleTarget::new("DIRECT"),
+        }],
+    ));
+
+    let outcome = build(&input);
+    assert!(outcome.is_ok(), "{:?}", outcome.findings);
+    let config = outcome.config.expect("the build should succeed");
+    assert_eq!(tail(&config), "MATCH,DIRECT");
+    assert_eq!(
+        outcome.primary_group.as_deref(),
+        Some(DEFAULT_GROUP_NAME),
+        "a builtin tail is not a group, so the picker falls back to the first select group"
+    );
+}
+
+#[test]
+fn a_match_naming_a_missing_group_falls_back_to_the_app_default() {
+    let mut input = base_input();
+    input.subscriptions.push(payload(
+        "s1",
+        vec![node("n1")],
+        vec![RuleSpec::Match {
+            target: RuleTarget::new("Ghost"),
+        }],
+    ));
+
+    let outcome = build(&input);
+    assert!(outcome.is_ok(), "{:?}", outcome.findings);
+    let config = outcome.config.expect("the build should succeed");
+    assert_eq!(tail(&config), "MATCH,PROXY");
+    assert_eq!(outcome.primary_group.as_deref(), Some(DEFAULT_GROUP_NAME));
+}
+
+#[test]
+fn without_a_subscription_group_the_primary_group_is_the_first_select_group() {
+    let mut input = base_input();
+    input.user_nodes.push(node("u1"));
+    input
+        .user_groups
+        .push(typed_group("Auto", "url-test", &["u1"]));
+    input.user_groups.push(group("Pick", &["u1"]));
+
+    let outcome = build(&input);
+    assert_eq!(
+        outcome.primary_group.as_deref(),
+        Some(DEFAULT_GROUP_NAME),
+        "the app's PROXY is the first select group"
+    );
+}
+
+#[test]
+fn a_build_that_fails_has_no_primary_group() {
+    let mut input = base_input();
+    input.preferences.mixed_port = Some(7890);
+    input.preferences.socks_port = Some(7890);
+
+    let outcome = build(&input);
+    assert!(!outcome.is_ok());
+    assert_eq!(outcome.primary_group, None);
 }
 
 // --- P5: rules --------------------------------------------------------------
@@ -582,10 +866,73 @@ fn a_rule_set_referencing_a_declared_provider_is_accepted() {
         path: None,
         behavior: RuleProviderBehavior::Domain,
         interval: None,
+        format: None,
+        payload: None,
+        proxy: None,
     });
 
     let outcome = build(&input);
     assert!(outcome.config.is_some(), "{:?}", outcome.findings);
+}
+
+#[test]
+fn a_rule_set_with_no_resolve_is_accepted_when_its_provider_is_declared() {
+    let mut input = base_input();
+    input.rule_providers.push(RuleProvider {
+        name: "present".to_string(),
+        provider_type: "http".to_string(),
+        url: Some("https://example.invalid/rules.dat".to_string()),
+        path: Some("rule-providers/present.yaml".to_string()),
+        behavior: RuleProviderBehavior::IpCidr,
+        interval: None,
+        format: Some("yaml".to_string()),
+        payload: None,
+        proxy: None,
+    });
+    input.user_rules.push(StoredRule {
+        id: "u1".to_string(),
+        spec: RuleSpec::RuleSet {
+            provider: "present".to_string(),
+            target: RuleTarget::new("DIRECT"),
+            flags: RuleFlags::parse(Some("no-resolve")),
+        },
+        enabled: true,
+        order: 0,
+    });
+
+    let outcome = build(&input);
+    let config = outcome.config.expect("the build succeeds");
+    assert!(
+        config
+            .rules
+            .contains(&"RULE-SET,present,DIRECT,no-resolve".to_string()),
+        "{:?}",
+        config.rules
+    );
+}
+
+#[test]
+fn a_file_rule_provider_is_refused_by_the_build() {
+    let mut input = base_input();
+    input.rule_providers.push(RuleProvider {
+        name: "local".to_string(),
+        provider_type: "file".to_string(),
+        url: None,
+        path: Some("/etc/passwd".to_string()),
+        behavior: RuleProviderBehavior::Domain,
+        interval: None,
+        format: None,
+        payload: None,
+        proxy: None,
+    });
+
+    let outcome = build(&input);
+    assert!(outcome.config.is_none());
+    assert!(
+        outcome.errors().any(|f| f.message.contains("“file”")),
+        "{:?}",
+        outcome.findings
+    );
 }
 
 #[test]

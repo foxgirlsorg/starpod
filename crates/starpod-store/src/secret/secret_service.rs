@@ -93,13 +93,11 @@ where
             .map_err(|err| SecretError::Unavailable {
                 reason: format!("could not start a thread for the keyring: {err}"),
             })?;
-        handle
-            .join()
-            .unwrap_or_else(|_| {
-                Err(SecretError::Unavailable {
-                    reason: "the keyring thread panicked".to_string(),
-                })
+        handle.join().unwrap_or_else(|_| {
+            Err(SecretError::Unavailable {
+                reason: "the keyring thread panicked".to_string(),
             })
+        })
     })
 }
 

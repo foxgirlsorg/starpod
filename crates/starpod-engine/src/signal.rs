@@ -124,6 +124,7 @@ fn terminate_pid(pid: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
 
     #[cfg(unix)]

@@ -135,6 +135,7 @@ mod tests {
             name: name.to_string(),
             server: server.map(str::to_string),
             port,
+            now: None,
         }
     }
 

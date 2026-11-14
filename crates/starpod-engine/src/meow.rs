@@ -62,6 +62,7 @@ use async_trait::async_trait;
 use starpod_core::domain::{RuntimeConfig, TunSettings};
 
 use crate::adopt::{self, OwnershipMarker, Probe};
+use crate::connections::ConnectionsReply;
 use crate::engine::{
     EngineHandle, EnginePhase, EngineStatus, ProxyEngine, StopRequest, ValidationReport,
 };
@@ -503,6 +504,18 @@ impl ProxyEngine for MeowEngine {
         client.delay(proxy, url, timeout_ms).await
     }
 
+    async fn group_delay(
+        &self,
+        group: &str,
+        url: &str,
+        timeout_ms: u32,
+    ) -> Result<std::collections::BTreeMap<String, u32>, EngineError> {
+        let Some(client) = self.client() else {
+            return Err(EngineError::EngineDown);
+        };
+        client.group_delay(group, url, timeout_ms).await
+    }
+
     async fn rules(&self) -> Result<Vec<String>, EngineError> {
         let Some(client) = self.client() else {
             return Err(EngineError::EngineDown);
@@ -529,6 +542,27 @@ impl ProxyEngine for MeowEngine {
             return Err(EngineError::EngineDown);
         };
         client.proxies().await
+    }
+
+    async fn connections(&self) -> Result<ConnectionsReply, EngineError> {
+        let Some(client) = self.client() else {
+            return Err(EngineError::EngineDown);
+        };
+        client.connections().await
+    }
+
+    async fn close_connection(&self, id: &str) -> Result<(), EngineError> {
+        let Some(client) = self.client() else {
+            return Err(EngineError::EngineDown);
+        };
+        client.close_connection(id).await
+    }
+
+    async fn close_all_connections(&self) -> Result<(), EngineError> {
+        let Some(client) = self.client() else {
+            return Err(EngineError::EngineDown);
+        };
+        client.close_all_connections().await
     }
 
     fn logs(&self) -> LogStream {
@@ -652,6 +686,7 @@ mod tests {
             rules: vec!["MATCH,PROXY".to_string()],
             rule_providers: Vec::new(),
             subscriptions: Vec::new(),
+            engine: Default::default(),
         }
     }
 

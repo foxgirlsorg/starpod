@@ -1,0 +1,20 @@
+Twemoji SVG graphics bundled as crates/starpod-app/assets/twemoji.bin
+
+Graphics
+  Copyright 2020 Twitter, Inc and other contributors.
+  Licensed under the Creative Commons Attribution 4.0 International
+  License (CC-BY 4.0): https://creativecommons.org/licenses/by/4.0/
+  Credit: Twemoji (https://github.com/jdecked/twemoji)
+
+Packaging code (the npm package that supplied the SVG files)
+  @twemoji/svg 15.0.0, https://www.npmjs.com/package/@twemoji/svg
+  Source: https://github.com/boywithkeyboard/twemoji_svg
+  Copyright (c) 2023 Samuel Kopp. Licensed under the MIT License.
+
+The blob is rebuilt from the npm tarball by tools/pack-twemoji.py.
+Changes made: the SVG files were not modified. They were concatenated
+and gzip-compressed into a single blob with an index.
+
+CC-BY 4.0 summary: you may share and adapt the graphics, including for
+commercial use, provided you give appropriate credit, link to the
+licence and indicate whether changes were made.

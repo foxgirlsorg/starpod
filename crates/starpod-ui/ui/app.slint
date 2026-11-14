@@ -3,65 +3,145 @@
 // Everything the Rust side needs is exported from here: the window, the
 // tray, the Bridge global and the structs the Bridge carries. Rust code is
 // generated only for what this file exports (ARCHITECTURE §6.3).
+//
+// The shell follows docs/design/ui-spec.md section 4: a 220px sidebar with
+// five pages and Settings at the foot, a status block, and a content area
+// with an optional banner above the active page.
 
 import { Design } from "design.slint";
-import { IconLayoutDashboard, IconServer, IconRoute, IconSettings, IconScrollText } from "icons.slint";
+import { Palette } from "std-widgets.slint";
+import { Bridge, TextRun } from "bridge.slint";
+import { Alert, AlertVariant, ButtonVariant, ConfirmDialog, WindowMetrics, EmojiText } from "primitives.slint";
 import { FoxMarkFill, FoxMarkOutline } from "logo.slint";
-import { StatusDot, StatusKind, ErrorBanner, BannerKind } from "primitives.slint";
-import { Bridge } from "bridge.slint";
-import { DashboardPage } from "screens/dashboard.slint";
-import { ServersPage } from "screens/servers.slint";
+import { HomePage } from "screens/home.slint";
+import { ProfilesPage } from "screens/profiles.slint";
+import { ProxiesPage } from "screens/proxies.slint";
 import { RulesPage } from "screens/rules.slint";
-import { SettingsPage } from "screens/settings.slint";
 import { LogsPage } from "screens/logs.slint";
+import { SettingsPage } from "screens/settings.slint";
+import { ConnectionsPage } from "screens/connections.slint";
 
-export { Bridge, SubscriptionItem, NodeItem, RuleItem, LogItem, SettingsModel } from "bridge.slint";
+export { Bridge, SubscriptionItem, NodeItem, RuleItem, LogItem, SettingsModel, MemberItem, GroupItem, AnnouncementItem, ProfileCardItem, SelectItem, TextRun, WarningItem, HotkeyModel, ConnectionItem } from "bridge.slint";
 export { AppTray } from "tray.slint";
 
-// One row in the sidebar. The icon is passed as a child so each nav item is
-// a plain row; the active state comes from the caller.
+// One row of the sidebar: 36px, 18px icon, 10px gap, 14px label. Icon and
+// label are placed on the row's centre line, so they share one vertical axis.
 component NavItem inherits Rectangle {
     in property <string> label;
+    in property <image> icon;
     in property <bool> active: false;
     callback activated();
 
+    private property <bool> hovered: touch.has-hover;
+
     height: 36px;
-    border-radius: Design.radius-lg;
-    background: root.active ? Design.primary
-        : touch.has-hover ? Design.secondary
+    border-radius: Design.radius-md;
+    background: root.active ? Design.card-hover
+        : root.hovered ? Design.card
         : transparent;
 
-    HorizontalLayout {
-        padding-left: Design.space-md;
-        padding-right: Design.space-md;
-        spacing: Design.space-md;
-        alignment: start;
+    Image {
+        x: 10px;
+        y: (parent.height - 18px) / 2;
+        width: 18px;
+        height: 18px;
+        source: root.icon;
+        colorize: root.active ? Design.primary
+            : root.hovered ? Design.foreground
+            : Design.muted-foreground;
+    }
 
-        // The icon column: 16px wide, its icon centred on the row's middle
-        // line, so the icon and the label share one vertical axis.
-        VerticalLayout {
-            width: 16px;
-            vertical-stretch: 0;
-            alignment: center;
-
-            @children
-        }
-
-        Text {
-            text: root.label;
-            color: root.active ? Design.primary-foreground : Design.foreground;
-            font-family: Design.font-family;
-            font-size: Design.font-sm;
-            font-weight: 500;
-            vertical-alignment: center;
-            wrap: no-wrap;
-        }
+    Text {
+        x: 38px;
+        y: 0px;
+        width: parent.width - 38px - 8px;
+        height: parent.height;
+        text: root.label;
+        color: root.active || root.hovered ? Design.foreground : Design.muted-foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-base;
+        font-weight: 500;
+        vertical-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
     }
 
     touch := TouchArea {
+        mouse-cursor: pointer;
         clicked => {
             root.activated();
         }
+    }
+}
+
+// The engine phase as a card at the foot of the sidebar: a coloured dot, a
+// title and a second line (uptime when running, otherwise the routing mode).
+component StatusBlock inherits Rectangle {
+    in property <string> phase: "stopped";
+    in property <string> uptime: "";
+    in property <string> mode: "";
+    // A busy message, or the engine error when failed; the detail line shows it.
+    in property <string> busy-message: "";
+    in property <[TextRun]> busy-message-runs;
+    in property <string> error: "";
+    in property <[TextRun]> error-runs;
+
+    private property <string> title: root.phase == "running" ? @tr("Connected")
+        : root.phase == "starting" ? @tr("Connecting…")
+        : root.phase == "stopping" ? @tr("Disconnecting…")
+        : root.phase == "failed" ? @tr("Failed")
+        : @tr("Not connected");
+    private property <string> mode-text: root.mode == "global" ? @tr("Global mode")
+        : root.mode == "direct" ? @tr("Direct mode")
+        : @tr("Rule mode");
+    private property <string> detail: root.busy-message != "" ? root.busy-message
+        : root.error != "" ? root.error
+        : root.phase == "running" && root.uptime != "" ? @tr("Up {}", root.uptime)
+        : root.mode-text;
+    private property <[TextRun]> detail-runs: root.busy-message != "" ? root.busy-message-runs : root.error-runs;
+    private property <color> dot: root.phase == "running" ? Design.success
+        : root.phase == "failed" ? Design.destructive
+        : (root.phase == "starting" || root.phase == "stopping") ? Design.warning
+        : Design.subtle-foreground;
+
+    height: 56px;
+    border-radius: Design.radius-md;
+    background: Design.card;
+
+    Rectangle {
+        x: 12px;
+        y: 15px;
+        width: 8px;
+        height: 8px;
+        border-radius: Design.radius-full;
+        background: root.dot;
+    }
+
+    Text {
+        x: 28px;
+        y: 10px;
+        width: parent.width - 28px - 12px;
+        height: 18px;
+        text: root.title;
+        color: Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        font-weight: 500;
+        vertical-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+
+    EmojiText {
+        x: 28px;
+        y: 28px;
+        width: parent.width - 28px - 12px;
+        height: 16px;
+        runs: root.detail-runs;
+        fallback: root.detail;
+        color: Design.muted-foreground;
+        font-size: Design.font-xs;
+        wrap: false;
     }
 }
 
@@ -73,142 +153,128 @@ export component AppWindow inherits Window {
     preferred-height: 720px;
     background: Design.background;
 
-    private property <string> page-title: Bridge.active-page == 0 ? "Dashboard"
-        : Bridge.active-page == 1 ? "Servers"
-        : Bridge.active-page == 2 ? "Rules"
-        : Bridge.active-page == 3 ? "Settings"
-        : "Logs";
-
-    private property <StatusKind> engine-kind: Bridge.engine-phase == "running" ? StatusKind.running
-        : Bridge.engine-phase == "failed" ? StatusKind.error
-        : (Bridge.engine-phase == "starting" || Bridge.engine-phase == "stopping") ? StatusKind.syncing
-        : StatusKind.stopped;
-
-    private property <BannerKind> banner-kind: Bridge.banner-kind == "success" ? BannerKind.success
-        : Bridge.banner-kind == "error" ? BannerKind.error
-        : BannerKind.info;
+    // Popups read the window size from WindowMetrics (see Select).
+    // The std-widgets (TextEdit, ScrollView, ListView scrollbars) take their
+    // colours from this palette. The app is dark only, so they follow it.
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+        WindowMetrics.width = root.width;
+        WindowMetrics.height = root.height;
+    }
+    changed width => {
+        WindowMetrics.width = root.width;
+    }
+    changed height => {
+        WindowMetrics.height = root.height;
+    }
 
     HorizontalLayout {
-        // The sidebar.
+        // The sidebar: 220px, padding 12.
         Rectangle {
             width: 220px;
-            background: Design.card;
+            background: Design.sidebar;
 
             VerticalLayout {
-                padding: Design.space-lg;
-                padding-top: Design.space-xl;
-                spacing: Design.space-xs;
+                padding: 12px;
+                spacing: 0px;
 
-                HorizontalLayout {
-                    spacing: Design.space-sm;
-                    alignment: start;
-                    padding-bottom: Design.space-lg;
+                // The brand row: the fox mark in primary, then the name.
+                Rectangle {
+                    height: 52px;
 
-                    Rectangle {
-                        width: 36px;
-                        height: 34px;
+                    FoxMarkFill {
+                        x: 8px;
+                        y: (parent.height - 22px) / 2;
+                        width: 23px;
+                        height: 22px;
+                        viewbox-x: -10;
+                        viewbox-y: 0;
+                        viewbox-width: 230;
+                        viewbox-height: 220;
+                    }
 
-                        FoxMarkFill {
-                            width: parent.width;
-                            height: parent.height;
-                            viewbox-x: -10;
-                            viewbox-y: 0;
-                            viewbox-width: 230;
-                            viewbox-height: 220;
-                        }
-
-                        FoxMarkOutline {
-                            width: parent.width;
-                            height: parent.height;
-                            viewbox-x: -10;
-                            viewbox-y: 0;
-                            viewbox-width: 230;
-                            viewbox-height: 220;
-                        }
+                    FoxMarkOutline {
+                        x: 8px;
+                        y: (parent.height - 22px) / 2;
+                        width: 23px;
+                        height: 22px;
+                        viewbox-x: -10;
+                        viewbox-y: 0;
+                        viewbox-width: 230;
+                        viewbox-height: 220;
                     }
 
                     Text {
+                        x: 39px;
+                        y: 0px;
+                        width: parent.width - 39px;
+                        height: parent.height;
                         text: "Starpod";
                         color: Design.foreground;
                         font-family: Design.font-family;
                         font-size: Design.font-lg;
                         font-weight: 600;
                         vertical-alignment: center;
+                        wrap: no-wrap;
                     }
                 }
 
-                NavItem {
-                    label: "Dashboard";
-                    active: Bridge.active-page == 0;
-                    activated => {
-                        Bridge.active-page = 0;
+                VerticalLayout {
+                    padding-top: 12px;
+                    spacing: 4px;
+
+                    NavItem {
+                        label: @tr("Home");
+                        icon: @image-url("assets/icons/house.svg");
+                        active: Bridge.active-page == 0;
+                        activated => {
+                            Bridge.active-page = 0;
+                        }
                     }
 
-                    IconLayoutDashboard {
-                        width: 16px;
-                        height: 16px;
-                        stroke: Bridge.active-page == 0 ? Design.primary-foreground : Design.muted-foreground;
-                        stroke-width: 2px;
-                    }
-                }
-
-                NavItem {
-                    label: "Servers";
-                    active: Bridge.active-page == 1;
-                    activated => {
-                        Bridge.active-page = 1;
+                    NavItem {
+                        label: @tr("Profiles");
+                        icon: @image-url("assets/icons/layers.svg");
+                        active: Bridge.active-page == 1;
+                        activated => {
+                            Bridge.active-page = 1;
+                        }
                     }
 
-                    IconServer {
-                        width: 16px;
-                        height: 16px;
-                        stroke: Bridge.active-page == 1 ? Design.primary-foreground : Design.muted-foreground;
-                        stroke-width: 2px;
-                    }
-                }
-
-                NavItem {
-                    label: "Rules";
-                    active: Bridge.active-page == 2;
-                    activated => {
-                        Bridge.active-page = 2;
+                    NavItem {
+                        label: @tr("Proxies");
+                        icon: @image-url("assets/icons/server.svg");
+                        active: Bridge.active-page == 2;
+                        activated => {
+                            Bridge.active-page = 2;
+                        }
                     }
 
-                    IconRoute {
-                        width: 16px;
-                        height: 16px;
-                        stroke: Bridge.active-page == 2 ? Design.primary-foreground : Design.muted-foreground;
-                        stroke-width: 2px;
-                    }
-                }
-
-                NavItem {
-                    label: "Settings";
-                    active: Bridge.active-page == 3;
-                    activated => {
-                        Bridge.active-page = 3;
+                    NavItem {
+                        label: @tr("Rules");
+                        icon: @image-url("assets/icons/route.svg");
+                        active: Bridge.active-page == 3;
+                        activated => {
+                            Bridge.active-page = 3;
+                        }
                     }
 
-                    IconSettings {
-                        width: 16px;
-                        height: 16px;
-                        stroke: Bridge.active-page == 3 ? Design.primary-foreground : Design.muted-foreground;
-                        stroke-width: 2px;
-                    }
-                }
-
-                NavItem {
-                    label: "Logs";
-                    active: Bridge.active-page == 4;
-                    activated => {
-                        Bridge.active-page = 4;
+                    NavItem {
+                        label: @tr("Logs");
+                        icon: @image-url("assets/icons/scroll-text.svg");
+                        active: Bridge.active-page == 4;
+                        activated => {
+                            Bridge.active-page = 4;
+                        }
                     }
 
-                    IconScrollText {
-                        width: 16px;
-                        height: 16px;
-                        stroke: Bridge.active-page == 4 ? Design.primary-foreground : Design.muted-foreground;
-                        stroke-width: 2px;
+                    NavItem {
+                        label: @tr("Connections");
+                        icon: @image-url("assets/icons/activity.svg");
+                        active: Bridge.active-page == 6;
+                        activated => {
+                            Bridge.active-page = 6;
+                        }
                     }
                 }
 
@@ -216,29 +282,65 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                 }
 
-                // The engine phase, at the foot of the sidebar.
-                HorizontalLayout {
-                    padding-left: Design.space-md;
-                    spacing: Design.space-sm;
-                    alignment: start;
-                    height: 28px;
+                VerticalLayout {
+                    spacing: 4px;
+                    padding-bottom: 8px;
 
-                    VerticalLayout {
-                        width: 10px;
-                        alignment: center;
-
-                        StatusDot {
-                            kind: engine-kind;
+                    NavItem {
+                        label: @tr("Settings");
+                        icon: @image-url("assets/icons/settings.svg");
+                        active: Bridge.active-page == 5;
+                        activated => {
+                            Bridge.active-page = 5;
                         }
                     }
 
-                    Text {
-                        text: Bridge.engine-phase;
-                        color: Design.muted-foreground;
-                        font-family: Design.font-family;
-                        font-size: Design.font-xs;
-                        vertical-alignment: center;
-                        wrap: no-wrap;
+                    if (Bridge.update-available) : Rectangle {
+                        height: 28px;
+                        border-radius: Design.radius-md;
+                        background: update-ta.has-hover ? Design.card-hover : transparent;
+
+                        HorizontalLayout {
+                            x: 10px;
+                            width: parent.width - 20px;
+                            height: parent.height;
+                            spacing: 8px;
+
+                            Image {
+                                width: 14px;
+                                height: 14px;
+                                source: @image-url("assets/icons/download.svg");
+                                colorize: Design.primary;
+                            }
+
+                            EmojiText {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                // update-version has no leading "v" (update.rs strips it).
+                                fallback: @tr("Update available: v{}", Bridge.update-version);
+                                color: Design.primary;
+                                font-size: Design.font-xs;
+                                font-weight: 500;
+                                wrap: false;
+                            }
+                        }
+
+                        update-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                Bridge.open-url(Bridge.update-url);
+                            }
+                        }
+                    }
+
+                    StatusBlock {
+                        phase: Bridge.engine-phase;
+                        uptime: Bridge.uptime;
+                        mode: Bridge.mode;
+                        busy-message: Bridge.busy ? Bridge.busy-message : "";
+                        busy-message-runs: Bridge.busy-message-runs;
+                        error: Bridge.engine-phase == "failed" ? Bridge.engine-error : "";
+                        error-runs: Bridge.engine-error-runs;
                     }
                 }
             }
@@ -250,46 +352,87 @@ export component AppWindow inherits Window {
             background: Design.border;
         }
 
-        // The content area: a header, the banner, then the active page.
+        // The content area: the banner, then the active page. Each page scrolls
+        // by itself, so the banner stays put.
         VerticalLayout {
             horizontal-stretch: 1;
 
-            HorizontalLayout {
-                padding-left: Design.space-xl;
-                padding-right: Design.space-xl;
-                padding-top: Design.space-xl;
-                height: 72px;
-
-                Text {
-                    text: root.page-title;
-                    color: Design.foreground;
-                    font-family: Design.font-family;
-                    font-size: Design.font-xl;
-                    font-weight: 600;
-                    vertical-alignment: center;
-                    wrap: no-wrap;
-                }
-            }
-
             if (Bridge.banner-message != "") : HorizontalLayout {
-                padding-left: Design.space-xl;
-                padding-right: Design.space-xl;
+                padding-left: 32px;
+                padding-right: 32px;
+                padding-top: 20px;
 
-                ErrorBanner {
+                Alert {
                     horizontal-stretch: 1;
-                    message: Bridge.banner-message;
-                    kind: root.banner-kind;
+                    variant: Bridge.banner-kind == "error" ? AlertVariant.error
+                        : Bridge.banner-kind == "success" ? AlertVariant.success
+                        : AlertVariant.info;
+                    text: Bridge.banner-message;
+                    text-runs: Bridge.banner-runs;
+                    closable: true;
                     dismissed => {
                         Bridge.dismiss-banner();
                     }
                 }
             }
 
-            if (Bridge.active-page == 0) : DashboardPage {}
-            if (Bridge.active-page == 1) : ServersPage {}
-            if (Bridge.active-page == 2) : RulesPage {}
-            if (Bridge.active-page == 3) : SettingsPage {}
-            if (Bridge.active-page == 4) : LogsPage {}
+            if (Bridge.active-page == 0) : HomePage {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+            }
+            if (Bridge.active-page == 1) : ProfilesPage {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+            }
+            if (Bridge.active-page == 2) : ProxiesPage {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+            }
+            if (Bridge.active-page == 3) : RulesPage {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+            }
+            if (Bridge.active-page == 4) : LogsPage {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+            }
+            if (Bridge.active-page == 5) : SettingsPage {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+            }
+            if (Bridge.active-page == 6) : ConnectionsPage {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+            }
+        }
+    }
+
+    // The confirmation for a starpod:// link. It opens only when Rust sets
+    // install-pending, and it adds nothing until the user confirms.
+    private property <bool> install-mirror: Bridge.install-pending;
+    changed install-mirror => {
+        if (install-mirror) {
+            install-dialog.show();
+        } else {
+            install-dialog.close();
+        }
+    }
+
+    install-dialog := ConfirmDialog {
+        width: parent.width;
+        height: parent.height;
+        title: @tr("Add subscription?");
+        message: (Bridge.install-name == "" ? @tr("Add the subscription from {}?", Bridge.install-host) : @tr("Add the subscription from {}?\nName: {}", Bridge.install-host, Bridge.install-name))
+            
+            + (Bridge.install-error == "" ? "" : "\n\n" + Bridge.install-error);
+        confirm-text: @tr("Add");
+        confirm-variant: ButtonVariant.primary;
+        busy: Bridge.busy;
+        confirmed => {
+            Bridge.confirm-install();
+        }
+        cancelled => {
+            Bridge.cancel-install();
         }
     }
 }

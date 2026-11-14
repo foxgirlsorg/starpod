@@ -13,6 +13,8 @@ starpod-subscription = { workspace = true }
 starpod-store = { workspace = true }
 starpod-engine = { workspace = true }
 async-trait = { workspace = true }
+# The system proxy's saved-settings record (src/sysproxy/mod.rs).
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -23,9 +25,31 @@ slint = { workspace = true }
 starpod-ui = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# The interface language when the preference is "follow the system" (src/i18n.rs).
+sys-locale = "0.3"
+# The Twemoji blob (src/ui/emoji.rs) is gzip-compressed.
+flate2 = { workspace = true }
+sha2 = { workspace = true }
+# Grapheme clusters, so that a flag or a ZWJ sequence is one emoji.
+unicode-segmentation = "1.13"
 # Slint 1.18 has no clipboard API for applications, so the Logs screen's
 # copy action uses arboard, which Slint's own winit backend already depends on.
 arboard = "3.7"
+# The instance channel's random token (src/instance.rs).
+rand = { workspace = true }
+# The update check's GitHub request and version comparison (src/update.rs).
+reqwest = { workspace = true }
+semver = { workspace = true }
+# Global keyboard shortcuts (src/ui/hotkeys.rs).
+global-hotkey = { workspace = true }
+# The Linux desktop entry's directory (src/scheme.rs).
+dirs = { workspace = true }
+
+# The Windows scheme registration writes to the current user's registry hive.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+# The system proxy's registry values and WinInet notification (src/sysproxy/win.rs).
+windows-sys = { workspace = true }
 
 [[bin]]
 name = "starpod"

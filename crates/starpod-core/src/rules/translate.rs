@@ -164,11 +164,11 @@ fn dead_payload_for(kind: super::grammar::RuleKind, payload: &str) -> Option<&'s
             if payload.is_empty() {
                 Some("the payload is empty")
             } else if payload.starts_with('.') || payload.ends_with('.') {
-                Some("a leading or trailing dot can never match a normalised host")
+                Some("a leading or trailing dot can never match a normalized host")
             } else if payload.contains(['*', '+']) {
                 Some("a `*` or `+` belongs on DOMAIN-WILDCARD, not on this rule type")
             } else if payload.contains("..") {
-                Some("an empty label can never match a normalised host")
+                Some("an empty label can never match a normalized host")
             } else {
                 None
             }
@@ -181,7 +181,7 @@ fn dead_payload_for(kind: super::grammar::RuleKind, payload: &str) -> Option<&'s
             } else {
                 let body = payload.strip_prefix("*.").unwrap_or(payload);
                 if body.is_empty() || body.split('.').any(str::is_empty) {
-                    Some("an empty label can never match a normalised host")
+                    Some("an empty label can never match a normalized host")
                 } else {
                     None
                 }
@@ -189,7 +189,7 @@ fn dead_payload_for(kind: super::grammar::RuleKind, payload: &str) -> Option<&'s
         }
         RuleKind::DomainKeyword => {
             if payload.contains("..") {
-                Some("an empty label can never match a normalised host")
+                Some("an empty label can never match a normalized host")
             } else {
                 None
             }

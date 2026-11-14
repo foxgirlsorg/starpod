@@ -22,10 +22,11 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
+use starpod_core::config::{DEFAULT_GROUP_NAME, DEFAULT_MIXED_PORT};
 use starpod_core::rules::{parse_line, translate_all};
 use starpod_core::timestamp;
 use starpod_core::{
-    ProxyMode, RuleSpec, RuntimeConfig, StoredRule, Subscription, SubscriptionMode,
+    ProxyGroup, ProxyMode, RuleSpec, RuntimeConfig, StoredRule, Subscription, SubscriptionMode,
     SubscriptionPayload, SubscriptionQuota as CoreQuota, UserPreferences,
 };
 use starpod_engine::log::redact_urls;
@@ -40,10 +41,11 @@ use starpod_store::{
     AppPaths, LoadOutcome, SecretRef, SecretStore, SelectedStore, Store, SubscriptionMeta,
     UserState, open_secret_store,
 };
+use starpod_subscription::logo::fetch_logo;
 use starpod_subscription::metadata::DEFAULT_INTERVAL_SECS;
 use starpod_subscription::{
     FetchRequest, HttpSubscriptionProvider, RefreshOutcome, SubscriptionCacheSet,
-    SubscriptionMetadata, SubscriptionProvider, refresh,
+    SubscriptionError, SubscriptionMetadata, SubscriptionProvider, refresh,
 };
 use tokio::sync::{Mutex, watch};
 use url::Url;
@@ -51,12 +53,18 @@ use uuid::Uuid;
 
 use crate::reassert::{OwnNode, RefreshWatch, shadow_warnings};
 
-use crate::compose::{Composed, compose};
+use crate::autostart;
+use crate::compose::{Composed, compose, global_mode_blocked};
+use crate::connections::ConnectionTracker;
+use crate::device::DeviceProfile;
 use crate::error::{AppError, RuleLineError};
 use crate::snapshot::{
-    AppSnapshot, EngineView, NodeView, NoticeKind, RuleView, SubscriptionStatus, SubscriptionView,
-    builtin_target_names, connect_blocked_reason, rule_kind_views, rule_view,
+    AnnouncementView, AppSnapshot, DEVICE_LIMIT_MESSAGE, EngineView, GroupView, Latency,
+    MemberView, NodeView, NoticeKind, RuleView, SubscriptionStatus, SubscriptionView,
+    builtin_target_names, connect_blocked_reason, display_label, display_title, member_protocol,
+    profile_card, rule_kind_views, rule_view,
 };
+use crate::sysproxy::{self, Desired, SystemProxy};
 
 /// The notice shown when the proxy is stopped because the last usable
 /// subscription went away.
@@ -64,8 +72,6 @@ const STOPPED_FOR_NO_SERVERS: &str = "The proxy was stopped because no subscript
 
 /// How many lines of the app's own log are kept.
 const LOG_CAPACITY: usize = 500;
-/// How many lines of the engine's output the snapshot carries.
-const ENGINE_LOG_TAIL: usize = 200;
 /// The longest subscription name the app accepts.
 const MAX_LABEL_CHARS: usize = 80;
 /// Node raw fields that hold credentials, so their values are scrubbed.
@@ -82,10 +88,13 @@ const SECRET_NODE_KEYS: &[&str] = &[
 /// Shorter credential values would match ordinary text, so they are not
 /// learned as secrets.
 const MIN_SECRET_LEN: usize = 4;
-/// The address a latency test measures against.
-const LATENCY_URL: &str = "https://www.gstatic.com/generate_204";
-/// How long one latency probe may take, in milliseconds.
-const LATENCY_TIMEOUT_MS: u32 = 5000;
+/// The geodata sources used when the user has not set their own.
+const DEFAULT_GEO_MMDB_URL: &str =
+    "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/country.mmdb";
+const DEFAULT_GEOSITE_URL: &str =
+    "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/geosite.dat";
+const DEFAULT_GEO_ASN_URL: &str =
+    "https://github.com/P3TERX/GeoLite.mmdb/releases/latest/download/GeoLite2-ASN.mmdb";
 
 /// The dependencies an [`AppService`] is built from.
 ///
@@ -141,9 +150,14 @@ pub struct AppService {
     meta_writable: bool,
     /// The configuration the state last built into.
     built: Option<RuntimeConfig>,
+    /// The primary group of the configuration in `built`.
+    built_primary: Option<String>,
     /// The result of the last latency test, by node id. `None` means the
     /// probe failed or timed out.
     latencies: BTreeMap<String, Option<u32>>,
+    /// The member each group uses now, as the running engine reports it
+    /// (group name to member name). Empty while the engine is not running.
+    live_selected: BTreeMap<String, String>,
     warnings: Vec<String>,
     /// Warnings about engine-managed subscriptions, from the last engine
     /// refresh check. Kept apart from `warnings`, which each build replaces.
@@ -155,7 +169,19 @@ pub struct AppService {
     handle: Option<EngineHandle>,
     notice: Option<(NoticeKind, String)>,
     app_log: VecDeque<String>,
+    /// The engine release installed, by label. `None` when none is installed.
+    installed_engine: Option<String>,
+    /// The newest release of the chosen channel, as of the last check.
+    latest_engine: Option<String>,
     redactor: Redactor,
+    /// The engine's open connections and the history of closed ones.
+    connections: ConnectionTracker,
+    /// This device, as provider headers describe it. Probed once at start.
+    device: DeviceProfile,
+    /// The operating system's proxy, as Starpod has set it.
+    system_proxy: SystemProxy,
+    /// The platform code that reads and writes the system proxy.
+    system_proxy_backend: Box<dyn sysproxy::Backend>,
     updates: watch::Sender<AppSnapshot>,
 }
 
@@ -170,10 +196,13 @@ impl AppService {
             provider,
             engine_installed,
         } = deps;
+        let installed_engine =
+            starpod_engine::download::installed_version_in(store.paths().data_dir());
         let SelectedStore {
             store: secret_store,
             fallback_reason,
         } = secrets;
+        let device = DeviceProfile::detect(&store.paths().device_id_file());
         let service = Self {
             store,
             secrets: secret_store,
@@ -187,7 +216,9 @@ impl AppService {
             state_writable: true,
             meta_writable: true,
             built: None,
+            built_primary: None,
             latencies: BTreeMap::new(),
+            live_selected: BTreeMap::new(),
             warnings: Vec::new(),
             engine_warnings: Vec::new(),
             refresh_watch: RefreshWatch::default(),
@@ -196,7 +227,13 @@ impl AppService {
             handle: None,
             notice: None,
             app_log: VecDeque::new(),
+            installed_engine,
+            latest_engine: None,
             redactor: Redactor::default(),
+            connections: ConnectionTracker::new(),
+            device,
+            system_proxy: SystemProxy::default(),
+            system_proxy_backend: sysproxy::os_backend(),
             updates: watch::channel(AppSnapshot::default()).0,
         };
         service.publish();
@@ -241,6 +278,8 @@ impl AppService {
     /// The current view state.
     pub fn snapshot(&self) -> AppSnapshot {
         let prefs = &self.state.preferences;
+        // The Rust-side strings of this snapshot follow the saved language.
+        crate::i18n::set(crate::i18n::effective(&prefs.language));
         let built = self.built.as_ref();
         let selected_node = prefs.selected_node_id.as_deref();
 
@@ -266,6 +305,14 @@ impl AppService {
             .unwrap_or_default();
         let current_node = nodes.iter().find(|node| node.selected).cloned();
 
+        let logo_path = |subscription: &Subscription| {
+            subscription
+                .logo_file
+                .as_ref()
+                .map(|name| self.store.paths().subscription_logo_dir().join(name))
+                .filter(|path| path.is_file())
+        };
+
         let subscriptions = self
             .meta
             .subscriptions
@@ -281,8 +328,61 @@ impl AppService {
                 group_count: subscription.group_count,
                 quota: subscription.quota.clone(),
                 has_auth_header: subscription.has_auth_header,
+                title: display_title(subscription),
+                announce: subscription.announce.clone(),
+                support_url: subscription.support_url.clone(),
+                web_url: subscription.web_url.clone(),
+                web_page_name: subscription.web_page_name.clone(),
+                announce_url: subscription.announce_url.clone(),
+                logo_path: logo_path(subscription),
+                interval_secs: subscription.interval_secs,
+                global_mode_disabled: subscription.global_mode_disabled,
+                expand_proxy_groups: subscription.expand_proxy_groups,
+                device_limit: subscription.device_limit,
             })
             .collect();
+
+        // An announcement per subscription with announce text, and a notice
+        // per subscription at its device limit, carrying the support link.
+        let announcements: Vec<AnnouncementView> = self
+            .meta
+            .subscriptions
+            .iter()
+            .filter_map(|subscription| {
+                let text = match subscription
+                    .announce
+                    .as_deref()
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    Some(text) => text.to_string(),
+                    None if subscription.device_limit => {
+                        crate::i18n::t(DEVICE_LIMIT_MESSAGE).to_string()
+                    }
+                    None => return None,
+                };
+                Some(AnnouncementView {
+                    subscription_id: subscription.id.clone(),
+                    title: display_title(subscription),
+                    text,
+                    announce_url: subscription.announce_url.clone(),
+                    support_url: subscription.support_url.clone(),
+                    web_url: subscription.web_url.clone(),
+                })
+            })
+            .collect();
+
+        // The Home page card is for the selected subscription, else the first.
+        let active = self
+            .meta
+            .subscriptions
+            .iter()
+            .find(|subscription| {
+                Some(subscription.id.as_str()) == self.state.selected_subscription.as_deref()
+            })
+            .or_else(|| self.meta.subscriptions.first());
+        let card = active
+            .map(|subscription| profile_card(subscription, logo_path(subscription), now_unix()));
+        let global_mode_allowed = !global_mode_blocked(&self.meta, &self.caches);
 
         let rules: Vec<RuleView> = self
             .state
@@ -308,6 +408,12 @@ impl AppService {
             rule_targets.extend(config.proxy_groups.iter().map(|group| group.name.clone()));
             rule_targets.extend(config.proxies.iter().map(|node| node.name.clone()));
         }
+
+        let origins = self.name_origins();
+        let groups: Vec<GroupView> = built
+            .map(|config| self.group_views(config, prefs, &origins))
+            .unwrap_or_default();
+        let primary_group = built.and(self.built_primary.clone());
 
         let mode = built
             .map(|config| config.mode)
@@ -340,15 +446,18 @@ impl AppService {
             }),
         };
 
+        let retention = self.state.preferences.effective_log_retention_lines() as usize;
         let engine_log_lines = self
             .engine
             .logs()
-            .tail(ENGINE_LOG_TAIL)
+            .tail(retention)
             .into_iter()
             .map(|line| self.scrub(&redact_urls(&line.text)))
             .collect();
 
         AppSnapshot {
+            engine_update: self.engine_update_view(),
+            geo_updated_at: prefs.geo_updated_at,
             engine,
             mode,
             listen_address,
@@ -359,7 +468,13 @@ impl AppService {
             subscription_rules,
             rule_kinds: rule_kind_views(),
             rule_targets,
+            groups,
+            primary_group,
+            announcements,
+            profile_card: card,
+            global_mode_allowed,
             preferences: prefs.clone(),
+            connections: self.connections.view(),
             warnings: self
                 .warnings
                 .iter()
@@ -374,6 +489,118 @@ impl AppService {
             data_dir: self.store.paths().data_dir().to_path_buf(),
             notice: self.notice.clone(),
             connect_blocked: self.connect_block(),
+            system_proxy_on: prefs.system_proxy,
+            system_proxy_active: self.system_proxy.is_active(),
+            system_proxy_error: self.system_proxy.error.clone(),
+        }
+    }
+
+    /// The `set_system_proxy` action's body.
+    async fn set_system_proxy_inner(&mut self, enabled: bool) -> Result<(), AppError> {
+        if self.state.preferences.system_proxy == enabled {
+            return Ok(());
+        }
+        let mut state = self.state.clone();
+        state.preferences.system_proxy = enabled;
+        self.check_writable(&state, &self.meta)?;
+        self.state = state;
+        let save = self.store.save_user_state(&self.state);
+        self.sync_system_proxy().await;
+        save.map_err(|error| {
+            AppError::Storage(format!(
+                "the change is in effect but could not be saved: {}",
+                self.scrub(&error.to_string())
+            ))
+        })
+    }
+
+    /// Make the operating system's proxy match the saved settings and the
+    /// engine's state. It is set exactly when the setting is on and the engine
+    /// runs, and restored otherwise. A failure is recorded, not returned, so a
+    /// proxy problem never fails the action that caused the sync.
+    async fn sync_system_proxy(&mut self) {
+        let prefs = &self.state.preferences;
+        let want = Desired {
+            mode: prefs.sysproxy_mode,
+            port: self.current_mixed_port(),
+            bypass: prefs.sysproxy_bypass.clone(),
+            pac_script: prefs.pac_script.clone(),
+        };
+        let wanted = prefs.system_proxy && self.engine_status.phase.is_running();
+        let path = self.system_proxy_record();
+        if wanted {
+            let result = self
+                .system_proxy
+                .apply(self.system_proxy_backend.as_ref(), &path, want)
+                .await;
+            self.finish_system_proxy(result);
+        } else if self.system_proxy.is_active() || path.exists() {
+            let result = self
+                .system_proxy
+                .release(self.system_proxy_backend.as_ref(), &path);
+            self.finish_system_proxy(result);
+        }
+    }
+
+    /// Record the outcome of a system proxy change. Warnings go to the log;
+    /// an error stays visible in the snapshot until a later change succeeds.
+    fn finish_system_proxy(&mut self, result: Result<Vec<String>, sysproxy::SysproxyError>) {
+        match result {
+            Ok(warnings) => {
+                for warning in warnings {
+                    self.log(warning);
+                }
+                self.system_proxy.error = None;
+            }
+            Err(error) => {
+                let text = self.scrub(&error.0);
+                self.log(format!("the system proxy could not be changed: {text}"));
+                self.system_proxy.error = Some(text);
+            }
+        }
+    }
+
+    /// Where the saved proxy settings are kept, beside the other app data.
+    fn system_proxy_record(&self) -> std::path::PathBuf {
+        self.store.paths().data_dir().join(sysproxy::RECORD_FILE)
+    }
+
+    /// The mixed port the engine listens on, which the system proxy points at.
+    fn current_mixed_port(&self) -> u16 {
+        self.built
+            .as_ref()
+            .and_then(|config| config.mixed_port.or(config.port))
+            .unwrap_or(DEFAULT_MIXED_PORT)
+    }
+
+    /// Restore the proxy settings a crashed run left behind. Returns a
+    /// problem to report when the restore failed; the record is kept then, so
+    /// the next start tries again.
+    fn recover_system_proxy(&mut self) -> Option<String> {
+        let path = self.system_proxy_record();
+        if !path.exists() {
+            return None;
+        }
+        match sysproxy::recover(self.system_proxy_backend.as_ref(), &path) {
+            Ok(warnings) => {
+                for warning in warnings {
+                    self.log(warning);
+                }
+                self.log("restored the system proxy that an earlier run had changed");
+                None
+            }
+            Err(error) => Some(format!(
+                "the system proxy left by an earlier run could not be restored: {}",
+                self.scrub(&error.0)
+            )),
+        }
+    }
+
+    /// Write or remove the login entry, and say so in the log when it fails.
+    fn apply_autostart(&mut self, enabled: bool) {
+        if let Err(error) = autostart::set_enabled(enabled) {
+            self.log(error.clone());
+            self.notice = Some((NoticeKind::Warning, error));
         }
     }
 
@@ -522,6 +749,14 @@ impl AppService {
             Ok(composed) => self.adopt(&composed),
             Err(error) => problems.push(error.to_string()),
         }
+        // A system proxy an earlier run left changed is restored first, unless
+        // an engine it started is still running and still uses it.
+        if !self.engine_status.phase.is_running()
+            && let Some(problem) = self.recover_system_proxy()
+        {
+            problems.push(problem);
+        }
+        self.sync_system_proxy().await;
 
         if !problems.is_empty() {
             for problem in &problems {
@@ -550,8 +785,32 @@ impl AppService {
             self.handle = None;
             self.log(format!("the engine stopped (exit code {:?})", info.code));
         }
+        // An engine that stopped on its own takes its system proxy with it.
+        if !self.engine_status.phase.is_running() && self.system_proxy.is_active() {
+            self.sync_system_proxy().await;
+        }
+        self.refresh_live_selections().await;
         self.publish();
         self.engine_status.phase
+    }
+
+    /// Read which member each group uses now, from the running engine. When
+    /// the engine is not running, or does not answer, nothing is kept and the
+    /// saved choices are shown instead.
+    async fn refresh_live_selections(&mut self) {
+        if !self.engine_status.phase.is_running() {
+            self.live_selected.clear();
+            return;
+        }
+        match self.engine.proxies().await {
+            Ok(proxies) => {
+                self.live_selected = proxies
+                    .into_iter()
+                    .filter_map(|proxy| proxy.now.map(|now| (proxy.name, now)))
+                    .collect();
+            }
+            Err(_) => self.live_selected.clear(),
+        }
     }
 
     /// Add a subscription. Its URL and optional header go into the secret
@@ -568,6 +827,23 @@ impl AppService {
     ) -> Result<String, AppError> {
         let result = self.add_subscription_inner(label, url, header, mode).await;
         self.finish(result)
+    }
+
+    /// The id of the subscription whose stored address is `url`, if there is
+    /// one. A deep link for a subscription that is already added refreshes it
+    /// rather than adding a copy.
+    pub fn subscription_id_for_url(&mut self, url: &str) -> Option<String> {
+        let url = url.trim();
+        let ids: Vec<String> = self
+            .meta
+            .subscriptions
+            .iter()
+            .map(|subscription| subscription.id.clone())
+            .collect();
+        ids.into_iter().find(|id| {
+            self.read_secret(&subscription_url_key(id))
+                .is_ok_and(|stored| stored == url)
+        })
     }
 
     /// Remove a subscription, its secrets and its cached payload.
@@ -654,9 +930,50 @@ impl AppService {
     }
 
     /// Replace the user's preferences.
+    ///
+    /// A change to the login start is applied to the operating system here,
+    /// since it is not part of the engine's configuration.
     pub async fn save_preferences(&mut self, prefs: UserPreferences) -> Result<(), AppError> {
+        let autostart = prefs.autostart;
+        let was_autostart = self.state.preferences.autostart;
         let result = self.save_preferences_inner(prefs).await;
+        if autostart != was_autostart && self.state.preferences.autostart == autostart {
+            self.apply_autostart(autostart);
+        }
         self.finish(result)
+    }
+
+    /// Turn the system proxy on or off. When it is on and the engine runs, the
+    /// operating system is pointed at the engine at once. The engine is not
+    /// reloaded, because the proxy settings are not part of its configuration.
+    pub async fn set_system_proxy(&mut self, enabled: bool) -> Result<(), AppError> {
+        let result = self.set_system_proxy_inner(enabled).await;
+        self.finish(result)
+    }
+
+    /// Restore the operating system's proxy if Starpod changed it. Called when
+    /// the app quits and from the panic hook. The engine is not stopped here.
+    pub async fn restore_system_proxy(&mut self) {
+        let path = self.system_proxy_record();
+        let result = self
+            .system_proxy
+            .release(self.system_proxy_backend.as_ref(), &path);
+        self.finish_system_proxy(result);
+        self.publish();
+    }
+
+    /// Make the login entry match the saved setting. Called at startup, since
+    /// the executable's path may have moved since the entry was written.
+    pub fn sync_autostart(&mut self) {
+        let enabled = self.state.preferences.autostart;
+        self.apply_autostart(enabled);
+        self.publish();
+    }
+
+    /// Replace the backend that changes the operating system's proxy. The app
+    /// uses the platform's own backend; tests substitute a fake one.
+    pub fn set_system_proxy_backend(&mut self, backend: Box<dyn sysproxy::Backend>) {
+        self.system_proxy_backend = backend;
     }
 
     /// Select a node by id.
@@ -669,6 +986,17 @@ impl AppService {
         self.finish(result)
     }
 
+    /// Choose the member a `select` group uses.
+    ///
+    /// The choice is saved for the group and applied on every build. When the
+    /// engine is running it switches live, without a reload. Fails with
+    /// [`AppError::Invalid`] when the group is not a `select` group, the member
+    /// is not in it, or the group does not exist.
+    pub async fn select_member(&mut self, group: &str, member: &str) -> Result<(), AppError> {
+        let result = self.select_member_inner(group, member).await;
+        self.finish(result)
+    }
+
     /// Measure every node's latency against the running engine.
     ///
     /// Probes run one after another, each bounded by a short timeout, so a
@@ -677,6 +1005,95 @@ impl AppService {
     pub async fn test_latency(&mut self) -> Result<(), AppError> {
         let result = self.test_latency_inner().await;
         self.finish(result)
+    }
+
+    /// Read the engine's open connections into the Connections page's data.
+    ///
+    /// Called on each poll while the page is open. While the engine is not
+    /// running, every connection is taken to have ended. A failed read keeps
+    /// the last list: the engine's own status says what is wrong.
+    pub async fn refresh_connections(&mut self) {
+        if !self.engine_status.phase.is_running() {
+            if self.connections.has_open() {
+                self.connections.end_session();
+                self.publish();
+            }
+            return;
+        }
+        if let Ok(reply) = self.engine.connections().await {
+            self.connections.observe(&reply, now_unix());
+            self.publish();
+        }
+    }
+
+    /// Close one open connection by its id.
+    pub async fn close_connection(&mut self, id: &str) -> Result<(), AppError> {
+        let result = self.close_connection_inner(id).await;
+        self.finish(result)
+    }
+
+    /// Close every open connection.
+    pub async fn close_all_connections(&mut self) -> Result<(), AppError> {
+        let result = self.close_all_connections_inner().await;
+        self.finish(result)
+    }
+
+    /// Forget the closed connections the page lists. The open ones are kept.
+    pub fn clear_closed_connections(&mut self) {
+        self.connections.clear_closed();
+        self.publish();
+    }
+
+    async fn close_connection_inner(&mut self, id: &str) -> Result<(), AppError> {
+        if !self.refresh_engine_status().await.is_running() {
+            return Err(AppError::Invalid("the proxy is not running".to_string()));
+        }
+        self.engine
+            .close_connection(id)
+            .await
+            .map_err(|error| self.engine_failure(error))?;
+        self.refresh_connections().await;
+        Ok(())
+    }
+
+    async fn close_all_connections_inner(&mut self) -> Result<(), AppError> {
+        if !self.refresh_engine_status().await.is_running() {
+            return Err(AppError::Invalid("the proxy is not running".to_string()));
+        }
+        self.engine
+            .close_all_connections()
+            .await
+            .map_err(|error| self.engine_failure(error))?;
+        self.refresh_connections().await;
+        Ok(())
+    }
+
+    /// Close the connections whose chain holds `group`, so they open again on
+    /// the group's new member. Best effort: the switch has already worked, so
+    /// a close that fails is logged and not returned.
+    async fn close_connections_through(&mut self, group: &str) {
+        if !self.engine_status.phase.is_running() {
+            return;
+        }
+        self.refresh_connections().await;
+        let ids = self.connections.ids_through(group);
+        let mut closed = 0usize;
+        for id in &ids {
+            match self.engine.close_connection(id).await {
+                Ok(()) => closed += 1,
+                Err(error) => {
+                    let text = error.to_string();
+                    self.log(format!("could not close a connection: {text}"));
+                }
+            }
+        }
+        if closed > 0 {
+            self.log(format!(
+                "closed {closed} connections through “{group}” after the switch"
+            ));
+        }
+        self.refresh_connections().await;
+        self.publish();
     }
 
     /// Add a rule at the end of the user's list. Returns its id.
@@ -781,6 +1198,16 @@ impl AppService {
             node_count: 0,
             group_count: 0,
             last_error: None,
+            profile_title: None,
+            announce: None,
+            support_url: None,
+            web_url: None,
+            web_page_name: None,
+            announce_url: None,
+            logo_file: None,
+            global_mode_disabled: false,
+            expand_proxy_groups: None,
+            device_limit: false,
         });
         meta.url_keys.push(SecretRef {
             subscription_id: id.clone(),
@@ -867,6 +1294,16 @@ impl AppService {
             subscription.quota = None;
             subscription.node_count = 0;
             subscription.group_count = 0;
+            subscription.profile_title = None;
+            subscription.announce = None;
+            subscription.support_url = None;
+            subscription.web_url = None;
+            subscription.web_page_name = None;
+            subscription.announce_url = None;
+            subscription.logo_file = None;
+            subscription.global_mode_disabled = false;
+            subscription.expand_proxy_groups = None;
+            subscription.device_limit = false;
         }
         let state = self.state.clone();
         let caches = self.caches.clone();
@@ -894,6 +1331,10 @@ impl AppService {
             let header = self.read_secret(&subscription_header_key(id))?;
             request = request.with_authorization(header);
         }
+        // Device headers go out only when the user has not turned them off.
+        if self.state.preferences.send_device_id {
+            request = request.with_device(self.device.headers());
+        }
 
         let mut metadata =
             SubscriptionMetadata::new(subscription.id.clone(), subscription.label.clone());
@@ -910,14 +1351,27 @@ impl AppService {
         let outcome = refresh(provider.as_ref(), &request, &metadata, &mut scratch, now).await;
 
         match outcome {
-            RefreshOutcome::Refreshed { payload, quota, .. } => {
+            RefreshOutcome::Refreshed {
+                payload,
+                quota,
+                profile,
+                ..
+            } => {
                 let bytes = serde_json::to_vec(&payload)
                     .map_err(|error| AppError::Storage(error.to_string()))?;
                 let node_count = payload.nodes.len();
                 let group_count = payload.groups.len();
 
                 let mut caches = self.caches.clone();
-                caches.store(id, payload, now);
+                caches.store(id, *payload, now);
+
+                let logo_file = self
+                    .keep_logo(
+                        id,
+                        profile.logo_url.as_deref(),
+                        subscription.logo_file.as_deref(),
+                    )
+                    .await;
 
                 let mut meta = self.meta.clone();
                 if let Some(entry) = meta.subscriptions.iter_mut().find(|entry| entry.id == id) {
@@ -926,6 +1380,24 @@ impl AppService {
                     entry.quota = quota.as_ref().map(core_quota);
                     entry.node_count = node_count;
                     entry.group_count = group_count;
+                    // A successful refresh replaces the profile headers; an
+                    // absent header clears its field.
+                    entry.profile_title = profile.title;
+                    entry.announce = profile.announce;
+                    entry.support_url = profile.support_url;
+                    entry.web_url = profile.web_url;
+                    entry.web_page_name = profile.web_page_name;
+                    entry.announce_url = profile.announce_url;
+                    entry.global_mode_disabled = profile.global_mode_disabled;
+                    entry.expand_proxy_groups = profile.expand_proxy_groups;
+                    // The provider's update interval, when it sent one, becomes
+                    // this subscription's interval. A user's own auto-refresh
+                    // setting still takes precedence when it is set.
+                    entry.interval_secs = profile
+                        .update_interval_hours
+                        .map_or(DEFAULT_INTERVAL_SECS, |hours| hours.saturating_mul(3600));
+                    entry.device_limit = false;
+                    entry.logo_file = logo_file;
                 }
 
                 // The refresh never writes user state: the state passed here
@@ -944,13 +1416,75 @@ impl AppService {
                 ));
                 Ok(())
             }
-            RefreshOutcome::Failed { error, .. } => {
+            RefreshOutcome::Failed { error, profile, .. } => {
                 let message = self.scrub(&error.to_string());
                 let app_error = AppError::Subscription(format!(
                     "“{}” could not be refreshed: {message}",
                     subscription.label
                 ));
+                // A device-limit refusal keeps the cached payload, but the
+                // provider's support link must be shown, so the headers it sent
+                // are recorded.
+                if matches!(error, SubscriptionError::DeviceLimitReached) {
+                    let mut meta = self.meta.clone();
+                    if let Some(entry) = meta.subscriptions.iter_mut().find(|entry| entry.id == id)
+                    {
+                        entry.device_limit = true;
+                        if let Some(profile) = profile.as_deref()
+                            && profile.support_url.is_some()
+                        {
+                            entry.support_url = profile.support_url.clone();
+                        }
+                    }
+                    let state = self.state.clone();
+                    let caches = self.caches.clone();
+                    if let Err(error) = self.commit(state, meta, caches).await {
+                        return Err(self.record_refresh_failure(id, error));
+                    }
+                }
                 Err(self.record_refresh_failure(id, app_error))
+            }
+        }
+    }
+
+    /// Download the profile logo and keep it in place of the previous one.
+    ///
+    /// Returns the file name to record. A provider that sends no logo clears
+    /// it. A logo that cannot be kept leaves the previous one in place: a
+    /// failed download never blocks the refresh. The URL is never logged,
+    /// because it may carry a token.
+    async fn keep_logo(
+        &mut self,
+        id: &str,
+        url: Option<&str>,
+        previous: Option<&str>,
+    ) -> Option<String> {
+        let Some(url) = url else {
+            if let Err(error) = self.store.remove_subscription_logos(id) {
+                let text = self.scrub(&error.to_string());
+                self.log(format!("could not delete a cached logo: {text}"));
+            }
+            return None;
+        };
+        match fetch_logo(url).await {
+            Ok(logo) => {
+                match self
+                    .store
+                    .write_subscription_logo(id, logo.format.extension(), &logo.bytes)
+                {
+                    Ok(path) => path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned()),
+                    Err(error) => {
+                        let text = self.scrub(&error.to_string());
+                        self.log(format!("could not keep the profile logo: {text}"));
+                        previous.map(str::to_string)
+                    }
+                }
+            }
+            Err(_) => {
+                self.log("the profile logo could not be downloaded; the previous one is kept");
+                previous.map(str::to_string)
             }
         }
     }
@@ -1060,6 +1594,7 @@ impl AppService {
         self.engine_error = None;
         self.refresh_engine_status().await;
         self.log("the proxy started");
+        self.sync_system_proxy().await;
         Ok(())
     }
 
@@ -1086,6 +1621,7 @@ impl AppService {
         self.refresh_engine_status().await;
         // Latencies were measured against a proxy that is now gone.
         self.latencies.clear();
+        self.sync_system_proxy().await;
         Ok(())
     }
 
@@ -1097,6 +1633,11 @@ impl AppService {
     }
 
     async fn set_mode_inner(&mut self, mode: ProxyMode) -> Result<(), AppError> {
+        if mode == ProxyMode::Global && global_mode_blocked(&self.meta, &self.caches) {
+            return Err(AppError::Invalid(
+                "your subscription does not allow the Global mode".to_string(),
+            ));
+        }
         let mut state = self.state.clone();
         state.preferences.mode = Some(mode);
         self.commit_user(state).await
@@ -1120,6 +1661,25 @@ impl AppService {
 
         let mut state = self.state.clone();
         state.preferences.selected_node_id = Some(node_id.to_string());
+        // The choice is also recorded for the group it is made in, so it
+        // survives a rebuild the same way a group pick does. This is the group
+        // the build moves the node to the front of.
+        let legacy_group = state
+            .preferences
+            .selected_group
+            .clone()
+            .unwrap_or_else(|| DEFAULT_GROUP_NAME.to_string());
+        if current
+            .config
+            .proxy_groups
+            .iter()
+            .any(|group| group.name == legacy_group && group.members.contains(&node_name))
+        {
+            state
+                .preferences
+                .group_selections
+                .insert(legacy_group, node_name.clone());
+        }
         let meta = self.meta.clone();
         let caches = self.caches.clone();
         self.check_writable(&state, &meta)?;
@@ -1145,6 +1705,52 @@ impl AppService {
         self.persist_and_adopt(state, meta, caches, &composed)
     }
 
+    async fn select_member_inner(&mut self, group: &str, member: &str) -> Result<(), AppError> {
+        let current = self.compose_current()?;
+        let proxy_group = current
+            .config
+            .proxy_groups
+            .iter()
+            .find(|candidate| candidate.name == group)
+            .ok_or_else(|| AppError::Invalid(format!("“{group}” is not in the configuration")))?;
+        if proxy_group.group_type != "select" {
+            return Err(AppError::Invalid(format!(
+                "“{group}” chooses its server automatically"
+            )));
+        }
+        if !proxy_group.members.iter().any(|name| name == member) {
+            return Err(AppError::Invalid(format!(
+                "“{member}” is not a server in “{group}”"
+            )));
+        }
+
+        let mut state = self.state.clone();
+        state
+            .preferences
+            .group_selections
+            .insert(group.to_string(), member.to_string());
+        let meta = self.meta.clone();
+        let caches = self.caches.clone();
+        self.check_writable(&state, &meta)?;
+        let composed = self.compose_for(&state, &meta, &caches)?;
+
+        // As for a node: the running engine switches now, and a failed switch
+        // saves nothing.
+        if self.refresh_engine_status().await.is_running() {
+            self.engine
+                .select(group, member)
+                .await
+                .map_err(|error| self.engine_failure(error))?;
+            self.refresh_engine_status().await;
+        }
+
+        let saved = self.persist_and_adopt(state, meta, caches, &composed);
+        if saved.is_ok() && self.state.preferences.auto_close_connections_on_switch {
+            self.close_connections_through(group).await;
+        }
+        saved
+    }
+
     async fn test_latency_inner(&mut self) -> Result<(), AppError> {
         if !self.refresh_engine_status().await.is_running() {
             return Err(AppError::Invalid(
@@ -1163,13 +1769,15 @@ impl AppService {
             })
             .unwrap_or_default();
 
+        let url = self
+            .state
+            .preferences
+            .effective_delay_test_url()
+            .to_string();
+        let timeout = self.state.preferences.effective_delay_test_timeout_ms();
         let mut results = BTreeMap::new();
         for (id, name) in nodes {
-            let latency = self
-                .engine
-                .delay(&name, LATENCY_URL, LATENCY_TIMEOUT_MS)
-                .await
-                .ok();
+            let latency = self.engine.delay(&name, &url, timeout).await.ok();
             results.insert(id, latency);
         }
         let answered = results.values().filter(|latency| latency.is_some()).count();
@@ -1178,6 +1786,217 @@ impl AppService {
         self.log(format!(
             "latency test: {answered} of {total} nodes answered"
         ));
+        Ok(())
+    }
+
+    /// Measure every member of a proxy group against the running engine, and
+    /// merge the results into the node latencies. Returns how many members
+    /// answered.
+    pub async fn test_group(&mut self, group: &str) -> Result<usize, AppError> {
+        let result = self.test_group_inner(group).await;
+        self.finish(result)
+    }
+
+    async fn test_group_inner(&mut self, group: &str) -> Result<usize, AppError> {
+        if !self.refresh_engine_status().await.is_running() {
+            return Err(AppError::Invalid(
+                "Connect first to test latency".to_string(),
+            ));
+        }
+        let (members, proxies) = {
+            let Some(config) = self.built.as_ref() else {
+                return Err(AppError::Invalid(
+                    "Connect first to test latency".to_string(),
+                ));
+            };
+            let members = config
+                .proxy_groups
+                .iter()
+                .find(|candidate| candidate.name == group)
+                .map(|candidate| candidate.members.clone())
+                .ok_or_else(|| AppError::Invalid(format!("there is no group named “{group}”")))?;
+            let proxies: Vec<(String, String)> = config
+                .proxies
+                .iter()
+                .map(|node| (node.id.clone(), node.name.clone()))
+                .collect();
+            (members, proxies)
+        };
+        let url = self
+            .state
+            .preferences
+            .effective_delay_test_url()
+            .to_string();
+        let timeout = self.state.preferences.effective_delay_test_timeout_ms();
+        let answered = self
+            .engine
+            .group_delay(group, &url, timeout)
+            .await
+            .map_err(|error| self.engine_failure(error))?;
+
+        let mut count = 0;
+        for member in &members {
+            // A group can name another group; only nodes carry a latency.
+            let Some((id, _)) = proxies.iter().find(|(_, name)| name == member) else {
+                continue;
+            };
+            let latency = answered.get(member).copied();
+            if latency.is_some() {
+                count += 1;
+            }
+            self.latencies.insert(id.clone(), latency);
+        }
+        self.log(format!(
+            "group latency test “{group}”: {count} of {} members answered",
+            members.len()
+        ));
+        Ok(count)
+    }
+
+    /// The installed engine, the newest one on the chosen channel, and whether
+    /// they differ.
+    fn engine_update_view(&self) -> crate::snapshot::EngineUpdateView {
+        let latest = self.latest_engine.clone();
+        let update_available = match (&latest, &self.installed_engine) {
+            (Some(latest), Some(installed)) => latest != installed,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        crate::snapshot::EngineUpdateView {
+            installed_version: self.installed_engine.clone(),
+            latest_version: latest,
+            update_available,
+            channel: self.state.preferences.effective_engine_channel(),
+        }
+    }
+
+    /// Ask the release feed for the newest engine on the chosen channel.
+    pub async fn check_engine_update(&mut self) -> Result<(), AppError> {
+        let result = self.check_engine_update_inner().await;
+        self.finish(result)
+    }
+
+    async fn check_engine_update_inner(&mut self) -> Result<(), AppError> {
+        let channel = self.state.preferences.effective_engine_channel();
+        let latest = starpod_engine::download::latest_release(channel)
+            .await
+            .map_err(|error| self.engine_failure(error))?;
+        self.log(format!(
+            "the newest engine on this channel is {}",
+            latest.version
+        ));
+        self.latest_engine = Some(latest.version);
+        Ok(())
+    }
+
+    /// Install the newest engine on the chosen channel.
+    ///
+    /// The archive is verified against its checksum before anything is
+    /// replaced. A running proxy is stopped for the install and started again
+    /// on the new engine; if the install fails, it is started again on the
+    /// old one.
+    pub async fn upgrade_engine(&mut self) -> Result<(), AppError> {
+        let result = self.upgrade_engine_inner().await;
+        self.finish(result)
+    }
+
+    async fn upgrade_engine_inner(&mut self) -> Result<(), AppError> {
+        let channel = self.state.preferences.effective_engine_channel();
+        let release = starpod_engine::download::latest_release(channel)
+            .await
+            .map_err(|error| self.engine_failure(error))?;
+        if self.installed_engine.as_deref() == Some(release.version.as_str()) {
+            self.latest_engine = Some(release.version.clone());
+            self.log(format!("the engine is already {}", release.version));
+            return Ok(());
+        }
+
+        let was_running = self.refresh_engine_status().await.is_running();
+        if was_running {
+            self.log("stopping the proxy to install the engine");
+            self.stop_engine().await?;
+        }
+        self.log(format!("installing the engine {}", release.version));
+        let installed = starpod_engine::download::install_asset_in(
+            self.paths().data_dir(),
+            &release.asset,
+            &release.version,
+        )
+        .await;
+        match installed {
+            Ok(path) => {
+                self.engine_installed = true;
+                self.installed_engine = Some(release.version.clone());
+                self.latest_engine = Some(release.version.clone());
+                self.log(format!(
+                    "installed the engine {} at {}",
+                    release.version,
+                    path.display()
+                ));
+            }
+            Err(error) => {
+                let error = self.engine_failure(error);
+                if was_running {
+                    // The old binary is still in place: the install writes only
+                    // after the checksum passes.
+                    let _ = self.connect_inner().await;
+                }
+                return Err(error);
+            }
+        }
+        if was_running {
+            self.connect_inner().await?;
+        }
+        Ok(())
+    }
+
+    /// Download the geodata databases and reload the engine so it reads them.
+    ///
+    /// The databases are written to the app's data directory. The refresh
+    /// time is saved with the preferences, through the same path as any other
+    /// change, so a running engine is reloaded.
+    pub async fn update_geo_data(&mut self) -> Result<(), AppError> {
+        let result = self.update_geo_data_inner().await;
+        self.finish(result)
+    }
+
+    async fn update_geo_data_inner(&mut self) -> Result<(), AppError> {
+        let sources = self.state.preferences.engine.geo.geox_url.clone();
+        let directory = self.paths().data_dir().to_path_buf();
+        let downloads = [
+            (
+                sources
+                    .mmdb
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_GEO_MMDB_URL.to_string()),
+                "country.mmdb",
+            ),
+            (
+                sources
+                    .geosite
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_GEOSITE_URL.to_string()),
+                "geosite.dat",
+            ),
+            (
+                sources
+                    .asn
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_GEO_ASN_URL.to_string()),
+                "GeoLite2-ASN.mmdb",
+            ),
+        ];
+        self.log("updating the geodata");
+        for (url, file) in downloads {
+            starpod_engine::download::download_file(&url, &directory.join(file))
+                .await
+                .map_err(|error| self.engine_failure(error))?;
+            self.log(format!("downloaded {file}"));
+        }
+        let mut state = self.state.clone();
+        state.preferences.geo_updated_at = Some(now_unix());
+        self.commit_user(state).await?;
+        self.log("the geodata is updated");
         Ok(())
     }
 
@@ -1280,6 +2099,7 @@ impl AppService {
             .await
             .map_err(|error| self.engine_failure(error))?;
         self.engine_installed = true;
+        self.installed_engine = Some(starpod_engine::download::ENGINE_VERSION.to_string());
         self.log(format!("installed the proxy engine at {}", path.display()));
         Ok(())
     }
@@ -1327,6 +2147,7 @@ impl AppService {
         }
         self.apply_if_running(&composed.config).await?;
         let result = self.persist_and_adopt(state, meta, caches, &composed);
+        self.sync_system_proxy().await;
         if stop_proxy {
             self.notice = Some((NoticeKind::Warning, STOPPED_FOR_NO_SERVERS.to_string()));
         }
@@ -1519,6 +2340,96 @@ impl AppService {
         self.engine_warnings = shadow_warnings(&own, &live, managed);
     }
 
+    // ----- groups -------------------------------------------------------------
+
+    /// The groups of a configuration, with what each one uses and how each
+    /// member measured.
+    /// The subscription label each subscription node and group name came
+    /// from. Only app-managed subscriptions with a cached payload appear: an
+    /// engine-managed one's nodes are not known to the app.
+    fn name_origins(&self) -> BTreeMap<String, String> {
+        let mut origins = BTreeMap::new();
+        for subscription in self
+            .meta
+            .subscriptions
+            .iter()
+            .filter(|subscription| subscription.mode == SubscriptionMode::AppManaged)
+        {
+            let Some(payload) = self.caches.payload(&subscription.id) else {
+                continue;
+            };
+            let names = payload
+                .nodes
+                .iter()
+                .map(|node| &node.name)
+                .chain(payload.groups.iter().map(|group| &group.name));
+            for name in names {
+                origins
+                    .entry(name.clone())
+                    .or_insert_with(|| subscription.label.clone());
+            }
+        }
+        origins
+    }
+
+    fn group_views(
+        &self,
+        config: &RuntimeConfig,
+        prefs: &UserPreferences,
+        origins: &BTreeMap<String, String>,
+    ) -> Vec<GroupView> {
+        let label_of = |name: &str| display_label(name, origins.get(name).map(String::as_str));
+        config
+            .proxy_groups
+            .iter()
+            .map(|group| GroupView {
+                name: group.name.clone(),
+                label: label_of(&group.name),
+                kind: group.group_type.clone(),
+                selected: self.selected_member(group, prefs),
+                members: group
+                    .members
+                    .iter()
+                    .map(|member| MemberView {
+                        name: member.clone(),
+                        label: label_of(member),
+                        protocol: member_protocol(config, member),
+                        latency: self.member_latency(config, member),
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// The member a group uses: the engine's live choice while it runs, else
+    /// the saved choice for the group, else the first member.
+    fn selected_member(&self, group: &ProxyGroup, prefs: &UserPreferences) -> Option<String> {
+        if self.engine_status.phase.is_running()
+            && let Some(now) = self.live_selected.get(&group.name)
+        {
+            return Some(now.clone());
+        }
+        prefs
+            .group_selections
+            .get(&group.name)
+            .filter(|saved| group.members.contains(saved))
+            .or_else(|| group.members.first())
+            .cloned()
+    }
+
+    /// The last latency test's result for a member, looked up by the node's
+    /// name. A group or a built-in has no test of its own.
+    fn member_latency(&self, config: &RuntimeConfig, member: &str) -> Latency {
+        let Some(node) = config.proxies.iter().find(|node| node.name == member) else {
+            return Latency::Untested;
+        };
+        match self.latencies.get(&node.id) {
+            None => Latency::Untested,
+            Some(None) => Latency::TimedOut,
+            Some(Some(milliseconds)) => Latency::Measured(*milliseconds),
+        }
+    }
+
     // ----- composition --------------------------------------------------------
 
     fn compose_current(&mut self) -> Result<Composed, AppError> {
@@ -1551,6 +2462,7 @@ impl AppService {
 
     fn adopt(&mut self, composed: &Composed) {
         self.built = Some(composed.config.clone());
+        self.built_primary = composed.primary_group.clone();
         self.warnings = composed.warnings.clone();
     }
 

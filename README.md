@@ -2,7 +2,7 @@
 
 Starpod is a desktop proxy client for Windows, Linux and macOS. It fetches proxy subscriptions, merges them with your own settings and rules, validates the result with the engine, and runs the engine as a supervised child process. The engine is [meow-rs](https://github.com/meow-rs/meow-rs) v0.29.0, downloaded from its release page. The interface is [Slint](https://slint.dev). The visual identity follows foxgirls.org; the design tokens are in `docs/research/foxgirls-design.md`.
 
-**Status: pre-release.** The domain, subscription, store, engine and service crates are implemented and tested. The Slint window and the `starpod` binary are still being completed. This repository publishes no release binaries and has no signing or packaging yet.
+**Status: pre-release.** The domain, subscription, store, engine and service crates are implemented and tested. The Slint window and the `starpod` binary are still being completed. CI builds release archives for Windows x86_64, Linux x86_64 and macOS ARM64 (see `docs/DEVELOPMENT.md`, section 4.1). They are unsigned, have no installer, and have not yet been run on real machines.
 
 ## Features
 
@@ -19,11 +19,11 @@ Implemented in the crates. Limits are listed in the developer guide.
 - Engine installation from the release, checked against its SHA-256 file. Start, stop, reload, live node selection and per-node latency tests over the engine's REST controller.
 - Corrupt state files are moved aside, never deleted, and the app starts from defaults.
 
-Not complete or not verified: TUN elevation, adoption of an engine left running after a crash, autostart, release packaging. The full list is in `docs/DEVELOPMENT.md`, section "Known limitations".
+Not complete or not verified: TUN elevation, adoption of an engine left running after a crash, autostart, installers and code signing. The full list is in `docs/DEVELOPMENT.md`, section "Known limitations".
 
 ## Platform scope
 
-- Linux x86_64, Windows x86_64 and macOS ARM64 (`aarch64-apple-darwin`). CI builds and tests all three on every pull request.
+- Linux x86_64, Windows x86_64 and macOS ARM64 (`aarch64-apple-darwin`). CI tests all three on every pull request, and `build.yml` builds a release binary for each.
 - The engine download table also names Linux arm64, Windows arm64 and macOS x86_64. Those targets are not in CI and are not supported.
 
 ## Quick start
@@ -74,6 +74,8 @@ This writes an unsigned `dist/starpod.exe` (target `x86_64-pc-windows-gnu`). The
 - [Architecture dossier](docs/research/ARCHITECTURE.md) and [engine contract](docs/research/meow-integration-contract.md): design decisions and the engine facts they rest on.
 - [GOAL.md](GOAL.md) and [HANDOVER.md](HANDOVER.md): the project brief and the status log.
 
-## Licence
+## License
 
 The workspace manifest declares MIT. There is no `LICENSE` file in the repository yet.
+
+Emoji pictures are [Twemoji](https://github.com/jdecked/twemoji) SVGs (graphics CC-BY 4.0, Copyright 2020 Twitter, Inc and other contributors), bundled as `crates/starpod-app/assets/twemoji.bin`. See `crates/starpod-app/assets/TWEMOJI-LICENSE.txt`.

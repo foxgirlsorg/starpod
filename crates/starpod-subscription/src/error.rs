@@ -48,7 +48,7 @@ pub enum ProviderError {
     /// a generic failure.
     #[error(
         "the subscription was refused (HTTP {status}): the token has expired or the \
-             server does not authorise this request"
+             server does not authorize this request"
     )]
     Unauthorized {
         /// The HTTP status code — `401` or `403`.
@@ -106,6 +106,18 @@ pub enum SubscriptionError {
     /// The subscription parsed, but contained nothing at all.
     #[error("the subscription is empty")]
     EmptyAfterValidation,
+
+    /// The provider reports that this device is not allowed to fetch the
+    /// subscription any more (`x-hwid-limit` or `x-hwid-max-devices-reached`
+    /// is `true`). Only the provider can free a slot, so the message points
+    /// the user at support.
+    #[error("This subscription has reached its device limit. Contact support to free a slot.")]
+    DeviceLimitReached,
+
+    /// The server answered with an HTML or XML page, not a subscription. This
+    /// is what a provider's landing page or a login wall looks like.
+    #[error("The server returned a web page, not a subscription")]
+    ServedWebPage,
 }
 
 impl SubscriptionError {

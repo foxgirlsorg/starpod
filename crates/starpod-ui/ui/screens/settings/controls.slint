@@ -1,0 +1,416 @@
+// The controls the Settings sections are built from.
+//
+// Each control wraps one primitive and follows the same rules. `value` is the
+// draft's value, `committed` reports a user edit, and the page writes the draft
+// from `committed` only. The primitives write their own value while the user
+// edits (an Input writes its text, a Select its index), so the wrapper keeps a
+// private `shown` copy for them. `shown` follows `value`, and it is read again
+// when `revision` changes: the page bumps `revision` after it rereads Bridge
+// (Discard, or a save Rust accepted). That is how a control shows the draft
+// again after the user has typed into it.
+
+import { Design } from "../../design.slint";
+import { Input, Segmented, Select, SelectItem, Switch } from "../../primitives.slint";
+import { TextEdit } from "std-widgets.slint";
+
+// A row of a card: label and description on the left, the control in a 220px
+// column on the right, centred vertically. The row is at least 60px tall. A
+// wrapped description or warning makes it taller.
+export component SettingRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> description;
+    // An amber line under the description, for a state the user should notice.
+    in property <string> warning;
+
+    horizontal-stretch: 1;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    min-height: 60px;
+    spacing: 16px;
+
+    VerticalLayout {
+        horizontal-stretch: 1;
+        vertical-stretch: 0;
+        alignment: center;
+        spacing: 2px;
+
+        Text {
+            text: root.label;
+            color: Design.foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-base;
+            font-weight: 500;
+            wrap: word-wrap;
+        }
+
+        if (root.description != "") : Text {
+            text: root.description;
+            color: Design.muted-foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-sm;
+            wrap: word-wrap;
+        }
+
+        if (root.warning != "") : Text {
+            text: root.warning;
+            color: Design.warning;
+            font-family: Design.font-family;
+            font-size: Design.font-xs;
+            wrap: word-wrap;
+        }
+    }
+
+    control := VerticalLayout {
+        width: 220px;
+        vertical-stretch: 0;
+        alignment: center;
+
+        @children
+    }
+}
+
+// A row whose control takes the full width under the label. For the lists
+// (one entry per line), which need more room than 220px.
+export component ListRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> description;
+
+    horizontal-stretch: 1;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    spacing: 8px;
+
+    Text {
+        text: root.label;
+        color: Design.foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-base;
+        font-weight: 500;
+        wrap: word-wrap;
+    }
+
+    if (root.description != "") : Text {
+        text: root.description;
+        color: Design.muted-foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        wrap: word-wrap;
+    }
+
+    @children
+}
+
+// A switch.
+export component DraftSwitch inherits HorizontalLayout {
+    in property <bool> value;
+    in property <int> revision;
+    in property <bool> enabled: true;
+    callback committed(bool);
+
+    private property <bool> shown: root.value;
+
+    changed value => { root.shown = root.value; }
+    changed revision => { root.shown = root.value; }
+
+    alignment: end;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+
+    Switch {
+        checked: root.shown;
+        enabled: root.enabled;
+        toggled(v) => {
+            root.shown = v;
+            root.committed(v);
+        }
+    }
+}
+
+// A drop-down over an index. -1 shows the placeholder.
+export component DraftSelect inherits VerticalLayout {
+    in property <[SelectItem]> items;
+    in property <int> value: -1;
+    in property <int> revision;
+    in property <string> placeholder;
+    in property <bool> enabled: true;
+    callback committed(int);
+
+    private property <int> shown: root.value;
+
+    changed value => { root.shown = root.value; }
+    changed revision => { root.shown = root.value; }
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+
+    Select {
+        horizontal-stretch: 1;
+        vertical-stretch: 0;
+        items: root.items;
+        placeholder: root.placeholder;
+        enabled: root.enabled;
+        current-index <=> root.shown;
+        selected(i) => {
+            root.shown = i;
+            root.committed(i);
+        }
+    }
+}
+
+// A drop-down over strings. `values[i]` is the value of item i, and `value` is
+// matched against `values` (up to eight entries). An unknown value shows the
+// placeholder.
+export component DraftChoice inherits VerticalLayout {
+    in property <[SelectItem]> items;
+    in property <[string]> values;
+    in property <string> value;
+    in property <int> revision;
+    in property <string> placeholder: @tr("Choose");
+    in property <bool> enabled: true;
+    callback committed(string);
+
+    function index-of(v: string) -> int {
+        if (root.values.length > 0 && root.values[0] == v) { return 0; }
+        if (root.values.length > 1 && root.values[1] == v) { return 1; }
+        if (root.values.length > 2 && root.values[2] == v) { return 2; }
+        if (root.values.length > 3 && root.values[3] == v) { return 3; }
+        if (root.values.length > 4 && root.values[4] == v) { return 4; }
+        if (root.values.length > 5 && root.values[5] == v) { return 5; }
+        if (root.values.length > 6 && root.values[6] == v) { return 6; }
+        if (root.values.length > 7 && root.values[7] == v) { return 7; }
+        return -1;
+    }
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+
+    DraftSelect {
+        items: root.items;
+        value: root.index-of(root.value);
+        revision: root.revision;
+        placeholder: root.placeholder;
+        enabled: root.enabled;
+        committed(i) => {
+            root.committed(root.values[i]);
+        }
+    }
+}
+
+// A drop-down for a tri-state: -1 is not set ("Default"), 1 is on, 0 is off.
+export component DraftTri inherits VerticalLayout {
+    in property <int> value: -1;
+    in property <int> revision;
+    in property <bool> enabled: true;
+    callback committed(int);
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+
+    DraftSelect {
+        items: [
+            { text: @tr("Default"), detail: "", detail-color: Design.muted-foreground },
+            { text: @tr("On"), detail: "", detail-color: Design.muted-foreground },
+            { text: @tr("Off"), detail: "", detail-color: Design.muted-foreground },
+        ];
+        value: root.value == 1 ? 1 : (root.value == 0 ? 2 : 0);
+        revision: root.revision;
+        enabled: root.enabled;
+        committed(i) => {
+            root.committed(i == 1 ? 1 : (i == 2 ? 0 : -1));
+        }
+    }
+}
+
+// A segmented control over an index.
+export component DraftSegmented inherits HorizontalLayout {
+    in property <[string]> options;
+    in property <int> value;
+    in property <int> revision;
+    callback committed(int);
+
+    private property <int> shown: root.value;
+
+    changed value => { root.shown = root.value; }
+    changed revision => { root.shown = root.value; }
+
+    alignment: end;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+
+    Segmented {
+        options: root.options;
+        current-index <=> root.shown;
+        selected(i) => {
+            root.committed(i);
+        }
+    }
+}
+
+// A single-line text field. An empty value means "not set" to the engine; the
+// placeholder shows the default.
+export component DraftText inherits VerticalLayout {
+    in property <string> value;
+    in property <int> revision;
+    in property <string> placeholder;
+    in property <string> hint;
+    in property <string> error;
+    in property <bool> enabled: true;
+    callback committed(string);
+
+    private property <string> shown: root.value;
+
+    changed value => { root.shown = root.value; }
+    changed revision => { root.shown = root.value; }
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+
+    Input {
+        horizontal-stretch: 1;
+        vertical-stretch: 0;
+        placeholder: root.placeholder;
+        hint: root.hint;
+        error: root.error;
+        enabled: root.enabled;
+        text <=> root.shown;
+        edited(v) => {
+            root.committed(v);
+        }
+    }
+}
+
+// A whole number. -1 is "not set" and shows as an empty field. The field only
+// commits a number inside [low, high]; anything else is flagged and the draft
+// keeps its last good value. `ok` is false while the text is not acceptable,
+// so the page can block Save. `problem` is a message for a check the range
+// does not cover, such as a port that another listener uses.
+export component DraftNumber inherits VerticalLayout {
+    in property <int> value: -1;
+    in property <int> revision;
+    in property <int> low: 1;
+    in property <int> high: 65535;
+    // an empty field is "not set" (-1); otherwise it is an error
+    in property <bool> optional: true;
+    in property <string> placeholder;
+    in property <string> hint;
+    in property <string> problem;
+    in property <bool> enabled: true;
+    in-out property <bool> ok: true;
+    callback committed(int);
+
+    private property <string> shown: root.to-text(root.value);
+    private property <string> range-error: @tr("Enter a whole number from {} to {}", root.low, root.high)
+        + (root.optional ? @tr(", or leave it empty.") : @tr("."));
+
+    function to-text(v: int) -> string {
+        if (v < 0) { return ""; }
+        return "\{v}";
+    }
+
+    function acceptable(s: string) -> bool {
+        if (s == "") { return root.optional; }
+        return s.is-float() && s.to-float() == round(s.to-float())
+            && s.to-float() >= root.low && s.to-float() <= root.high;
+    }
+
+    function number(s: string) -> int {
+        if (s == "") { return -1; }
+        return round(s.to-float());
+    }
+
+    init => { root.ok = root.acceptable(root.shown); }
+    changed shown => { root.ok = root.acceptable(root.shown); }
+    changed value => { root.shown = root.to-text(root.value); }
+    changed revision => { root.shown = root.to-text(root.value); }
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+
+    Input {
+        horizontal-stretch: 1;
+        vertical-stretch: 0;
+        numeric: true;
+        placeholder: root.placeholder;
+        hint: root.hint;
+        error: !root.ok ? root.range-error : root.problem;
+        enabled: root.enabled;
+        text <=> root.shown;
+        edited(v) => {
+            if (root.acceptable(v)) {
+                root.committed(root.number(v));
+            }
+        }
+    }
+}
+
+// A multi-line list, one entry per line, in the monospace face.
+export component DraftList inherits VerticalLayout {
+    in property <string> value;
+    in property <int> revision;
+    in property <bool> enabled: true;
+    callback committed(string);
+
+    private property <string> shown: root.value;
+
+    changed value => { root.shown = root.value; }
+    changed revision => { root.shown = root.value; }
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+
+    Rectangle {
+        horizontal-stretch: 1;
+        height: 112px;
+        background: Design.muted;
+        border-radius: Design.radius-md;
+        clip: true;
+        opacity: root.enabled ? 1 : 0.5;
+
+        TextEdit {
+            x: 12px;
+            y: 8px;
+            width: parent.width - 24px;
+            height: parent.height - 16px;
+            font-family: Design.font-mono;
+            font-size: Design.font-sm;
+            wrap: no-wrap;
+            enabled: root.enabled;
+            text <=> root.shown;
+            edited(v) => {
+                root.committed(v);
+            }
+        }
+    }
+}
+
+// One entry of the section list on the left.
+export component SubNavItem inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 32px;
+    border-radius: Design.radius-md;
+    background: root.selected ? Design.accent : (ta.has-hover ? Design.card-hover : transparent);
+
+    Text {
+        x: 12px;
+        width: parent.width - 24px;
+        height: parent.height;
+        text: root.text;
+        color: root.selected ? Design.foreground : Design.muted-foreground;
+        font-family: Design.font-family;
+        font-size: Design.font-sm;
+        font-weight: 500;
+        vertical-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

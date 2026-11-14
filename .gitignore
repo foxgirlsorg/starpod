@@ -3,7 +3,7 @@
 .scratch/
 
 # Rust build artifacts
-/target/
+target/
 # Windows release output from `docker compose run --rm windows`
 /dist/
 **/*.rs.bk
@@ -16,3 +16,6 @@ Thumbs.db
 
 # UI screenshots written by tools/ui-shot.sh
 /shots/
+
+# Logs from local runs
+*.log

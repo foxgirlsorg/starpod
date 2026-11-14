@@ -79,10 +79,11 @@ impl EngineDocument {
             Value::String(config.log_level.as_str().to_string()),
         );
 
-        let tun = tun_section(&config.tun);
+        let tun = tun_section(&config.tun, &config.engine.tun);
         if let Some(tun) = tun {
             body.insert("tun".to_string(), tun);
         }
+        engine_sections(&mut body, &config.engine);
 
         if !config.proxies.is_empty() {
             body.insert(
@@ -204,12 +205,41 @@ fn yaml_ser_options() -> serde_saphyr::SerializerOptions {
 }
 
 /// Build the engine's `tun:` section, or `None` when TUN is off entirely.
-fn tun_section(tun: &starpod_core::domain::TunSettings) -> Option<Value> {
+fn tun_section(
+    tun: &starpod_core::domain::TunSettings,
+    extras: &starpod_core::domain::TunOptions,
+) -> Option<Value> {
     if tun.is_disabled() {
         return None;
     }
     let mut section = Map::new();
     section.insert("enable".to_string(), Value::Bool(tun.enabled));
+    // The extras are written only with the section: a disabled TUN is left out
+    // entirely, extras included.
+    if let Some(stack) = extras.stack {
+        section.insert(
+            "stack".to_string(),
+            Value::String(stack.as_str().to_string()),
+        );
+    }
+    for (key, flag) in [
+        ("strict-route", extras.strict_route),
+        ("auto-redirect", extras.auto_redirect),
+        ("auto-detect-interface", extras.auto_detect_interface),
+        ("endpoint-independent-nat", extras.endpoint_independent_nat),
+    ] {
+        if let Some(flag) = flag {
+            section.insert(key.to_string(), Value::Bool(flag));
+        }
+    }
+    for (key, cidrs) in [
+        ("route-address", &extras.route_address),
+        ("route-exclude-address", &extras.route_exclude_address),
+    ] {
+        if !cidrs.is_empty() {
+            section.insert(key.to_string(), string_array(cidrs));
+        }
+    }
     if let Some(device) = &tun.device {
         section.insert("device".to_string(), Value::String(device.clone()));
     }
@@ -231,6 +261,173 @@ fn tun_section(tun: &starpod_core::domain::TunSettings) -> Option<Value> {
         );
     }
     Some(Value::Object(section))
+}
+
+/// Write the engine settings beyond TUN. Each unset setting writes nothing, so
+/// a default configuration gets none of these keys.
+fn engine_sections(body: &mut Map<String, Value>, options: &starpod_core::domain::EngineOptions) {
+    if let Some(ipv6) = options.ipv6 {
+        body.insert("ipv6".to_string(), Value::Bool(ipv6));
+    }
+    if let Some(unified) = options.unified_delay {
+        body.insert("unified-delay".to_string(), Value::Bool(unified));
+    }
+    if let Some(concurrent) = options.tcp_concurrent {
+        body.insert("tcp-concurrent".to_string(), Value::Bool(concurrent));
+    }
+    if let Some(mode) = options.find_process_mode {
+        body.insert(
+            "find-process-mode".to_string(),
+            Value::String(mode.as_str().to_string()),
+        );
+    }
+    if let Some(seconds) = options.keep_alive_interval {
+        body.insert("keep-alive-interval".to_string(), Value::from(seconds));
+    }
+    if let Some(dns) = &options.dns {
+        let section = dns_section(dns);
+        if !section.is_empty() {
+            body.insert("dns".to_string(), Value::Object(section));
+        }
+    }
+    if !options.hosts.is_empty() {
+        let hosts: Map<String, Value> = options
+            .hosts
+            .iter()
+            .map(|(domain, address)| (domain.clone(), Value::String(address.clone())))
+            .collect();
+        body.insert("hosts".to_string(), Value::Object(hosts));
+    }
+    if let Some(sniffer) = &options.sniffer {
+        let section = sniffer_section(sniffer);
+        if !section.is_empty() {
+            body.insert("sniffer".to_string(), Value::Object(section));
+        }
+    }
+    let geo = &options.geo;
+    if let Some(mode) = geo.mode {
+        // The engine reads `geodata-mode` as a flag: true selects the `.dat`
+        // format, false the `.mmdb` one.
+        body.insert(
+            "geodata-mode".to_string(),
+            Value::Bool(mode == starpod_core::domain::GeodataMode::Dat),
+        );
+    }
+    let mut urls = Map::new();
+    for (key, url) in [
+        ("geoip", &geo.geox_url.geoip),
+        ("geosite", &geo.geox_url.geosite),
+        ("mmdb", &geo.geox_url.mmdb),
+        ("asn", &geo.geox_url.asn),
+    ] {
+        if let Some(url) = url {
+            urls.insert(key.to_string(), Value::String(url.clone()));
+        }
+    }
+    if !urls.is_empty() {
+        body.insert("geox-url".to_string(), Value::Object(urls));
+    }
+    let mut auto = Map::new();
+    if let Some(enabled) = geo.auto_update {
+        auto.insert("auto-update".to_string(), Value::Bool(enabled));
+    }
+    if let Some(hours) = geo.update_interval_hours {
+        auto.insert("auto-update-interval".to_string(), Value::from(hours));
+    }
+    if !auto.is_empty() {
+        body.insert("geodata".to_string(), Value::Object(auto));
+    }
+}
+
+/// Build the `dns:` map. A key the app does not model is written back as the
+/// subscription gave it, but never over a modelled key.
+fn dns_section(dns: &starpod_core::domain::DnsSettings) -> Map<String, Value> {
+    let mut section = Map::new();
+    if let Some(enable) = dns.enable {
+        section.insert("enable".to_string(), Value::Bool(enable));
+    }
+    if let Some(mode) = dns.enhanced_mode {
+        section.insert(
+            "enhanced-mode".to_string(),
+            Value::String(mode.as_str().to_string()),
+        );
+    }
+    if let Some(range) = &dns.fake_ip_range {
+        section.insert("fake-ip-range".to_string(), Value::String(range.clone()));
+    }
+    for (key, entries) in [
+        ("fake-ip-filter", &dns.fake_ip_filter),
+        ("nameserver", &dns.nameserver),
+        ("fallback", &dns.fallback),
+        ("default-nameserver", &dns.default_nameserver),
+        ("proxy-server-nameserver", &dns.proxy_server_nameserver),
+    ] {
+        if !entries.is_empty() {
+            section.insert(key.to_string(), string_array(entries));
+        }
+    }
+    if !dns.nameserver_policy.is_empty() {
+        let policy: Map<String, Value> = dns
+            .nameserver_policy
+            .iter()
+            .map(|(domain, servers)| (domain.clone(), string_array(servers)))
+            .collect();
+        section.insert("nameserver-policy".to_string(), Value::Object(policy));
+    }
+    if let Some(use_hosts) = dns.use_hosts {
+        section.insert("use-hosts".to_string(), Value::Bool(use_hosts));
+    }
+    for (key, value) in &dns.extra {
+        section.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+    section
+}
+
+/// Build the `sniffer:` map.
+fn sniffer_section(sniffer: &starpod_core::domain::SnifferSettings) -> Map<String, Value> {
+    let mut section = Map::new();
+    for (key, flag) in [
+        ("enable", sniffer.enable),
+        ("force-dns-mapping", sniffer.force_dns_mapping),
+        ("parse-pure-ip", sniffer.parse_pure_ip),
+        ("override-destination", sniffer.override_destination),
+    ] {
+        if let Some(flag) = flag {
+            section.insert(key.to_string(), Value::Bool(flag));
+        }
+    }
+    if !sniffer.sniff.is_empty() {
+        // The engine nests each protocol's ports under `ports:`.
+        let sniff: Map<String, Value> = sniffer
+            .sniff
+            .iter()
+            .map(|(protocol, ports)| {
+                let mut entry = Map::new();
+                entry.insert("ports".to_string(), string_array(ports));
+                (protocol.clone(), Value::Object(entry))
+            })
+            .collect();
+        section.insert("sniff".to_string(), Value::Object(sniff));
+    }
+    for (key, domains) in [
+        ("force-domain", &sniffer.force_domain),
+        ("skip-domain", &sniffer.skip_domain),
+    ] {
+        if !domains.is_empty() {
+            section.insert(key.to_string(), string_array(domains));
+        }
+    }
+    section
+}
+
+/// A JSON array of strings.
+fn string_array(items: &[String]) -> Value {
+    Value::Array(
+        items
+            .iter()
+            .map(|item| Value::String(item.clone()))
+            .collect(),
+    )
 }
 
 /// Build one `proxies:` entry.
@@ -315,6 +512,23 @@ fn rule_provider_entry(provider: &starpod_core::domain::RuleProvider) -> Value {
     if let Some(interval) = provider.interval {
         entry.insert("interval".to_string(), Value::from(interval));
     }
+    if let Some(format) = &provider.format {
+        entry.insert("format".to_string(), Value::String(format.clone()));
+    }
+    if let Some(payload) = &provider.payload {
+        entry.insert(
+            "payload".to_string(),
+            Value::Array(
+                payload
+                    .iter()
+                    .map(|rule| Value::String(rule.clone()))
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(proxy) = &provider.proxy {
+        entry.insert("proxy".to_string(), Value::String(proxy.clone()));
+    }
     Value::Object(entry)
 }
 
@@ -353,6 +567,7 @@ mod tests {
             rules: vec!["MATCH,PROXY".to_string()],
             rule_providers: Vec::new(),
             subscriptions: Vec::new(),
+            engine: Default::default(),
         }
     }
 
@@ -401,6 +616,32 @@ mod tests {
         let yaml = EngineDocument::build(&config).to_yaml().unwrap();
         assert!(yaml.contains("type: select"), "{yaml}");
         assert!(yaml.contains("- HK 01"), "{yaml}");
+    }
+
+    #[test]
+    fn the_groups_are_emitted_in_the_configured_order() {
+        let group = |name: &str| ProxyGroup {
+            id: format!("id-{name}"),
+            name: name.to_string(),
+            group_type: "select".to_string(),
+            members: Vec::new(),
+            strategy: None,
+            url: None,
+            interval: None,
+            raw: Map::new(),
+        };
+        let config = RuntimeConfig {
+            proxy_groups: vec![group("Zeta"), group("Alpha"), group("Mid")],
+            ..base_config()
+        };
+        let document = EngineDocument::build(&config).to_value();
+        let names: Vec<&str> = document["proxy-groups"]
+            .as_array()
+            .expect("the groups are an array")
+            .iter()
+            .map(|group| group["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["Zeta", "Alpha", "Mid"]);
     }
 
     #[test]
@@ -552,6 +793,14 @@ mod tests {
         "keep-alive-idle",
         "keep-alive-interval",
         "disable-keep-alive",
+        // Written by the settings added for engine parity. These follow the
+        // mihomo-compatible schema the engine advertises; the engine's own
+        // `-t` check is what confirms each one (docs/research/meow-integration-contract.md).
+        "ipv6",
+        "unified-delay",
+        "tcp-concurrent",
+        "find-process-mode",
+        "geodata-mode",
     ];
 
     /// A configuration with one of everything the emitter can produce.
@@ -607,6 +856,9 @@ mod tests {
                 path: None,
                 behavior: starpod_core::domain::RuleProviderBehavior::Domain,
                 interval: Some(86400),
+                format: None,
+                payload: None,
+                proxy: None,
             }],
             subscriptions: vec![starpod_core::domain::EngineManagedSubscription {
                 name: "airport".to_string(),
@@ -614,6 +866,7 @@ mod tests {
                 interval_secs: 3600,
                 proxy: None,
             }],
+            engine: Default::default(),
         }
     }
 
@@ -723,6 +976,9 @@ mod tests {
                 path: None,
                 behavior: starpod_core::domain::RuleProviderBehavior::Domain,
                 interval: Some(86400),
+                format: None,
+                payload: None,
+                proxy: None,
             }],
             ..base_config()
         };
@@ -731,6 +987,53 @@ mod tests {
         assert!(yaml.contains("reject-list:"), "{yaml}");
         assert!(yaml.contains("behavior: domain"), "{yaml}");
         assert!(yaml.contains("interval: 86400"), "{yaml}");
+        assert!(!yaml.contains("format:"), "{yaml}");
+        assert!(!yaml.contains("proxy:"), "{yaml}");
+    }
+
+    #[test]
+    fn the_new_provider_fields_are_emitted_with_the_engines_keys() {
+        let config = RuntimeConfig {
+            rule_providers: vec![
+                starpod_core::domain::RuleProvider {
+                    name: "oisd_big".to_string(),
+                    provider_type: "http".to_string(),
+                    url: Some("https://example.invalid/oisd.txt".to_string()),
+                    path: Some("rule-providers/oisd_big.txt".to_string()),
+                    behavior: starpod_core::domain::RuleProviderBehavior::Domain,
+                    interval: None,
+                    format: Some("text".to_string()),
+                    payload: None,
+                    proxy: Some("Airport / A".to_string()),
+                },
+                starpod_core::domain::RuleProvider {
+                    name: "inline-one".to_string(),
+                    provider_type: "inline".to_string(),
+                    url: None,
+                    path: None,
+                    behavior: starpod_core::domain::RuleProviderBehavior::Classical,
+                    interval: None,
+                    format: Some("yaml".to_string()),
+                    payload: Some(vec!["DOMAIN-SUFFIX,example.test".to_string()]),
+                    proxy: None,
+                },
+            ],
+            rules: vec![
+                "RULE-SET,oisd_big,REJECT".to_string(),
+                "RULE-SET,inline-one,PROXY,no-resolve".to_string(),
+                "MATCH,PROXY".to_string(),
+            ],
+            ..base_config()
+        };
+        let yaml = EngineDocument::build(&config).to_yaml().unwrap();
+        assert!(yaml.contains("format: text"), "{yaml}");
+        assert!(yaml.contains("proxy: Airport / A"), "{yaml}");
+        assert!(yaml.contains("payload:"), "{yaml}");
+        assert!(yaml.contains("DOMAIN-SUFFIX,example.test"), "{yaml}");
+        assert!(
+            yaml.contains("RULE-SET,inline-one,PROXY,no-resolve"),
+            "{yaml}"
+        );
     }
 
     #[test]
@@ -748,5 +1051,225 @@ mod tests {
         assert!(yaml.contains("subscriptions:"), "{yaml}");
         assert!(yaml.contains("name: airport"), "{yaml}");
         assert!(yaml.contains("interval: 3600"), "{yaml}");
+    }
+    // ------------------------------------------------------------------
+    // The engine settings beyond the core ones
+    // ------------------------------------------------------------------
+
+    /// Every setting the app can write, set to a non-default value.
+    fn every_engine_option() -> starpod_core::domain::EngineOptions {
+        use starpod_core::domain::{
+            DnsEnhancedMode, DnsSettings, EngineOptions, FindProcessMode, GeoSettings, GeodataMode,
+            GeoxUrls, SnifferSettings, TunOptions, TunStack,
+        };
+        let mut hosts = std::collections::BTreeMap::new();
+        hosts.insert("router.lan".to_string(), "192.168.1.1".to_string());
+        let mut policy = std::collections::BTreeMap::new();
+        policy.insert("+.corp.test".to_string(), vec!["10.0.0.53".to_string()]);
+        let mut sniff = std::collections::BTreeMap::new();
+        sniff.insert("TLS".to_string(), vec!["443".to_string()]);
+        EngineOptions {
+            tun: TunOptions {
+                stack: Some(TunStack::Gvisor),
+                strict_route: Some(true),
+                auto_redirect: Some(true),
+                auto_detect_interface: Some(true),
+                endpoint_independent_nat: Some(true),
+                route_address: vec!["0.0.0.0/0".to_string()],
+                route_exclude_address: vec!["10.0.0.0/8".to_string()],
+            },
+            ipv6: Some(true),
+            unified_delay: Some(true),
+            tcp_concurrent: Some(true),
+            find_process_mode: Some(FindProcessMode::Always),
+            keep_alive_interval: Some(60),
+            override_subscription_dns: true,
+            dns: Some(DnsSettings {
+                enable: Some(true),
+                enhanced_mode: Some(DnsEnhancedMode::FakeIp),
+                fake_ip_range: Some("198.18.0.1/16".to_string()),
+                fake_ip_filter: vec!["*.lan".to_string()],
+                nameserver: vec!["1.1.1.1".to_string()],
+                nameserver_policy: policy,
+                use_hosts: Some(true),
+                ..DnsSettings::default()
+            }),
+            hosts,
+            sniffer: Some(SnifferSettings {
+                enable: Some(true),
+                sniff,
+                ..SnifferSettings::default()
+            }),
+            geo: GeoSettings {
+                mode: Some(GeodataMode::Dat),
+                geox_url: GeoxUrls {
+                    geosite: Some("https://geo.example.test/geosite.dat".to_string()),
+                    ..GeoxUrls::default()
+                },
+                auto_update: Some(true),
+                update_interval_hours: Some(24),
+            },
+        }
+    }
+
+    #[test]
+    fn a_default_configuration_writes_none_of_the_new_keys() {
+        let body = EngineDocument::build(&base_config()).body;
+        for key in [
+            "ipv6",
+            "unified-delay",
+            "tcp-concurrent",
+            "find-process-mode",
+            "keep-alive-interval",
+            "dns",
+            "hosts",
+            "sniffer",
+            "geodata-mode",
+            "geox-url",
+            "geodata",
+        ] {
+            assert!(
+                !body.contains_key(key),
+                "{key} must not be written by default"
+            );
+        }
+    }
+
+    #[test]
+    fn the_scalar_engine_settings_are_written_under_the_engines_keys() {
+        let config = RuntimeConfig {
+            engine: starpod_core::domain::EngineOptions {
+                ipv6: Some(false),
+                unified_delay: Some(true),
+                tcp_concurrent: Some(true),
+                find_process_mode: Some(starpod_core::domain::FindProcessMode::Off),
+                keep_alive_interval: Some(45),
+                ..Default::default()
+            },
+            ..base_config()
+        };
+        let body = EngineDocument::build(&config).body;
+        assert_eq!(body["ipv6"], Value::Bool(false));
+        assert_eq!(body["unified-delay"], Value::Bool(true));
+        assert_eq!(body["tcp-concurrent"], Value::Bool(true));
+        assert_eq!(body["find-process-mode"], Value::String("off".to_string()));
+        assert_eq!(body["keep-alive-interval"], Value::from(45));
+    }
+
+    #[test]
+    fn tun_extras_are_written_inside_an_enabled_tun_section() {
+        let config = RuntimeConfig {
+            tun: TunSettings {
+                enabled: true,
+                ..TunSettings::default()
+            },
+            engine: every_engine_option(),
+            ..base_config()
+        };
+        let body = EngineDocument::build(&config).body;
+        let tun = &body["tun"];
+        assert_eq!(tun["enable"], Value::Bool(true));
+        assert_eq!(tun["stack"], "gvisor");
+        assert_eq!(tun["strict-route"], true);
+        assert_eq!(tun["auto-redirect"], true);
+        assert_eq!(tun["auto-detect-interface"], true);
+        assert_eq!(tun["endpoint-independent-nat"], true);
+        assert_eq!(tun["route-address"], serde_json::json!(["0.0.0.0/0"]));
+        assert_eq!(
+            tun["route-exclude-address"],
+            serde_json::json!(["10.0.0.0/8"])
+        );
+    }
+
+    #[test]
+    fn tun_extras_are_left_out_while_tun_is_disabled() {
+        let config = RuntimeConfig {
+            engine: starpod_core::domain::EngineOptions {
+                tun: starpod_core::domain::TunOptions {
+                    stack: Some(starpod_core::domain::TunStack::System),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..base_config()
+        };
+        assert!(!EngineDocument::build(&config).body.contains_key("tun"));
+    }
+
+    #[test]
+    fn the_dns_block_is_written_with_its_keys_and_keeps_unmodelled_ones() {
+        let mut config = RuntimeConfig {
+            engine: every_engine_option(),
+            ..base_config()
+        };
+        if let Some(dns) = config.engine.dns.as_mut() {
+            dns.extra.insert(
+                "fake-ip-filter-mode".to_string(),
+                Value::String("blacklist".to_string()),
+            );
+        }
+        let body = EngineDocument::build(&config).body;
+        let dns = &body["dns"];
+        assert_eq!(dns["enable"], Value::Bool(true));
+        assert_eq!(dns["enhanced-mode"], "fake-ip");
+        assert_eq!(dns["fake-ip-range"], "198.18.0.1/16");
+        assert_eq!(dns["fake-ip-filter"], serde_json::json!(["*.lan"]));
+        assert_eq!(dns["nameserver"], serde_json::json!(["1.1.1.1"]));
+        assert_eq!(
+            dns["nameserver-policy"]["+.corp.test"],
+            serde_json::json!(["10.0.0.53"])
+        );
+        assert_eq!(dns["use-hosts"], Value::Bool(true));
+        assert_eq!(dns["fake-ip-filter-mode"], "blacklist");
+        assert!(dns.get("fallback").is_none());
+    }
+
+    #[test]
+    fn hosts_sniffer_and_geodata_are_written_under_the_engines_keys() {
+        let config = RuntimeConfig {
+            engine: every_engine_option(),
+            ..base_config()
+        };
+        let body = EngineDocument::build(&config).body;
+        assert_eq!(body["hosts"]["router.lan"], "192.168.1.1");
+        assert_eq!(body["sniffer"]["enable"], Value::Bool(true));
+        assert_eq!(
+            body["sniffer"]["sniff"]["TLS"]["ports"],
+            serde_json::json!(["443"])
+        );
+        assert_eq!(body["geodata-mode"], Value::Bool(true));
+        assert_eq!(
+            body["geox-url"]["geosite"],
+            "https://geo.example.test/geosite.dat"
+        );
+        assert_eq!(body["geodata"]["auto-update"], Value::Bool(true));
+        assert_eq!(body["geodata"]["auto-update-interval"], Value::from(24));
+    }
+
+    #[test]
+    fn every_engine_key_the_emitter_writes_is_in_the_engine_key_list() {
+        let config = RuntimeConfig {
+            engine: every_engine_option(),
+            ..full_config()
+        };
+        let document = EngineDocument::build(&config);
+        for key in document.body.keys() {
+            assert!(
+                ENGINE_KEYS.contains(&key.as_str()),
+                "{key:?} is not in ENGINE_KEYS"
+            );
+        }
+    }
+
+    #[test]
+    fn the_engine_options_survive_the_yaml_round_trip() {
+        let config = RuntimeConfig {
+            engine: every_engine_option(),
+            ..base_config()
+        };
+        let document = EngineDocument::build(&config);
+        let yaml = document.to_yaml().expect("serialises");
+        let back: Value = serde_saphyr::from_str(&yaml).expect("parses");
+        assert_eq!(back, document.to_value());
     }
 }

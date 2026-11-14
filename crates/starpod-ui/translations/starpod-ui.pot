@@ -1,0 +1,1278 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: starpod-ui\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : 2);\n"
+
+
+msgid "Connected"
+msgstr ""
+
+msgid "Connecting…"
+msgstr ""
+
+msgid "Disconnecting…"
+msgstr ""
+
+msgid "Failed"
+msgstr ""
+
+msgid "Not connected"
+msgstr ""
+
+msgid "Global mode"
+msgstr ""
+
+msgid "Direct mode"
+msgstr ""
+
+msgid "Rule mode"
+msgstr ""
+
+msgid "Up {}"
+msgstr ""
+
+msgid "Home"
+msgstr ""
+
+msgid "Profiles"
+msgstr ""
+
+msgid "Proxies"
+msgstr ""
+
+msgid "Rules"
+msgstr ""
+
+msgid "Logs"
+msgstr ""
+
+msgid "Connections"
+msgstr ""
+
+msgid "Settings"
+msgstr ""
+
+msgid "Update available: v{}"
+msgstr ""
+
+msgid "Add subscription?"
+msgstr ""
+
+msgid "Add the subscription from {}?"
+msgstr ""
+
+msgid "Add the subscription from {}?\nName: {}"
+msgstr ""
+
+msgid "Add"
+msgstr ""
+
+msgid "timeout"
+msgstr ""
+
+msgid " ms"
+msgstr ""
+
+msgid "Show less"
+msgstr ""
+
+msgid "Show more"
+msgstr ""
+
+msgid "Confirm"
+msgstr ""
+
+msgid "Cancel"
+msgstr ""
+
+msgid "Close this connection"
+msgstr ""
+
+msgid "Newest"
+msgstr ""
+
+msgid "Upload"
+msgstr ""
+
+msgid "Download"
+msgstr ""
+
+msgid "Host"
+msgstr ""
+
+msgid "No closed connections"
+msgstr ""
+
+msgid "No matches"
+msgstr ""
+
+msgid "No connections"
+msgstr ""
+
+msgid "Connections that end show up here."
+msgstr ""
+
+msgid "Connect to see the connections that pass through the proxy."
+msgstr ""
+
+msgid "No connection matches the filter."
+msgstr ""
+
+msgid "Connections show up here as apps use the proxy."
+msgstr ""
+
+msgid "Close all connections?"
+msgstr ""
+
+msgid "Every open connection is closed now. Apps can open new ones."
+msgstr ""
+
+msgid "Close all"
+msgstr ""
+
+msgid "{} active"
+msgstr ""
+
+msgid " · {} uploaded"
+msgstr ""
+
+msgid " · {} downloaded"
+msgstr ""
+
+msgid "Filter by host, process, chain or rule"
+msgstr ""
+
+msgid "Paused"
+msgstr ""
+
+msgid "Pause"
+msgstr ""
+
+msgid "Active"
+msgstr ""
+
+msgid "Closed"
+msgstr ""
+
+msgid "Clear"
+msgstr ""
+
+msgid "Go to Home"
+msgstr ""
+
+msgid "Learn more"
+msgstr ""
+
+msgid "Couldn't connect"
+msgstr ""
+
+msgid "Up {} · {}"
+msgstr ""
+
+msgid "Your subscription has ended"
+msgstr ""
+
+msgid "Your subscription expires today"
+msgstr ""
+
+msgid "Your subscription expires in 1 day"
+msgstr ""
+
+msgid "Your subscription expires in {n} day"
+msgid_plural "Your subscription expires in {n} days"
+msgstr[0] ""
+msgstr[1] ""
+msgstr[2] ""
+
+msgid "Rule"
+msgstr ""
+
+msgid "Global"
+msgstr ""
+
+msgid "Direct"
+msgstr ""
+
+msgid "Support"
+msgstr ""
+
+msgid "Website"
+msgstr ""
+
+msgid "Refresh profile"
+msgstr ""
+
+msgid "Renew"
+msgstr ""
+
+msgid "Device limit reached"
+msgstr ""
+
+msgid "This device is at the device limit set by your provider. Contact support to free a slot."
+msgstr ""
+
+msgid "Contact support"
+msgstr ""
+
+msgid "Install engine"
+msgstr ""
+
+msgid "Add a profile"
+msgstr ""
+
+msgid "System proxy"
+msgstr ""
+
+msgid "TUN"
+msgstr ""
+
+msgid "Test latency"
+msgstr ""
+
+msgid "Group"
+msgstr ""
+
+msgid "Server"
+msgstr ""
+
+msgid "Chosen automatically"
+msgstr ""
+
+msgid "ERROR"
+msgstr ""
+
+msgid "WARN"
+msgstr ""
+
+msgid "DEBUG"
+msgstr ""
+
+msgid "INFO"
+msgstr ""
+
+msgid "What Starpod and the engine are doing."
+msgstr ""
+
+msgid "Copy all"
+msgstr ""
+
+msgid "All"
+msgstr ""
+
+msgid "Info"
+msgstr ""
+
+msgid "Warnings"
+msgstr ""
+
+msgid "Errors"
+msgstr ""
+
+msgid "Engine error:"
+msgstr ""
+
+msgid "No logs yet"
+msgstr ""
+
+msgid "Engine startup and shutdown, validation failures and subscription errors appear here."
+msgstr ""
+
+msgid "No lines at this level. Choose All to see every line."
+msgstr ""
+
+msgid "Paste the subscription link."
+msgstr ""
+
+msgid "The link must start with https://"
+msgstr ""
+
+msgid "app-managed"
+msgstr ""
+
+msgid "engine-managed"
+msgstr ""
+
+msgid "Updating…"
+msgstr ""
+
+msgid "Update failed"
+msgstr ""
+
+msgid "Not updated yet"
+msgstr ""
+
+msgid "Up to date"
+msgstr ""
+
+msgid "Remove “{}”?"
+msgstr ""
+
+msgid "Its servers and rules will no longer be used. You can add the link again later."
+msgstr ""
+
+msgid "Remove"
+msgstr ""
+
+msgid "Subscriptions that supply your servers and rules."
+msgstr ""
+
+msgid "Update all"
+msgstr ""
+
+msgid "Add profile"
+msgstr ""
+
+msgid "Subscription URL"
+msgstr ""
+
+msgid "Name"
+msgstr ""
+
+msgid "Optional — taken from the link"
+msgstr ""
+
+msgid "Advanced"
+msgstr ""
+
+msgid "Authorization header"
+msgstr ""
+
+msgid "Optional"
+msgstr ""
+
+msgid "Sent with every update, stored in your system keychain"
+msgstr ""
+
+msgid "Updated by"
+msgstr ""
+
+msgid "Engine"
+msgstr ""
+
+msgid "No traffic/expiry info, the engine refreshes it itself"
+msgstr ""
+
+msgid "No profiles yet"
+msgstr ""
+
+msgid "Add your subscription link to get servers."
+msgstr ""
+
+msgid "Update now"
+msgstr ""
+
+msgid "{n} server"
+msgid_plural "{n} servers"
+msgstr[0] ""
+msgstr[1] ""
+msgstr[2] ""
+
+msgid " · Updated {}"
+msgstr ""
+
+msgid " · Updated by the engine"
+msgstr ""
+
+msgid "Expires {}"
+msgstr ""
+
+msgid "Select"
+msgstr ""
+
+msgid "Auto"
+msgstr ""
+
+msgid "Fallback"
+msgstr ""
+
+msgid "Load balance"
+msgstr ""
+
+msgid "Relay"
+msgstr ""
+
+msgid "Choose which server each group uses."
+msgstr ""
+
+msgid "Filter servers"
+msgstr ""
+
+msgid "Default"
+msgstr ""
+
+msgid "Latency"
+msgstr ""
+
+msgid "Hide unavailable"
+msgstr ""
+
+msgid "Expand all"
+msgstr ""
+
+msgid "Collapse all"
+msgstr ""
+
+msgid "No servers yet"
+msgstr ""
+
+msgid "Add a profile to get servers."
+msgstr ""
+
+msgid "Go to Profiles"
+msgstr ""
+
+msgid "Show the current server"
+msgstr ""
+
+msgid "Test latency in this group"
+msgstr ""
+
+msgid "Move up"
+msgstr ""
+
+msgid "Move down"
+msgstr ""
+
+msgid "Edit"
+msgstr ""
+
+msgid "Delete"
+msgstr ""
+
+msgid "Decide where traffic goes. Your rules run before the profile's rules."
+msgstr ""
+
+msgid "Your rules ({})"
+msgstr ""
+
+msgid "From profiles ({})"
+msgstr ""
+
+msgid "Edit as text"
+msgstr ""
+
+msgid "Kind"
+msgstr ""
+
+msgid "Target"
+msgstr ""
+
+msgid "No rules of your own"
+msgstr ""
+
+msgid "Profile rules still apply. Add one to override them."
+msgstr ""
+
+msgid "Save"
+msgstr ""
+
+msgid "{n} rule from your profiles, applied after yours."
+msgid_plural "{n} rules from your profiles, applied after yours."
+msgstr[0] ""
+msgstr[1] ""
+msgstr[2] ""
+
+msgid "No profile rules"
+msgstr ""
+
+msgid "Rules that come with a profile are listed here once it has been fetched."
+msgstr ""
+
+msgid "One rule per line, for example DOMAIN-SUFFIX,example.com,DIRECT"
+msgstr ""
+
+msgid "Revert"
+msgstr ""
+
+msgid "Apply"
+msgstr ""
+
+msgid "Delete this rule?"
+msgstr ""
+
+msgid "\"{}\" will be removed from your rules. This cannot be undone."
+msgstr ""
+
+msgid "General"
+msgstr ""
+
+msgid "Network"
+msgstr ""
+
+msgid "DNS"
+msgstr ""
+
+msgid "Sniffer"
+msgstr ""
+
+msgid "Geo data"
+msgstr ""
+
+msgid "Privacy"
+msgstr ""
+
+msgid "Hotkeys"
+msgstr ""
+
+msgid "Storage"
+msgstr ""
+
+msgid "Startup, routing, subscriptions and updates"
+msgstr ""
+
+msgid "Ports, LAN access, IPv6 and the system proxy"
+msgstr ""
+
+msgid "The virtual adapter that routes all system traffic"
+msgstr ""
+
+msgid "How the engine resolves names"
+msgstr ""
+
+msgid "Reads domain names from the traffic"
+msgstr ""
+
+msgid "The GeoIP and GeoSite databases"
+msgstr ""
+
+msgid "The proxy engine: version, logs, tests and connections"
+msgstr ""
+
+msgid "How proxy groups behave"
+msgstr ""
+
+msgid "What is sent to subscription providers"
+msgstr ""
+
+msgid "Global keyboard shortcuts"
+msgstr ""
+
+msgid "Where secrets and data are kept"
+msgstr ""
+
+msgid "Fix the highlighted fields first."
+msgstr ""
+
+msgid "Another operation is running."
+msgstr ""
+
+msgid "Rule-based"
+msgstr ""
+
+msgid "Silent"
+msgstr ""
+
+msgid "Error"
+msgstr ""
+
+msgid "Warning"
+msgstr ""
+
+msgid "Debug"
+msgstr ""
+
+msgid "Never"
+msgstr ""
+
+msgid "30 min"
+msgstr ""
+
+msgid "1 hour (default)"
+msgstr ""
+
+msgid "6 hours"
+msgstr ""
+
+msgid "12 hours"
+msgstr ""
+
+msgid "24 hours"
+msgstr ""
+
+msgid "Manual"
+msgstr ""
+
+msgid "PAC script"
+msgstr ""
+
+msgid "Mixed"
+msgstr ""
+
+msgid "System"
+msgstr ""
+
+msgid "Fake IP"
+msgstr ""
+
+msgid "Redir host"
+msgstr ""
+
+msgid "Off"
+msgstr ""
+
+msgid "Strict"
+msgstr ""
+
+msgid "Always"
+msgstr ""
+
+msgid "Stable"
+msgstr ""
+
+msgid "Alpha"
+msgstr ""
+
+msgid "Last updated {} (UTC)"
+msgstr ""
+
+msgid "Loading settings"
+msgstr ""
+
+msgid "Waiting for the proxy engine to report its settings."
+msgstr ""
+
+msgid "Interface"
+msgstr ""
+
+msgid "Language"
+msgstr ""
+
+msgid "Applies to the whole app, including the tray."
+msgstr ""
+
+msgid "Startup"
+msgstr ""
+
+msgid "Start at login"
+msgstr ""
+
+msgid "Starts Starpod when you log in."
+msgstr ""
+
+msgid "Start in the tray"
+msgstr ""
+
+msgid "A start at login stays in the tray instead of showing the window."
+msgstr ""
+
+msgid "Close to tray"
+msgstr ""
+
+msgid "Closing the window hides Starpod to the tray and the proxy keeps running. Off quits Starpod and stops the engine."
+msgstr ""
+
+msgid "This desktop has no tray, so closing always quits."
+msgstr ""
+
+msgid "Connect on start"
+msgstr ""
+
+msgid "Connects once the saved state has loaded, when a subscription has servers."
+msgstr ""
+
+msgid "Routing and subscriptions"
+msgstr ""
+
+msgid "Routing mode"
+msgstr ""
+
+msgid "Rule-based follows your rules. Global sends everything through the selected server. Direct uses no proxy."
+msgstr ""
+
+msgid "The active subscription does not allow Global. Rule-based follows your rules."
+msgstr ""
+
+msgid "Auto-update every"
+msgstr ""
+
+msgid "How often subscriptions are refreshed in the background."
+msgstr ""
+
+msgid "Custom"
+msgstr ""
+
+msgid "Updates"
+msgstr ""
+
+msgid "Check for updates at startup"
+msgstr ""
+
+msgid "Asks GitHub for a newer release when Starpod starts. Nothing is downloaded."
+msgstr ""
+
+msgid "Check now"
+msgstr ""
+
+msgid "Looks for a newer release on GitHub."
+msgstr ""
+
+msgid "Check for updates"
+msgstr ""
+
+msgid "Update available"
+msgstr ""
+
+msgid "Version {} is on GitHub. It is not installed for you."
+msgstr ""
+
+msgid "Open release page"
+msgstr ""
+
+msgid "Ports"
+msgstr ""
+
+msgid "Mixed port"
+msgstr ""
+
+msgid "HTTP and SOCKS5 on one port. Empty uses the default."
+msgstr ""
+
+msgid "Another listener already uses this port."
+msgstr ""
+
+msgid "SOCKS5 port"
+msgstr ""
+
+msgid "SOCKS5 only. Empty uses the default."
+msgstr ""
+
+msgid "HTTP port"
+msgstr ""
+
+msgid "HTTP only. Empty turns it off."
+msgstr ""
+
+msgid "Access"
+msgstr ""
+
+msgid "Allow LAN"
+msgstr ""
+
+msgid "Lets other devices on your network use the proxy."
+msgstr ""
+
+msgid "Exposed: any device on your network can use it."
+msgstr ""
+
+msgid "Bind address"
+msgstr ""
+
+msgid "The address the listeners bind to. Empty uses 127.0.0.1."
+msgstr ""
+
+msgid "Turn on Allow LAN to change the bind address."
+msgstr ""
+
+msgid "IPv6"
+msgstr ""
+
+msgid "Default leaves the engine's choice."
+msgstr ""
+
+msgid "Set the system proxy"
+msgstr ""
+
+msgid "Active. The system proxy points at Starpod."
+msgstr ""
+
+msgid "Not active. The system proxy follows the engine while this is on."
+msgstr ""
+
+msgid "Proxy mode"
+msgstr ""
+
+msgid "Manual points the system at one server. PAC uses a script that Starpod serves."
+msgstr ""
+
+msgid "Bypass list"
+msgstr ""
+
+msgid "Hosts the proxy is skipped for, in the operating system's syntax. Used in manual mode."
+msgstr ""
+
+msgid "The script for PAC mode. %mixed-port% stands for the engine's mixed port."
+msgstr ""
+
+msgid "Terminal"
+msgstr ""
+
+msgid "Proxy command"
+msgstr ""
+
+msgid "Copies the command that points a terminal at Starpod's ports."
+msgstr ""
+
+msgid "Copy proxy command"
+msgstr ""
+
+msgid "Adapter"
+msgstr ""
+
+msgid "Enable TUN"
+msgstr ""
+
+msgid "Routes all system traffic. Needs administrator rights."
+msgstr ""
+
+msgid "Device name"
+msgstr ""
+
+msgid "The name of the virtual adapter. Empty uses the engine default."
+msgstr ""
+
+msgid "Automatic"
+msgstr ""
+
+msgid "MTU"
+msgstr ""
+
+msgid "Largest packet size in bytes. Empty uses the engine default."
+msgstr ""
+
+msgid "Stack"
+msgstr ""
+
+msgid "How the engine handles the packets that TUN captures."
+msgstr ""
+
+msgid "Routes"
+msgstr ""
+
+msgid "Auto route"
+msgstr ""
+
+msgid "Installs the routes when TUN starts. Off leaves the routes to you."
+msgstr ""
+
+msgid "DNS hijack"
+msgstr ""
+
+msgid "DNS queries to these targets go to the engine, one host:port per line, such as any:53. Empty uses the engine default."
+msgstr ""
+
+msgid "Strict route"
+msgstr ""
+
+msgid "Keeps traffic that is outside the TUN routes from leaving the adapter."
+msgstr ""
+
+msgid "Auto redirect"
+msgstr ""
+
+msgid "Forwards traffic through an automatic redirect where the platform supports one."
+msgstr ""
+
+msgid "Auto-detect interface"
+msgstr ""
+
+msgid "Finds the network interface that carries outbound traffic by itself."
+msgstr ""
+
+msgid "Endpoint-independent NAT"
+msgstr ""
+
+msgid "Keeps one UDP mapping per source port, whatever the destination."
+msgstr ""
+
+msgid "Included routes"
+msgstr ""
+
+msgid "CIDR ranges sent through TUN, one per line. Empty uses the engine's routes."
+msgstr ""
+
+msgid "Excluded routes"
+msgstr ""
+
+msgid "CIDR ranges that stay off TUN, one per line."
+msgstr ""
+
+msgid "DNS server"
+msgstr ""
+
+msgid "Replace the subscription's DNS"
+msgstr ""
+
+msgid "Uses the DNS settings below instead of the ones the subscription sends."
+msgstr ""
+
+msgid "Enable DNS server"
+msgstr ""
+
+msgid "Runs the engine's own DNS server."
+msgstr ""
+
+msgid "Enhanced mode"
+msgstr ""
+
+msgid "Fake IP answers with addresses from a private range. Redir host answers with real ones."
+msgstr ""
+
+msgid "Fake IP range"
+msgstr ""
+
+msgid "The CIDR range that fake addresses come from. Empty uses the engine default."
+msgstr ""
+
+msgid "Fake IP filter"
+msgstr ""
+
+msgid "Domains that always get a real address, one per line."
+msgstr ""
+
+msgid "Upstream servers"
+msgstr ""
+
+msgid "Nameservers"
+msgstr ""
+
+msgid "The servers the DNS server asks, one per line."
+msgstr ""
+
+msgid "Fallback servers"
+msgstr ""
+
+msgid "Servers asked when the nameservers fail, one per line."
+msgstr ""
+
+msgid "Default nameservers"
+msgstr ""
+
+msgid "Plain IP servers that resolve the names of the other servers, one per line."
+msgstr ""
+
+msgid "Proxy server nameservers"
+msgstr ""
+
+msgid "Servers used to resolve the names of proxy servers, one per line."
+msgstr ""
+
+msgid "Nameserver policy"
+msgstr ""
+
+msgid "Which servers answer for which domains, one per line: domain: server, server."
+msgstr ""
+
+msgid "Hosts"
+msgstr ""
+
+msgid "Use hosts"
+msgstr ""
+
+msgid "Answers names from the hosts list below."
+msgstr ""
+
+msgid "One entry per line: domain ip."
+msgstr ""
+
+msgid "Enable sniffer"
+msgstr ""
+
+msgid "Reads the domain name from the first bytes of TLS and HTTP traffic."
+msgstr ""
+
+msgid "Force DNS mapping"
+msgstr ""
+
+msgid "Uses the DNS mapping to name connections that have only an address."
+msgstr ""
+
+msgid "Parse pure IP"
+msgstr ""
+
+msgid "Sniffs connections that were opened to a bare IP address."
+msgstr ""
+
+msgid "Override destination"
+msgstr ""
+
+msgid "Replaces the address with the sniffed domain name."
+msgstr ""
+
+msgid "Protocols and domains"
+msgstr ""
+
+msgid "Sniff protocols"
+msgstr ""
+
+msgid "One per line: a protocol and its ports, for example HTTP: 80, 8080-8880."
+msgstr ""
+
+msgid "Force domains"
+msgstr ""
+
+msgid "Domains to sniff even when the sniffer would skip them, one per line."
+msgstr ""
+
+msgid "Skip domains"
+msgstr ""
+
+msgid "Domains the sniffer leaves alone, one per line."
+msgstr ""
+
+msgid "Databases"
+msgstr ""
+
+msgid "Format"
+msgstr ""
+
+msgid "The database format the engine reads."
+msgstr ""
+
+msgid "GeoIP source"
+msgstr ""
+
+msgid "A URL. Empty uses the default source."
+msgstr ""
+
+msgid "Default source"
+msgstr ""
+
+msgid "GeoSite source"
+msgstr ""
+
+msgid "MMDB source"
+msgstr ""
+
+msgid "ASN source"
+msgstr ""
+
+msgid "Update automatically"
+msgstr ""
+
+msgid "Refreshes the databases in the background."
+msgstr ""
+
+msgid "Update every"
+msgstr ""
+
+msgid "Hours between automatic refreshes. Empty uses the app default."
+msgstr ""
+
+msgid "Hours"
+msgstr ""
+
+msgid "Refresh now"
+msgstr ""
+
+msgid "Version"
+msgstr ""
+
+msgid "Installed"
+msgstr ""
+
+msgid "Not installed"
+msgstr ""
+
+msgid "Reinstall"
+msgstr ""
+
+msgid "Install"
+msgstr ""
+
+msgid "Channel"
+msgstr ""
+
+msgid "Alpha releases come first and may be less stable."
+msgstr ""
+
+msgid "Latest"
+msgstr ""
+
+msgid "Not checked yet"
+msgstr ""
+
+msgid "Version {} is available on this channel"
+msgstr ""
+
+msgid "Up to date on this channel"
+msgstr ""
+
+msgid "Check"
+msgstr ""
+
+msgid "Upgrade"
+msgstr ""
+
+msgid "Logs and tests"
+msgstr ""
+
+msgid "Log level"
+msgstr ""
+
+msgid "How much the engine writes to the Logs screen."
+msgstr ""
+
+msgid "Choose"
+msgstr ""
+
+msgid "Log retention"
+msgstr ""
+
+msgid "Lines kept on the Logs screen. Empty uses the app default."
+msgstr ""
+
+msgid "Lines"
+msgstr ""
+
+msgid "Delay test URL"
+msgstr ""
+
+msgid "The address latency tests request. Empty uses the app default."
+msgstr ""
+
+msgid "Delay test timeout"
+msgstr ""
+
+msgid "How long a latency test waits for an answer. Empty uses the app default."
+msgstr ""
+
+msgid "ms"
+msgstr ""
+
+msgid "Find process"
+msgstr ""
+
+msgid "When the engine names the program behind a connection."
+msgstr ""
+
+msgid "Unified delay"
+msgstr ""
+
+msgid "Measures latency after the first handshake, so the results compare fairly."
+msgstr ""
+
+msgid "TCP concurrent"
+msgstr ""
+
+msgid "Tries several addresses at once to connect faster."
+msgstr ""
+
+msgid "Keep-alive interval"
+msgstr ""
+
+msgid "How often idle connections are probed, in seconds. Empty uses the engine default."
+msgstr ""
+
+msgid "Seconds"
+msgstr ""
+
+msgid "Proxy groups"
+msgstr ""
+
+msgid "Close connections on switch"
+msgstr ""
+
+msgid "When you pick a server in a group, closes the connections that went through the old one."
+msgstr ""
+
+msgid "Device identification"
+msgstr ""
+
+msgid "Send device identification"
+msgstr ""
+
+msgid "With each subscription request, sends a device ID, the operating system, its version and the device model, so the provider can count your devices. Off sends none of them."
+msgstr ""
+
+msgid "Global shortcuts"
+msgstr ""
+
+msgid "They work from any app. Write them as Ctrl+Alt+KeyS. Empty turns a shortcut off."
+msgstr ""
+
+msgid "Show the window"
+msgstr ""
+
+msgid "Brings the Starpod window to the front."
+msgstr ""
+
+msgid "Connect or disconnect"
+msgstr ""
+
+msgid "Starts or stops the engine."
+msgstr ""
+
+msgid "Turn the system proxy on or off"
+msgstr ""
+
+msgid "Changes the system proxy setting."
+msgstr ""
+
+msgid "Rule-based mode"
+msgstr ""
+
+msgid "Switches the routing mode."
+msgstr ""
+
+msgid "Discard"
+msgstr ""
+
+msgid "Save shortcuts"
+msgstr ""
+
+msgid "Secrets stored in"
+msgstr ""
+
+msgid "Not encrypted. Anyone with access to your user profile can read them."
+msgstr ""
+
+msgid "Not reported yet"
+msgstr ""
+
+msgid "Data folder"
+msgstr ""
+
+msgid "Cached profiles"
+msgstr ""
+
+msgid "Removes downloaded subscription content. It is fetched again on the next refresh."
+msgstr ""
+
+msgid "You have unsaved changes."
+msgstr ""
+
+msgid "Clear cached profiles?"
+msgstr ""
+
+msgid "This deletes the downloaded subscription content. Your subscriptions stay configured."
+msgstr ""
+
+msgid "Clear cache"
+msgstr ""
+
+msgid "On"
+msgstr ""
+
+msgid "Enter a whole number from {} to {}"
+msgstr ""
+
+msgid ", or leave it empty."
+msgstr ""
+
+msgid "."
+msgstr ""
+
+msgid "Show Starpod"
+msgstr ""
+
+msgid "Disconnect"
+msgstr ""
+
+msgid "Connect"
+msgstr ""
+
+msgid "TUN mode"
+msgstr ""
+
+msgid "Mode"
+msgstr ""
+
+msgid "No proxy groups"
+msgstr ""
+
+msgid "Quit"
+msgstr ""

@@ -47,9 +47,13 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use starpod_core::domain::{LogLevel, SubscriptionSettings};
+use std::collections::BTreeSet;
+
+use starpod_core::domain::{
+    DnsSettings, LogLevel, RuleProvider, RuleProviderBehavior, SubscriptionSettings,
+};
 use starpod_core::rules::parse::parse_line;
-use starpod_core::{Node, ProxyGroup, ProxyMode, RuleSpec, SubscriptionPayload};
+use starpod_core::{Node, ProxyGroup, ProxyMode, RuleSpec, RuleTarget, SubscriptionPayload};
 
 use crate::error::SubscriptionError;
 
@@ -203,8 +207,10 @@ pub fn parse_payload(
             nodes: extracted.nodes,
             groups: extracted.groups,
             rules: extracted.rules,
+            rule_providers: extracted.rule_providers,
             settings: extracted.settings,
             dropped_entries: extracted.dropped.len(),
+            dns: extracted.dns,
         },
         format,
         dropped: extracted.dropped,
@@ -354,7 +360,9 @@ struct Extracted {
     nodes: Vec<Node>,
     groups: Vec<ProxyGroup>,
     rules: Vec<RuleSpec>,
+    rule_providers: Vec<RuleProvider>,
     settings: SubscriptionSettings,
+    dns: Option<DnsSettings>,
     dropped: Vec<DroppedEntry>,
 }
 
@@ -431,6 +439,19 @@ fn extract(document: &serde_json::Value, label: &str) -> Result<Extracted, Subsc
         }
     };
 
+    // The names this subscription defines, already namespaced. A rule target,
+    // a provider's download proxy or a RULE-SET that names one of them is
+    // rewritten to the namespaced name, so it points at the same group or
+    // node the subscription declared (see `retarget_rule`).
+    let own_names: BTreeSet<String> = nodes
+        .iter()
+        .map(|node| node.name.clone())
+        .chain(groups.iter().map(|group| group.name.clone()))
+        .collect();
+
+    let (rule_providers, dropped_providers) =
+        extract_rule_providers(mapping, label, &own_names, &mut dropped)?;
+
     let rules = match mapping.get("rules") {
         None => Vec::new(),
         Some(serde_json::Value::Array(entries)) => {
@@ -444,7 +465,23 @@ fn extract(document: &serde_json::Value, label: &str) -> Result<Extracted, Subsc
                     continue;
                 };
                 match parse_line(line) {
-                    Ok(rule) => rules.push(rule),
+                    Ok(mut rule) => {
+                        // A RULE-SET whose provider the app dropped could
+                        // never validate, so it goes with the provider.
+                        if let RuleSpec::RuleSet { provider, .. } = &rule
+                            && dropped_providers.contains(provider)
+                        {
+                            dropped.push(DroppedEntry {
+                                name: Some(line.to_string()),
+                                reason: format!(
+                                    "it uses the rule provider “{provider}”, which was dropped"
+                                ),
+                            });
+                            continue;
+                        }
+                        retarget_rule(&mut rule, label, &own_names);
+                        rules.push(rule);
+                    }
                     // A rule the app cannot understand is dropped, not
                     // fatal: the engine would reject it too, but one bad
                     // rule must not cost the user every node in the
@@ -466,11 +503,29 @@ fn extract(document: &serde_json::Value, label: &str) -> Result<Extracted, Subsc
 
     let settings = read_settings(mapping);
 
+    // The subscription's DNS block is kept whole, so the user's choice to use it
+    // (or not) is the only thing that decides whether it reaches the engine.
+    let dns = match mapping.get("dns") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => match serde_json::from_value::<DnsSettings>(value.clone()) {
+            Ok(dns) => Some(dns),
+            Err(error) => {
+                dropped.push(DroppedEntry {
+                    name: None,
+                    reason: format!("the 'dns:' block could not be read: {error}"),
+                });
+                None
+            }
+        },
+    };
+
     Ok(Extracted {
         nodes,
         groups,
         rules,
+        rule_providers,
         settings,
+        dns,
         dropped,
     })
 }
@@ -508,6 +563,283 @@ fn read_settings(mapping: &serde_json::Map<String, serde_json::Value>) -> Subscr
             .get("log-level")
             .and_then(serde_json::Value::as_str)
             .and_then(LogLevel::from_str_exact),
+    }
+}
+
+/// Read the top-level `rule-providers:` mapping.
+///
+/// Returns the providers the app keeps, and the names of the ones it dropped.
+/// The engine's own `path:` is never used: each `http` provider gets
+/// `rule-providers/<name>.<ext>` (see [`provider_file_stem`]), so a
+/// subscription cannot choose where the engine reads or writes.
+fn extract_rule_providers(
+    mapping: &serde_json::Map<String, serde_json::Value>,
+    label: &str,
+    own_names: &BTreeSet<String>,
+    dropped: &mut Vec<DroppedEntry>,
+) -> Result<(Vec<RuleProvider>, BTreeSet<String>), SubscriptionError> {
+    let entries = match mapping.get("rule-providers") {
+        None | Some(serde_json::Value::Null) => return Ok((Vec::new(), BTreeSet::new())),
+        Some(serde_json::Value::Object(entries)) => entries,
+        Some(_) => {
+            return Err(SubscriptionError::InvalidBody(
+                "'rule-providers:' is not a mapping".to_string(),
+            ));
+        }
+    };
+
+    let mut kept = Vec::new();
+    let mut dropped_names = BTreeSet::new();
+    for (name, value) in entries {
+        match validate_rule_provider(name, value, label, own_names) {
+            Ok(provider) => kept.push(provider),
+            Err(reason) => {
+                tracing::warn!(
+                    provider = name.as_str(),
+                    reason = reason.as_str(),
+                    "dropped a rule provider from a subscription"
+                );
+                dropped_names.insert(name.clone());
+                dropped.push(DroppedEntry {
+                    name: Some(name.clone()),
+                    reason,
+                });
+            }
+        }
+    }
+    Ok((kept, dropped_names))
+}
+
+/// Validate one rule provider against what the engine accepts.
+///
+/// Accepts `type: http` (with an `http`/`https` URL) and `type: inline`.
+/// A `file` provider is refused: a subscription must never point the engine
+/// at a local file. Engine schema: see the comment on
+/// `starpod_core::domain::RuleProvider`.
+fn validate_rule_provider(
+    name: &str,
+    value: &serde_json::Value,
+    label: &str,
+    own_names: &BTreeSet<String>,
+) -> Result<RuleProvider, String> {
+    if name.trim().is_empty() {
+        return Err("the rule provider has no name".to_string());
+    }
+    let Some(object) = value.as_object() else {
+        return Err("the rule provider is not a mapping".to_string());
+    };
+
+    let provider_type = optional_string(object, "type")?
+        .ok_or_else(|| "the rule provider has no type".to_string())?;
+    match provider_type.as_str() {
+        "http" | "inline" => {}
+        "file" => {
+            return Err(
+                "a rule provider of type 'file' is not accepted: a subscription cannot point \
+                 the engine at a local file"
+                    .to_string(),
+            );
+        }
+        other => {
+            return Err(format!(
+                "'{other}' is not a rule provider type the engine supports"
+            ));
+        }
+    }
+
+    let behavior = match optional_string(object, "behavior")?.as_deref() {
+        Some("domain") => RuleProviderBehavior::Domain,
+        Some("ipcidr") => RuleProviderBehavior::IpCidr,
+        Some("classical") => RuleProviderBehavior::Classical,
+        Some(other) => {
+            return Err(format!(
+                "'{other}' is not a rule provider behavior the engine supports"
+            ));
+        }
+        None => return Err("the rule provider has no behavior".to_string()),
+    };
+
+    let format = match optional_string(object, "format")?.as_deref() {
+        None | Some("yaml") => "yaml",
+        Some("text") => "text",
+        Some("mrs") => "mrs",
+        Some(other) => {
+            return Err(format!(
+                "'{other}' is not a rule provider format the engine supports"
+            ));
+        }
+    };
+
+    let mut provider = RuleProvider {
+        name: name.to_string(),
+        provider_type: provider_type.clone(),
+        url: None,
+        path: None,
+        behavior,
+        interval: None,
+        format: Some(format.to_string()),
+        payload: None,
+        proxy: None,
+    };
+
+    if provider_type == "http" {
+        let url = optional_string(object, "url")?
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty())
+            .ok_or_else(|| "the rule provider has no url".to_string())?;
+        let lower = url.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://"))
+            || url.chars().any(char::is_whitespace)
+        {
+            return Err("the rule provider's url is not an http or https address".to_string());
+        }
+        provider.url = Some(url);
+        provider.path = Some(format!(
+            "rule-providers/{}.{}",
+            provider_file_stem(name),
+            provider_extension(format)
+        ));
+        provider.interval = optional_u64(object, "interval")?;
+        provider.proxy = optional_string(object, "proxy")?
+            .map(|proxy| proxy.trim().to_string())
+            .filter(|proxy| !proxy.is_empty())
+            .map(|proxy| {
+                if proxy.eq_ignore_ascii_case("DIRECT") {
+                    "DIRECT".to_string()
+                } else {
+                    retarget_name(&proxy, label, own_names)
+                }
+            });
+    } else {
+        // An inline provider's rules are the payload itself. The engine
+        // refuses an interval above zero for these, so none is kept.
+        let entries = object
+            .get("payload")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "the inline rule provider has no payload list".to_string())?;
+        let mut rules = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let Some(rule) = entry.as_str() else {
+                return Err(
+                    "an inline rule provider's payload holds something that is not a string"
+                        .to_string(),
+                );
+            };
+            rules.push(rule.to_string());
+        }
+        provider.payload = Some(rules);
+    }
+
+    Ok(provider)
+}
+
+/// A string field of a subscription mapping. `Ok(None)` when it is absent or
+/// null; an error when it is present but not a string.
+fn optional_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<String>, String> {
+    match object.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(text)) => Ok(Some(text.clone())),
+        Some(_) => Err(format!("'{key}' is not a string")),
+    }
+}
+
+/// A whole-number field of a subscription mapping, with the same rules as
+/// [`optional_string`].
+fn optional_u64(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<u64>, String> {
+    match object.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("'{key}' is not a whole number of seconds")),
+    }
+}
+
+/// The file stem for a provider's on-disk cache, from its name.
+///
+/// Characters outside `[A-Za-z0-9._-]` become `_`. When that changes the name
+/// (or the name starts with a dot, or is longer than 64 characters), a hash
+/// of the whole name is appended, so two different names cannot end up on the
+/// same file: `a b` and `a_b` stay apart.
+fn provider_file_stem(name: &str) -> String {
+    let mut cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect();
+    if cleaned.starts_with('.') {
+        cleaned.replace_range(0..1, "_");
+    }
+    if cleaned == name {
+        cleaned
+    } else {
+        format!("{cleaned}-{:08x}", fnv1a_32(name))
+    }
+}
+
+/// The extension a provider's cache file gets, from its format.
+fn provider_extension(format: &str) -> &'static str {
+    match format {
+        "text" => "txt",
+        "mrs" => "mrs",
+        _ => "yaml",
+    }
+}
+
+/// 32-bit FNV-1a. Stable across builds and Rust versions, unlike
+/// `DefaultHasher`, so a cache file name does not move between releases.
+fn fnv1a_32(text: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in text.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// Rewrite a rule's target, when it names one of this subscription's own
+/// groups or nodes, to the namespaced name those were given.
+fn retarget_rule(rule: &mut RuleSpec, label: &str, own_names: &BTreeSet<String>) {
+    match rule {
+        RuleSpec::Simple { target, .. }
+        | RuleSpec::Match { target }
+        | RuleSpec::Logic { target, .. }
+        | RuleSpec::RuleSet { target, .. } => {
+            *target = retarget_target(target, label, own_names);
+        }
+        RuleSpec::SubRule { .. } => {}
+    }
+}
+
+/// The target a rule sends traffic to, after namespacing. A built-in outbound
+/// (`DIRECT`, `REJECT`, …) and a name the subscription does not define are
+/// left as written: the latter may name a user group, which is valid.
+fn retarget_target(target: &RuleTarget, label: &str, own_names: &BTreeSet<String>) -> RuleTarget {
+    if target.builtin_kind().is_some() {
+        return target.clone();
+    }
+    RuleTarget::new(retarget_name(target.as_str(), label, own_names))
+}
+
+/// A name, namespaced when the subscription defines it, else unchanged.
+fn retarget_name(name: &str, label: &str, own_names: &BTreeSet<String>) -> String {
+    let namespaced = namespace(label, name);
+    if own_names.contains(&namespaced) {
+        namespaced
+    } else {
+        name.to_string()
     }
 }
 
@@ -1217,5 +1549,295 @@ rules:
             "the engine's trusttunnel arm is feature-gated and the release build does not \
              enable it"
         );
+    }
+}
+
+#[cfg(test)]
+mod rule_provider_tests {
+    use super::*;
+    use starpod_core::rules::translate::translate;
+
+    /// A Clash body in the shape the bug report describes: providers of each
+    /// kind, a non-ASCII group that rules target, and `no-resolve`.
+    fn fixture() -> &'static str {
+        r#"
+proxies:
+  - { name: A, type: http, server: a.example.com, port: 8080 }
+proxy-groups:
+  - { name: "🚫 Недоступные сайты", type: select, proxies: [A] }
+  - { name: Proxy, type: select, proxies: [A] }
+rule-providers:
+  geoip-private:
+    type: http
+    behavior: ipcidr
+    url: https://rules.example.com/geoip-private.yaml
+    path: ../../etc/evil.yaml
+    interval: 86400
+    proxy: DIRECT
+  oisd_big:
+    type: http
+    behavior: domain
+    format: text
+    url: https://rules.example.com/oisd.txt
+    proxy: A
+  ukraine:
+    type: http
+    behavior: domain
+    url: https://rules.example.com/ukraine.yaml
+    proxy: "🚫 Недоступные сайты"
+  local-file:
+    type: file
+    behavior: domain
+    path: /etc/passwd
+  inline-one:
+    type: inline
+    behavior: classical
+    payload:
+      - DOMAIN-SUFFIX,example.test
+      - DOMAIN-KEYWORD,ads
+  broken:
+    type: http
+    behavior: sideways
+    url: https://x.example.com/x
+rules:
+  - RULE-SET,geoip-private,DIRECT,no-resolve
+  - RULE-SET,oisd_big,REJECT
+  - RULE-SET,ukraine,🚫 Недоступные сайты
+  - RULE-SET,local-file,DIRECT
+  - RULE-SET,broken,DIRECT
+  - RULE-SET,inline-one,Proxy
+  - DOMAIN,example.test,Proxy
+  - MATCH,Proxy
+"#
+    }
+
+    fn parsed() -> SubscriptionPayload {
+        parse_payload(fixture().as_bytes(), "sub-1", "Airport")
+            .expect("the fixture parses")
+            .payload
+    }
+
+    fn provider<'a>(payload: &'a SubscriptionPayload, name: &str) -> &'a RuleProvider {
+        payload
+            .rule_providers
+            .iter()
+            .find(|provider| provider.name == name)
+            .unwrap_or_else(|| panic!("no provider named {name}"))
+    }
+
+    #[test]
+    fn the_usable_providers_are_kept_and_the_others_dropped() {
+        let payload = parsed();
+        let names: Vec<&str> = payload
+            .rule_providers
+            .iter()
+            .map(|provider| provider.name.as_str())
+            .collect();
+        let mut names = names;
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["geoip-private", "inline-one", "oisd_big", "ukraine"]
+        );
+        // Two providers dropped (file, broken) and the two rules naming them.
+        assert_eq!(payload.dropped_entries, 4);
+        assert_eq!(payload.rules.len(), 6);
+    }
+
+    #[test]
+    fn an_http_provider_gets_our_own_cache_path_never_the_subscriptions() {
+        let payload = parsed();
+        assert_eq!(
+            provider(&payload, "geoip-private").path.as_deref(),
+            Some("rule-providers/geoip-private.yaml")
+        );
+        assert_eq!(
+            provider(&payload, "oisd_big").path.as_deref(),
+            Some("rule-providers/oisd_big.txt"),
+            "a text format is cached as .txt"
+        );
+        for provider in &payload.rule_providers {
+            if let Some(path) = &provider.path {
+                assert!(!path.contains(".."), "{path}");
+                assert!(!path.starts_with('/'), "{path}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_http_fields_are_read_as_the_engine_spells_them() {
+        let payload = parsed();
+        let geoip = provider(&payload, "geoip-private");
+        assert_eq!(geoip.provider_type, "http");
+        assert_eq!(geoip.behavior, RuleProviderBehavior::IpCidr);
+        assert_eq!(
+            geoip.format.as_deref(),
+            Some("yaml"),
+            "the default is written out"
+        );
+        assert_eq!(geoip.interval, Some(86_400));
+        assert_eq!(geoip.proxy.as_deref(), Some("DIRECT"));
+        assert_eq!(
+            geoip.url.as_deref(),
+            Some("https://rules.example.com/geoip-private.yaml")
+        );
+    }
+
+    #[test]
+    fn a_download_proxy_that_names_a_subscription_group_is_namespaced() {
+        let payload = parsed();
+        assert_eq!(
+            provider(&payload, "ukraine").proxy.as_deref(),
+            Some("Airport / 🚫 Недоступные сайты")
+        );
+        assert_eq!(
+            provider(&payload, "oisd_big").proxy.as_deref(),
+            Some("Airport / A")
+        );
+    }
+
+    #[test]
+    fn an_inline_provider_keeps_its_payload_and_no_interval() {
+        let payload = parsed();
+        let inline = provider(&payload, "inline-one");
+        assert_eq!(inline.provider_type, "inline");
+        assert_eq!(inline.behavior, RuleProviderBehavior::Classical);
+        assert_eq!(
+            inline.payload.as_deref(),
+            Some(
+                &[
+                    "DOMAIN-SUFFIX,example.test".to_string(),
+                    "DOMAIN-KEYWORD,ads".to_string(),
+                ][..]
+            )
+        );
+        assert_eq!(inline.path, None);
+        assert_eq!(inline.url, None);
+    }
+
+    #[test]
+    fn a_rule_set_targeting_a_non_ascii_group_is_namespaced_and_keeps_its_flags() {
+        let payload = parsed();
+        let lines: Vec<String> = payload.rules.iter().map(translate).collect();
+        assert!(
+            lines.contains(&"RULE-SET,ukraine,Airport / 🚫 Недоступные сайты".to_string()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"RULE-SET,geoip-private,DIRECT,no-resolve".to_string()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"RULE-SET,oisd_big,REJECT".to_string()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"RULE-SET,inline-one,Airport / Proxy".to_string()),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_rule_set_naming_a_dropped_provider_is_dropped_with_it() {
+        let payload = parsed();
+        assert!(!payload.rules.iter().any(|rule| {
+            matches!(rule, RuleSpec::RuleSet { provider, .. } if provider == "local-file" || provider == "broken")
+        }));
+    }
+
+    #[test]
+    fn a_file_provider_is_refused_with_its_reason() {
+        let own = BTreeSet::new();
+        let value =
+            serde_json::json!({"type": "file", "behavior": "domain", "path": "/etc/passwd"});
+        let reason = validate_rule_provider("local", &value, "Airport", &own).unwrap_err();
+        assert!(reason.contains("local file"), "{reason}");
+    }
+
+    #[test]
+    fn an_unknown_behavior_or_format_drops_the_provider() {
+        let own = BTreeSet::new();
+        let sideways = serde_json::json!({"type": "http", "behavior": "sideways", "url": "https://x.example.com/x"});
+        assert!(
+            validate_rule_provider("p", &sideways, "", &own)
+                .unwrap_err()
+                .contains("sideways")
+        );
+        let odd_format = serde_json::json!({"type": "http", "behavior": "domain", "format": "json", "url": "https://x.example.com/x"});
+        assert!(
+            validate_rule_provider("p", &odd_format, "", &own)
+                .unwrap_err()
+                .contains("json")
+        );
+    }
+
+    #[test]
+    fn an_http_provider_needs_an_http_or_https_url() {
+        let own = BTreeSet::new();
+        for url in [
+            "file:///etc/passwd",
+            "ftp://x.example.com/a",
+            "relative/path",
+            "https://x.example.com/a b",
+        ] {
+            let value = serde_json::json!({"type": "http", "behavior": "domain", "url": url});
+            assert!(
+                validate_rule_provider("p", &value, "", &own).is_err(),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_inline_provider_without_a_payload_is_dropped() {
+        let value = serde_json::json!({"type": "inline", "behavior": "domain"});
+        assert!(validate_rule_provider("p", &value, "", &BTreeSet::new()).is_err());
+    }
+
+    #[test]
+    fn a_rule_set_naming_no_provider_here_is_kept_for_the_app_to_resolve() {
+        // A user rule or another subscription may declare it.
+        let body = "proxies:\n  - { name: A, type: http, server: a.example.com, port: 8080 }\nrules:\n  - RULE-SET,elsewhere,DIRECT\n";
+        let parsed = parse_payload(body.as_bytes(), "sub-1", "Airport").expect("parses");
+        assert_eq!(parsed.payload.rules.len(), 1);
+    }
+
+    #[test]
+    fn a_rule_to_a_user_group_keeps_its_name() {
+        let body = "proxies:\n  - { name: A, type: http, server: a.example.com, port: 8080 }\nrules:\n  - DOMAIN,example.test,Ghost\n";
+        let parsed = parse_payload(body.as_bytes(), "sub-1", "Airport").expect("parses");
+        assert_eq!(
+            translate(&parsed.payload.rules[0]),
+            "DOMAIN,example.test,Ghost"
+        );
+    }
+
+    #[test]
+    fn a_plain_rule_to_a_subscription_group_is_namespaced_like_a_set() {
+        let payload = parsed();
+        assert_eq!(
+            translate(&payload.rules[4]),
+            "DOMAIN,example.test,Airport / Proxy"
+        );
+    }
+
+    #[test]
+    fn provider_file_stems_never_collide_and_never_escape_the_directory() {
+        assert_eq!(provider_file_stem("ukraine"), "ukraine");
+        assert_ne!(provider_file_stem("a b"), provider_file_stem("a_b"));
+        assert_ne!(provider_file_stem("🚫 x"), provider_file_stem("__ x"));
+        for name in ["../x", "a/b", "..", ".hidden", "🚫 Недоступные сайты"] {
+            let stem = provider_file_stem(name);
+            assert!(!stem.contains('/') && !stem.contains('\\'), "{stem}");
+            assert!(!stem.contains(".."), "{stem}");
+            assert!(!stem.starts_with('.'), "{stem}");
+        }
+    }
+
+    #[test]
+    fn a_subscription_without_rule_providers_has_none() {
+        let body = "proxies:\n  - { name: A, type: http, server: a.example.com, port: 8080 }\n";
+        let parsed = parse_payload(body.as_bytes(), "sub-1", "Airport").expect("parses");
+        assert!(parsed.payload.rule_providers.is_empty());
     }
 }

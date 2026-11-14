@@ -1,326 +1,234 @@
-// The Logs screen (ARCHITECTURE §6.2).
+// The Logs page (docs/design/ui-spec.md section 5.5).
 //
-// A level filter, Copy and Clear, and a scrolling list of log lines. The
-// filter is applied by Rust: this file only writes `Bridge.log-level-filter`
-// and displays whatever `Bridge.logs` holds.
+// Copy and Clear, a level filter, and a virtualised list of log lines. The
+// filter itself is applied by Rust: this file writes `Bridge.log-level-filter`
+// and displays whatever `Bridge.logs` holds. The filter values are the level
+// names the engine and app use: all, info, warning, error.
 
 import { ListView } from "std-widgets.slint";
 import { Design } from "../design.slint";
 import { Bridge, LogItem } from "../bridge.slint";
-import {
-    AppButton, ButtonVariant, ButtonSize, Badge, BadgeVariant, Card,
-    LoadingState, SectionHeading
-} from "../primitives.slint";
+import { EmojiText } from "../emoji-text.slint";
+import { ButtonSize, ButtonVariant, IconButton, Segmented, Card, EmptyState, PageHeader } from "../primitives.slint";
 
-// ---------------------------------------------------------------------------
-// One segment of the level filter. The same pill style as the Dashboard's
-// routing mode: the selected segment takes the brand red.
-// ---------------------------------------------------------------------------
-
-component LevelSegment inherits Rectangle {
-    in property <string> text;
-    in property <bool> selected: false;
-    callback picked();
-
-    width: 72px;
-    height: 24px;
-    border-radius: Design.radius-md;
-    background: root.selected ? Design.primary : transparent;
-
-    // The focus ring, the same halo AppButton uses.
-    Rectangle {
-        x: -2px;
-        y: -2px;
-        width: parent.width + 4px;
-        height: parent.height + 4px;
-        border-radius: Design.radius-md + 2px;
-        border-width: 2px;
-        border-color: Design.ring;
-        opacity: 0.5;
-        visible: focus-scope.has-focus;
-    }
-
-    Text {
-        text: root.text;
-        color: root.selected ? Design.primary-foreground : Design.foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-sm;
-        font-weight: 500;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        wrap: no-wrap;
-    }
-
-    focus-scope := FocusScope {
-        width: parent.width;
-        height: parent.height;
-        focus-on-click: true;
-
-        key-pressed(event) => {
-            if (event.text == Key.Space || event.text == Key.Return) {
-                root.picked();
-                return accept;
-            }
-            reject
-        }
-
-        touch := TouchArea {
-            width: parent.width;
-            height: parent.height;
-            clicked => {
-                root.picked();
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// One log line: time, level, source, message.
-// ---------------------------------------------------------------------------
-
-component LogRow inherits VerticalLayout {
+// One log line: time, level, source, message. The message wraps; the other
+// columns keep a fixed width so every line up in one column.
+component LogRow inherits Rectangle {
     in property <LogItem> entry;
-    in property <string> mono;
+
+    pure function level-text(level: string) -> string {
+        if (level == "error") {
+            return @tr("ERROR");
+        }
+        if (level == "warning") {
+            return @tr("WARN");
+        }
+        if (level == "debug") {
+            return @tr("DEBUG");
+        }
+        return @tr("INFO");
+    }
+
+    pure function level-color(level: string) -> color {
+        if (level == "error") {
+            return Design.destructive;
+        }
+        if (level == "warning") {
+            return Design.warning;
+        }
+        if (level == "debug") {
+            return Design.subtle-foreground;
+        }
+        return Design.muted-foreground;
+    }
 
     HorizontalLayout {
-        padding-top: Design.space-xs;
-        padding-bottom: Design.space-xs;
-        padding-left: Design.space-sm;
-        padding-right: Design.space-sm;
-        spacing: Design.space-sm;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 12px;
         alignment: start;
 
         Text {
+            width: 72px;
             text: root.entry.time;
-            width: 88px;
-            color: Design.muted-foreground;
-            font-family: root.mono;
+            color: Design.subtle-foreground;
+            font-family: Design.font-mono;
             font-size: Design.font-xs;
             vertical-alignment: top;
             wrap: no-wrap;
             overflow: elide;
         }
 
-        Badge {
-            width: 64px;
-            text: root.entry.level;
-            variant: root.entry.level == "error" ? BadgeVariant.destructive
-                : root.entry.level == "warning" ? BadgeVariant.warning
-                : root.entry.level == "info" ? BadgeVariant.secondary
-                : BadgeVariant.outline;
-        }
-
-        // The source, as a muted outlined tag.
-        Rectangle {
-            width: 104px;
-            height: 20px;
-            border-radius: Design.radius-sm;
-            border-width: 1px;
-            border-color: Design.input;
-
-            Text {
-                x: 6px;
-                width: parent.width - 12px;
-                height: parent.height;
-                text: root.entry.source;
-                color: Design.muted-foreground;
-                font-family: Design.font-family;
-                font-size: Design.font-xs;
-                vertical-alignment: center;
-                wrap: no-wrap;
-                overflow: elide;
-            }
-        }
-
         Text {
-            text: root.entry.message;
-            horizontal-stretch: 1;
-            color: root.entry.level == "error" ? Design.destructive : Design.foreground;
-            font-family: root.mono;
-            font-size: Design.font-sm;
+            // Wide enough for the Russian "ОТЛАДКА" as well as "DEBUG".
+            width: 72px;
+            text: root.level-text(root.entry.level);
+            color: root.level-color(root.entry.level);
+            font-family: Design.font-family;
+            font-size: Design.font-xs;
+            font-weight: 600;
             vertical-alignment: top;
-            wrap: word-wrap;
+            wrap: no-wrap;
+        }
+
+        EmojiText {
+            width: 90px;
+            runs: root.entry.source-runs;
+            fallback: root.entry.source;
+            color: Design.muted-foreground;
+            font-size: Design.font-xs;
+            wrap: false;
+        }
+
+        EmojiText {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            runs: root.entry.message-runs;
+            fallback: root.entry.message;
+            color: Design.foreground;
+            font-family: Design.font-mono;
+            font-size: Design.font-base;
+            wrap: false;
         }
     }
-
-    Rectangle {
-        height: 1px;
-        background: Design.border;
-    }
 }
 
-// ---------------------------------------------------------------------------
-// A compact centred empty state: a title and one line, no box.
-// ---------------------------------------------------------------------------
-
-component CompactEmpty inherits VerticalLayout {
-    in property <string> title;
-    in property <string> description;
-
-    padding-top: Design.space-xl;
-    padding-bottom: Design.space-xs;
-    spacing: Design.space-xs;
-    alignment: start;
-    vertical-stretch: 0;
-
-    Text {
-        text: root.title;
-        color: Design.foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-sm;
-        font-weight: 500;
-        horizontal-alignment: center;
-        wrap: word-wrap;
-    }
-
-    Text {
-        text: root.description;
-        color: Design.muted-foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-xs;
-        horizontal-alignment: center;
-        wrap: word-wrap;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The page.
-// ---------------------------------------------------------------------------
-
-export component LogsPage inherits VerticalLayout {
-    padding: Design.space-xl;
-    spacing: Design.space-lg;
-    alignment: start;
+export component LogsPage inherits Rectangle {
     horizontal-stretch: 1;
     vertical-stretch: 1;
+    background: transparent;
 
-    private property <string> mono: Design.font-mono;
-
-    SectionHeading {
-        eyebrow: "Diagnostics";
-        title: "Recent messages";
-        description: "App and engine messages, newest last.";
+    // The filter's segments, in order. The index maps to Bridge.log-level-filter.
+    pure function filter-index(filter: string) -> int {
+        if (filter == "info") {
+            return 1;
+        }
+        if (filter == "warning") {
+            return 2;
+        }
+        if (filter == "error") {
+            return 3;
+        }
+        return 0;
     }
 
-    if (!Bridge.loaded) : LoadingState {
-        vertical-stretch: 1;
-        message: "Waiting for the proxy engine to report its state…";
+    pure function filter-value(index: int) -> string {
+        if (index == 1) {
+            return "info";
+        }
+        if (index == 2) {
+            return "warning";
+        }
+        if (index == 3) {
+            return "error";
+        }
+        return "all";
     }
 
-    if (Bridge.loaded) : VerticalLayout {
-        vertical-stretch: 1;
-        spacing: Design.space-md;
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: 32px;
+        padding-right: 32px;
+        padding-top: 28px;
+        padding-bottom: 32px;
 
-        // Toolbar: one 36px row. Every item is centred on the row's middle
-        // line, so the filter and the buttons share one axis.
         HorizontalLayout {
-            spacing: Design.space-sm;
-            alignment: start;
-            height: 36px;
-
-            // The level filter: a compact five-segment control, 368px wide.
-            Rectangle {
-                width: 368px;
-                height: 32px;
-                y: (parent.height - self.height) / 2;
-                background: Design.secondary;
-                border-radius: Design.radius-lg;
-
-                HorizontalLayout {
-                    padding: Design.space-xs;
-
-                    LevelSegment {
-                        text: "All";
-                        selected: Bridge.log-level-filter == "all";
-                        picked => { Bridge.log-level-filter = "all"; }
-                    }
-                    LevelSegment {
-                        text: "Error";
-                        selected: Bridge.log-level-filter == "error";
-                        picked => { Bridge.log-level-filter = "error"; }
-                    }
-                    LevelSegment {
-                        text: "Warning";
-                        selected: Bridge.log-level-filter == "warning";
-                        picked => { Bridge.log-level-filter = "warning"; }
-                    }
-                    LevelSegment {
-                        text: "Info";
-                        selected: Bridge.log-level-filter == "info";
-                        picked => { Bridge.log-level-filter = "info"; }
-                    }
-                    LevelSegment {
-                        text: "Debug";
-                        selected: Bridge.log-level-filter == "debug";
-                        picked => { Bridge.log-level-filter = "debug"; }
-                    }
-                }
-            }
-
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-
-            AppButton {
-                text: "Copy";
-                variant: ButtonVariant.outline;
-                size: ButtonSize.md;
-                y: (parent.height - self.height) / 2;
-                enabled: Bridge.logs.length > 0;
-                disabled-reason: "There are no log lines to copy yet.";
-                clicked => { Bridge.copy-logs(); }
-            }
-
-            AppButton {
-                text: "Clear";
-                variant: ButtonVariant.ghost;
-                size: ButtonSize.md;
-                y: (parent.height - self.height) / 2;
-                enabled: Bridge.logs.length > 0;
-                disabled-reason: "There are no log lines to clear.";
-                clicked => { Bridge.clear-logs(); }
-            }
-        }
-
-        if (Bridge.engine-error != "") : Text {
-            text: "Engine error: " + Bridge.engine-error;
-            color: Design.destructive;
-            font-family: Design.font-family;
-            font-size: Design.font-sm;
-            wrap: word-wrap;
-        }
-
-        // Empty state. The filter can hide every line, so when it is not
-        // "all" the page says so.
-        if (Bridge.logs.length == 0) : VerticalLayout {
-            vertical-stretch: 0;
-            spacing: Design.space-xs;
-
-            CompactEmpty {
-                title: "No log lines yet";
-                description: "Engine startup and shutdown, validation failures and subscription errors appear here as they happen.";
-            }
-
-            if (Bridge.log-level-filter != "all") : Text {
-                text: "The level filter may be hiding lines. Choose All to see every level.";
-                color: Design.muted-foreground;
-                font-family: Design.font-family;
-                font-size: Design.font-xs;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
-        }
-
-        if (Bridge.logs.length > 0) : Card {
             vertical-stretch: 1;
 
-            ListView {
-                vertical-stretch: 1;
+            VerticalLayout {
                 horizontal-stretch: 1;
+                max-width: 920px;
+                vertical-stretch: 1;
+                spacing: 0px;
 
-                for log in Bridge.logs : LogRow {
-                    entry: log;
-                    mono: root.mono;
+                PageHeader {
+                    title: @tr("Logs");
+                    description: @tr("What Starpod and the engine are doing.");
+
+                    IconButton {
+                        variant: ButtonVariant.outline;
+                        size: ButtonSize.md;
+                        icon: @image-url("../assets/icons/copy.svg");
+                        tooltip: @tr("Copy all");
+                        enabled: Bridge.logs.length > 0;
+                        clicked => { Bridge.copy-logs(); }
+                    }
+
+                    IconButton {
+                        variant: ButtonVariant.outline;
+                        size: ButtonSize.md;
+                        icon: @image-url("../assets/icons/trash-2.svg");
+                        tooltip: @tr("Clear");
+                        enabled: Bridge.logs.length > 0;
+                        clicked => { Bridge.clear-logs(); }
+                    }
+                }
+
+                // The header's 24px is the gap above this block. The rest of
+                // the page is spaced 16px apart.
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    spacing: 16px;
+
+                    HorizontalLayout {
+                        alignment: start;
+                        height: 36px;
+
+                        Segmented {
+                            options: [@tr("All"), @tr("Info"), @tr("Warnings"), @tr("Errors")];
+                            current-index: root.filter-index(Bridge.log-level-filter);
+                            selected(i) => { Bridge.log-level-filter = root.filter-value(i); }
+                        }
+                    }
+
+                    // A VerticalLayout, not a HorizontalLayout: a wrapped EmojiText
+                    // only gets its height-for-width in a vertical parent.
+                    if (Bridge.engine-error != "") : VerticalLayout {
+                        spacing: 2px;
+
+                        Text {
+                            text: @tr("Engine error:");
+                            color: Design.destructive;
+                            font-family: Design.font-family;
+                            font-size: Design.font-sm;
+                            wrap: no-wrap;
+                        }
+
+                        EmojiText {
+                            runs: Bridge.engine-error-runs;
+                            fallback: Bridge.engine-error;
+                            color: Design.destructive;
+                            font-size: Design.font-sm;
+                            wrap: true;
+                        }
+                    }
+
+                    if (Bridge.logs.length == 0) : Card {
+                        EmptyState {
+                            icon: @image-url("../assets/icons/scroll-text.svg");
+                            title: @tr("No logs yet");
+                            text: Bridge.log-level-filter == "all"
+                                ? @tr("Engine startup and shutdown, validation failures and subscription errors appear here.")
+                                : @tr("No lines at this level. Choose All to see every line.");
+                        }
+                    }
+
+                    if (Bridge.logs.length > 0) : Card {
+                        vertical-stretch: 1;
+                        inner-padding: 0px;
+
+                        ListView {
+                            vertical-stretch: 1;
+                            horizontal-stretch: 1;
+
+                            for log in Bridge.logs : LogRow {
+                                entry: log;
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -50,7 +50,12 @@ use crate::error::{EngineError, EngineResult};
 /// The secret is on the command line because it is the engine's only input
 /// channel for it (see `supervisor.rs`).
 pub fn engine_arguments(config_path: &Path, secret: &str, controller: Option<&str>) -> Vec<String> {
+    // The home directory is the configuration's directory: the geodata the
+    // app downloads sits there, and the engine reads it from there.
+    let home = config_path.parent().unwrap_or_else(|| Path::new("."));
     let mut args = vec![
+        "-d".to_string(),
+        home.to_string_lossy().into_owned(),
         "-f".to_string(),
         config_path.to_string_lossy().into_owned(),
         "--secret".to_string(),
@@ -568,6 +573,8 @@ mod tests {
         assert_eq!(
             args,
             vec![
+                "-d",
+                "/home/ann/data",
                 "-f",
                 "/home/ann/data/runtime-config.yaml",
                 "--secret",

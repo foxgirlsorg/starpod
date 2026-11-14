@@ -6,11 +6,19 @@
 //! touches a `Bridge`, and it only sets properties. The rest is testable
 //! without a display.
 
+use std::collections::BTreeSet;
+
 use crate::compose::unsupported_rule;
+use crate::connections::{self, ConnectionView};
+use crate::engine_form::EngineForm;
+use crate::snapshot::ProfileCard;
+use crate::ui::emoji::runs_model;
 use crate::{
-    AppError, AppSnapshot, NodeView, NoticeKind, RuleView, SubscriptionStatus, SubscriptionView,
+    AnnouncementView, AppError, AppSnapshot, GroupView, Latency, MemberView, NodeView, NoticeKind,
+    RuleView, SubscriptionStatus, SubscriptionView,
 };
-use slint::{Model, ModelRc, SharedString, VecModel};
+use slint::{Color, Image, Model, ModelRc, SharedString, VecModel};
+use starpod_core::domain::SystemProxyMode;
 use starpod_core::rules::parse_line;
 use starpod_core::{
     LogLevel, ProxyMode, RuleSpec, SubscriptionMode, SubscriptionQuota, TunSettings,
@@ -18,7 +26,10 @@ use starpod_core::{
 };
 use starpod_engine::EnginePhase;
 use starpod_subscription::metadata::DEFAULT_INTERVAL_SECS;
-use starpod_ui::{Bridge, LogItem, NodeItem, RuleItem, SettingsModel, SubscriptionItem};
+use starpod_ui::{
+    AnnouncementItem, Bridge, ConnectionItem, EngineSettingsModel, GroupItem, LogItem, MemberItem,
+    NodeItem, ProfileCardItem, RuleItem, SelectItem, SettingsModel, SubscriptionItem, WarningItem,
+};
 
 /// The most log lines the Logs screen keeps.
 pub const LOG_LINE_LIMIT: usize = 2000;
@@ -111,11 +122,11 @@ pub fn format_uptime(secs: u64) -> String {
     let minutes = (secs % 3600) / 60;
     let seconds = secs % 60;
     if hours > 0 {
-        format!("{hours}h {minutes:02}m")
+        crate::i18n::fmt("{}h {}m", &[&hours.to_string(), &format!("{minutes:02}")])
     } else if minutes > 0 {
-        format!("{minutes}m {seconds:02}s")
+        crate::i18n::fmt("{}m {}s", &[&minutes.to_string(), &format!("{seconds:02}")])
     } else {
-        format!("{seconds}s")
+        crate::i18n::fmt("{}s", &[&seconds.to_string()])
     }
 }
 
@@ -123,7 +134,7 @@ pub fn format_uptime(secs: u64) -> String {
 pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     if bytes < 1000 {
-        return format!("{bytes} B");
+        return format!("{bytes} {}", crate::i18n::t("B"));
     }
     let mut value = bytes as f64;
     let mut unit = 0;
@@ -133,7 +144,7 @@ pub fn format_bytes(bytes: u64) -> String {
     }
     let text = format!("{value:.1}");
     let text = text.strip_suffix(".0").unwrap_or(&text);
-    format!("{text} {}", UNITS[unit])
+    format!("{text} {}", crate::i18n::t(UNITS[unit]))
 }
 
 /// The share of the quota that is used, from 0 to 1. Zero when the total is
@@ -148,8 +159,11 @@ pub fn quota_fraction(quota: &SubscriptionQuota) -> f32 {
 /// `12.3 GB of 100 GB`, or `12.3 GB used` when the provider gave no total.
 pub fn quota_text(quota: &SubscriptionQuota) -> String {
     match quota.total {
-        Some(total) => format!("{} of {}", format_bytes(quota.used), format_bytes(total)),
-        None => format!("{} used", format_bytes(quota.used)),
+        Some(total) => crate::i18n::fmt(
+            "{} of {}",
+            &[&format_bytes(quota.used), &format_bytes(total)],
+        ),
+        None => crate::i18n::fmt("{} used", &[&format_bytes(quota.used)]),
     }
 }
 
@@ -185,9 +199,11 @@ pub fn subscription_item(view: &SubscriptionView) -> SubscriptionItem {
         ),
         None => (false, 0.0, String::new(), String::new()),
     };
+    let error = view.error.clone().unwrap_or_default();
     SubscriptionItem {
         id: view.id.as_str().into(),
         label: view.label.as_str().into(),
+        title: view.title.as_str().into(),
         mode: view.mode.as_str().into(),
         status: status_str(view.status).into(),
         last_updated: view
@@ -196,7 +212,9 @@ pub fn subscription_item(view: &SubscriptionView) -> SubscriptionItem {
             .map(display_time)
             .unwrap_or_default()
             .into(),
-        error: view.error.clone().unwrap_or_default().into(),
+        error: error.as_str().into(),
+        error_runs: runs_model(&error),
+        title_runs: runs_model(&view.title),
         node_count: saturating_i32(view.node_count),
         has_quota,
         quota_used_fraction: fraction,
@@ -230,7 +248,347 @@ pub fn node_item(node: &NodeView) -> NodeItem {
         group: node.group.clone().unwrap_or_default().into(),
         latency_ms: node.latency_ms.map_or(-1, saturating_i32),
         selected: node.selected,
+        name_runs: runs_model(&node.name),
+        group_runs: runs_model(node.group.as_deref().unwrap_or_default()),
     }
+}
+
+/// A latency as the Bridge shows it: `-1` untested, `0` timed out, otherwise
+/// the milliseconds.
+pub fn latency_ms(latency: Latency) -> i32 {
+    match latency {
+        Latency::Untested => -1,
+        Latency::TimedOut => 0,
+        Latency::Measured(milliseconds) => saturating_i32(milliseconds),
+    }
+}
+
+/// A latency's text: `—` untested, `timeout`, otherwise `<n> ms`.
+pub fn latency_text(ms: i32) -> String {
+    match ms {
+        -1 => "—".to_string(),
+        0 => crate::i18n::t("timeout").to_string(),
+        _ => crate::i18n::fmt("{} ms", &[&ms.to_string()]),
+    }
+}
+
+/// A latency's colour: grey untested, red timed out, green under 200 ms,
+/// amber under 500 ms, red from 500 ms.
+pub fn latency_color(ms: i32) -> Color {
+    match ms {
+        -1 => Color::from_rgb_u8(0x71, 0x71, 0x7a),
+        0 => Color::from_rgb_u8(0xef, 0x44, 0x44),
+        ms if ms < 200 => Color::from_rgb_u8(0x4a, 0xde, 0x80),
+        ms if ms < 500 => Color::from_rgb_u8(0xfb, 0xbf, 0x24),
+        _ => Color::from_rgb_u8(0xef, 0x44, 0x44),
+    }
+}
+
+/// The text to show for a row: the label, or the engine name when there is
+/// no label.
+fn shown_text(label: &str, name: &str) -> String {
+    if label.is_empty() { name } else { label }.to_string()
+}
+
+/// The Select row for one member: its label, with its latency as the detail.
+pub fn member_choice(member: &MemberView) -> SelectItem {
+    let ms = latency_ms(member.latency);
+    let shown = shown_text(&member.label, &member.name);
+    SelectItem {
+        text_runs: runs_model(&shown),
+        text: shown.into(),
+        detail: latency_text(ms).into(),
+        detail_color: latency_color(ms),
+    }
+}
+
+/// The Select rows for a group's members, in configuration order.
+pub fn member_choices(members: &[MemberView]) -> ModelRc<SelectItem> {
+    ModelRc::new(VecModel::from(
+        members.iter().map(member_choice).collect::<Vec<_>>(),
+    ))
+}
+
+/// The Select rows for the groups: the label of each, with no detail.
+pub fn group_choices(groups: &[GroupView]) -> Vec<SelectItem> {
+    groups
+        .iter()
+        .map(|group| {
+            let shown = shown_text(&group.label, &group.name);
+            SelectItem {
+                text_runs: runs_model(&shown),
+                text: shown.into(),
+                detail: SharedString::default(),
+                detail_color: Color::from_argb_u8(0, 0, 0, 0),
+            }
+        })
+        .collect()
+}
+
+/// One member of a group.
+pub fn member_item(member: &MemberView) -> MemberItem {
+    let shown = shown_text(&member.label, &member.name);
+    MemberItem {
+        name: member.name.as_str().into(),
+        protocol: member.protocol.as_str().into(),
+        latency_ms: latency_ms(member.latency),
+        label_runs: runs_model(&shown),
+        label: shown.into(),
+    }
+}
+
+/// How a group's members are listed on the Proxies page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MemberOrder {
+    /// `0` as configured, `1` by latency, `2` by name. See [`ordered_members`].
+    pub sort: i32,
+    /// Whether the members whose last latency test timed out are left out.
+    pub hide_unavailable: bool,
+}
+
+/// The rank a latency sorts by: measured fastest first, then untested, then
+/// timed out, so the members that did not answer come last.
+fn latency_rank(latency: Latency) -> (u8, u32) {
+    match latency {
+        Latency::Measured(milliseconds) => (0, milliseconds),
+        Latency::Untested => (1, 0),
+        Latency::TimedOut => (2, 0),
+    }
+}
+
+/// A group's members in the order the page shows them: as configured (`0`),
+/// by latency (`1`), or by the name shown (`2`). Timed-out members are left
+/// out when `hide_unavailable` is set. Each sort is stable, so members that
+/// compare equal keep their configured order.
+pub fn ordered_members(members: &[MemberView], order: MemberOrder) -> Vec<MemberView> {
+    let mut shown: Vec<MemberView> = members
+        .iter()
+        .filter(|member| !(order.hide_unavailable && member.latency == Latency::TimedOut))
+        .cloned()
+        .collect();
+    match order.sort {
+        1 => shown.sort_by_key(|member| latency_rank(member.latency)),
+        2 => shown
+            .sort_by_cached_key(|member| shown_text(&member.label, &member.name).to_lowercase()),
+        _ => {}
+    }
+    shown
+}
+
+/// One proxy group, its members in configuration order and expanded.
+pub fn group_item(group: &GroupView) -> GroupItem {
+    group_item_in(group, MemberOrder::default(), true)
+}
+
+/// One proxy group as the Proxies page shows it: the members ordered and
+/// filtered by `order`, and `expanded` as the page keeps it. `selected_index`
+/// is the chosen member's place in the shown order, or `-1` when no member is
+/// chosen or the chosen one is hidden. `selected` is `""` when no member is
+/// known. The label is the shown name: the label, or the engine name when
+/// there is none.
+pub fn group_item_in(group: &GroupView, order: MemberOrder, expanded: bool) -> GroupItem {
+    let shown = shown_text(&group.label, &group.name);
+    let selected = group.selected.clone().unwrap_or_default();
+    let members = ordered_members(&group.members, order);
+    let selected_index = if selected.is_empty() {
+        -1
+    } else {
+        members
+            .iter()
+            .position(|member| member.name == selected)
+            .map_or(-1, saturating_i32)
+    };
+    GroupItem {
+        name: group.name.as_str().into(),
+        kind: group.kind.as_str().into(),
+        selected_runs: runs_model(&selected),
+        selected: selected.into(),
+        members: ModelRc::new(VecModel::from(
+            members.iter().map(member_item).collect::<Vec<_>>(),
+        )),
+        label_runs: runs_model(&shown),
+        label: shown.into(),
+        member_choices: member_choices(&members),
+        expanded,
+        selected_index,
+    }
+}
+
+/// A rate as the Connections page shows it: `12 KB/s`.
+pub fn speed_text(bytes_per_second: u64) -> String {
+    crate::i18n::fmt("{}/s", &[&format_bytes(bytes_per_second)])
+}
+
+/// One connection row.
+pub fn connection_item(view: &ConnectionView) -> ConnectionItem {
+    let chain = view.chain_text();
+    ConnectionItem {
+        id: view.id.as_str().into(),
+        host: view.host.as_str().into(),
+        host_runs: runs_model(&view.host),
+        destination: view.destination.as_str().into(),
+        network: view.network.as_str().into(),
+        kind: view.kind.as_str().into(),
+        process: view.process.as_str().into(),
+        chain_runs: runs_model(&chain),
+        chain: chain.into(),
+        rule: view.rule_text().into(),
+        upload: format_bytes(view.upload).into(),
+        download: format_bytes(view.download).into(),
+        upload_speed: speed_text(view.upload_speed).into(),
+        download_speed: speed_text(view.download_speed).into(),
+        start: connections::clock_text(view.started_at.as_deref()).into(),
+        duration: format_uptime(view.duration_secs).into(),
+        closed: view.closed,
+    }
+}
+
+/// The connection rows the page shows: those matching `filter`, sorted by
+/// `sort`.
+pub fn connection_rows(views: &[ConnectionView], filter: &str, sort: i32) -> Vec<ConnectionItem> {
+    let mut shown: Vec<ConnectionView> = views
+        .iter()
+        .filter(|view| connections::matches(view, filter))
+        .cloned()
+        .collect();
+    connections::sort(&mut shown, sort);
+    shown.iter().map(connection_item).collect()
+}
+
+/// Whether two connection rows hold the same values.
+fn same_connection(a: &ConnectionItem, b: &ConnectionItem) -> bool {
+    a.id == b.id
+        && a.host == b.host
+        && a.destination == b.destination
+        && a.network == b.network
+        && a.kind == b.kind
+        && a.process == b.process
+        && a.chain == b.chain
+        && a.rule == b.rule
+        && a.upload == b.upload
+        && a.download == b.download
+        && a.upload_speed == b.upload_speed
+        && a.download_speed == b.download_speed
+        && a.start == b.start
+        && a.duration == b.duration
+        && a.closed == b.closed
+}
+
+/// One announcement card. Missing links are `""`.
+pub fn announcement_item(announcement: &AnnouncementView) -> AnnouncementItem {
+    AnnouncementItem {
+        subscription_id: announcement.subscription_id.as_str().into(),
+        title: announcement.title.as_str().into(),
+        title_runs: runs_model(&announcement.title),
+        text: announcement.text.as_str().into(),
+        text_runs: runs_model(&announcement.text),
+        announce_url: announcement.announce_url.clone().unwrap_or_default().into(),
+        support_url: announcement.support_url.clone().unwrap_or_default().into(),
+        web_url: announcement.web_url.clone().unwrap_or_default().into(),
+    }
+}
+
+// The diff compares the source strings of each row, never the runs or the
+// images. The runs are made from those strings, so equal strings give equal
+// runs, and `Image` equality (two empty images differ) is not needed.
+
+/// Whether two group rows hold the same source values.
+fn same_group(current: &GroupItem, next: &GroupItem) -> bool {
+    current.name == next.name
+        && current.kind == next.kind
+        && current.selected == next.selected
+        && current.label == next.label
+        && same_model(&current.members, &next.members, same_member)
+        && same_model(&current.member_choices, &next.member_choices, same_select)
+        && current.expanded == next.expanded
+        && current.selected_index == next.selected_index
+}
+
+fn same_member(a: &MemberItem, b: &MemberItem) -> bool {
+    a.name == b.name
+        && a.protocol == b.protocol
+        && a.latency_ms == b.latency_ms
+        && a.label == b.label
+}
+
+fn same_select(a: &SelectItem, b: &SelectItem) -> bool {
+    a.text == b.text && a.detail == b.detail && a.detail_color == b.detail_color
+}
+
+fn same_node(a: &NodeItem, b: &NodeItem) -> bool {
+    a.id == b.id
+        && a.name == b.name
+        && a.protocol == b.protocol
+        && a.group == b.group
+        && a.latency_ms == b.latency_ms
+        && a.selected == b.selected
+}
+
+fn same_subscription(a: &SubscriptionItem, b: &SubscriptionItem) -> bool {
+    a.id == b.id
+        && a.label == b.label
+        && a.title == b.title
+        && a.mode == b.mode
+        && a.status == b.status
+        && a.last_updated == b.last_updated
+        && a.error == b.error
+        && a.node_count == b.node_count
+        && a.has_quota == b.has_quota
+        && a.quota_used_fraction == b.quota_used_fraction
+        && a.quota_text == b.quota_text
+        && a.expires == b.expires
+}
+
+fn same_rule(a: &RuleItem, b: &RuleItem) -> bool {
+    a.index == b.index
+        && a.kind == b.kind
+        && a.payload == b.payload
+        && a.target == b.target
+        && a.line == b.line
+        && a.enabled == b.enabled
+        && a.from_subscription == b.from_subscription
+        && a.error == b.error
+}
+
+fn same_announcement(a: &AnnouncementItem, b: &AnnouncementItem) -> bool {
+    a.subscription_id == b.subscription_id
+        && a.title == b.title
+        && a.text == b.text
+        && a.support_url == b.support_url
+        && a.web_url == b.web_url
+}
+
+fn same_log(a: &LogItem, b: &LogItem) -> bool {
+    a.time == b.time && a.level == b.level && a.source == b.source && a.message == b.message
+}
+
+fn same_warning(a: &WarningItem, b: &WarningItem) -> bool {
+    a.text == b.text
+}
+
+/// Whether two models hold the same rows in the same order, under `same`.
+fn same_model<T: Clone + 'static>(
+    current: &ModelRc<T>,
+    next: &ModelRc<T>,
+    same: fn(&T, &T) -> bool,
+) -> bool {
+    current.row_count() == next.row_count()
+        && (0..current.row_count()).all(|row| match (current.row_data(row), next.row_data(row)) {
+            (Some(a), Some(b)) => same(&a, &b),
+            _ => false,
+        })
+}
+
+/// Whether the groups model must be replaced to show `next`.
+fn groups_changed(current: &ModelRc<GroupItem>, next: &[GroupItem]) -> bool {
+    current.row_count() != next.len()
+        || next
+            .iter()
+            .enumerate()
+            .any(|(row, item)| match current.row_data(row) {
+                Some(old) => !same_group(&old, item),
+                None => true,
+            })
 }
 
 /// One rule row.
@@ -239,11 +597,15 @@ pub fn rule_item(rule: &RuleView) -> RuleItem {
         index: saturating_i32(rule.index),
         kind: rule.kind.as_str().into(),
         payload: rule.payload.as_str().into(),
+        payload_runs: runs_model(&rule.payload),
         target: rule.target.as_str().into(),
+        target_runs: runs_model(&rule.target),
         line: rule.line.as_str().into(),
+        line_runs: runs_model(&rule.line),
         enabled: rule.enabled,
         from_subscription: rule.from_subscription,
         error: SharedString::default(),
+        error_runs: runs_model(""),
     }
 }
 
@@ -254,6 +616,103 @@ pub fn rules_raw_text(rules: &[RuleView]) -> String {
         .map(|rule| rule.line.as_str())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The engine settings form, from its plain-value twin. Field for field: the
+/// Bridge model and [`EngineForm`] use the same conventions.
+pub fn engine_settings_model(form: &EngineForm) -> EngineSettingsModel {
+    EngineSettingsModel {
+        tun_stack: form.tun_stack.clone().into(),
+        tun_strict_route: form.tun_strict_route,
+        tun_auto_redirect: form.tun_auto_redirect,
+        tun_auto_detect_interface: form.tun_auto_detect_interface,
+        tun_endpoint_independent_nat: form.tun_endpoint_independent_nat,
+        tun_route_address: form.tun_route_address.clone().into(),
+        tun_route_exclude_address: form.tun_route_exclude_address.clone().into(),
+        ipv6: form.ipv6,
+        unified_delay: form.unified_delay,
+        tcp_concurrent: form.tcp_concurrent,
+        find_process_mode: form.find_process_mode.clone().into(),
+        keep_alive_interval: form.keep_alive_interval,
+        override_dns: form.override_dns,
+        dns_enable: form.dns_enable,
+        dns_enhanced_mode: form.dns_enhanced_mode.clone().into(),
+        dns_fake_ip_range: form.dns_fake_ip_range.clone().into(),
+        dns_fake_ip_filter: form.dns_fake_ip_filter.clone().into(),
+        dns_nameserver: form.dns_nameserver.clone().into(),
+        dns_fallback: form.dns_fallback.clone().into(),
+        dns_default_nameserver: form.dns_default_nameserver.clone().into(),
+        dns_proxy_server_nameserver: form.dns_proxy_server_nameserver.clone().into(),
+        dns_nameserver_policy: form.dns_nameserver_policy.clone().into(),
+        dns_use_hosts: form.dns_use_hosts,
+        hosts: form.hosts.clone().into(),
+        sniffer_enable: form.sniffer_enable,
+        sniffer_force_dns_mapping: form.sniffer_force_dns_mapping,
+        sniffer_parse_pure_ip: form.sniffer_parse_pure_ip,
+        sniffer_override_destination: form.sniffer_override_destination,
+        sniffer_sniff: form.sniffer_sniff.clone().into(),
+        sniffer_force_domain: form.sniffer_force_domain.clone().into(),
+        sniffer_skip_domain: form.sniffer_skip_domain.clone().into(),
+        geodata_mode: form.geodata_mode.clone().into(),
+        geox_geoip: form.geox_geoip.clone().into(),
+        geox_geosite: form.geox_geosite.clone().into(),
+        geox_mmdb: form.geox_mmdb.clone().into(),
+        geox_asn: form.geox_asn.clone().into(),
+        geodata_auto_update: form.geodata_auto_update,
+        geodata_update_interval_hours: form.geodata_update_interval_hours,
+        delay_test_url: form.delay_test_url.clone().into(),
+        delay_test_timeout_ms: form.delay_test_timeout_ms,
+        log_retention_lines: form.log_retention_lines,
+        engine_channel: form.engine_channel.clone().into(),
+    }
+}
+
+/// The plain-value form from what the engine settings page sent back.
+pub fn engine_form_from_model(model: &EngineSettingsModel) -> EngineForm {
+    EngineForm {
+        tun_stack: model.tun_stack.to_string(),
+        tun_strict_route: model.tun_strict_route,
+        tun_auto_redirect: model.tun_auto_redirect,
+        tun_auto_detect_interface: model.tun_auto_detect_interface,
+        tun_endpoint_independent_nat: model.tun_endpoint_independent_nat,
+        tun_route_address: model.tun_route_address.to_string(),
+        tun_route_exclude_address: model.tun_route_exclude_address.to_string(),
+        ipv6: model.ipv6,
+        unified_delay: model.unified_delay,
+        tcp_concurrent: model.tcp_concurrent,
+        find_process_mode: model.find_process_mode.to_string(),
+        keep_alive_interval: model.keep_alive_interval,
+        override_dns: model.override_dns,
+        dns_enable: model.dns_enable,
+        dns_enhanced_mode: model.dns_enhanced_mode.to_string(),
+        dns_fake_ip_range: model.dns_fake_ip_range.to_string(),
+        dns_fake_ip_filter: model.dns_fake_ip_filter.to_string(),
+        dns_nameserver: model.dns_nameserver.to_string(),
+        dns_fallback: model.dns_fallback.to_string(),
+        dns_default_nameserver: model.dns_default_nameserver.to_string(),
+        dns_proxy_server_nameserver: model.dns_proxy_server_nameserver.to_string(),
+        dns_nameserver_policy: model.dns_nameserver_policy.to_string(),
+        dns_use_hosts: model.dns_use_hosts,
+        hosts: model.hosts.to_string(),
+        sniffer_enable: model.sniffer_enable,
+        sniffer_force_dns_mapping: model.sniffer_force_dns_mapping,
+        sniffer_parse_pure_ip: model.sniffer_parse_pure_ip,
+        sniffer_override_destination: model.sniffer_override_destination,
+        sniffer_sniff: model.sniffer_sniff.to_string(),
+        sniffer_force_domain: model.sniffer_force_domain.to_string(),
+        sniffer_skip_domain: model.sniffer_skip_domain.to_string(),
+        geodata_mode: model.geodata_mode.to_string(),
+        geox_geoip: model.geox_geoip.to_string(),
+        geox_geosite: model.geox_geosite.to_string(),
+        geox_mmdb: model.geox_mmdb.to_string(),
+        geox_asn: model.geox_asn.to_string(),
+        geodata_auto_update: model.geodata_auto_update,
+        geodata_update_interval_hours: model.geodata_update_interval_hours,
+        delay_test_url: model.delay_test_url.to_string(),
+        delay_test_timeout_ms: model.delay_test_timeout_ms,
+        log_retention_lines: model.log_retention_lines,
+        engine_channel: model.engine_channel.to_string(),
+    }
 }
 
 /// The settings form, from the saved preferences. A value that is not set is
@@ -271,8 +730,39 @@ pub fn settings_model(prefs: &UserPreferences) -> SettingsModel {
         tun_enabled: prefs.tun.enabled,
         tun_device: prefs.tun.device.clone().unwrap_or_default().into(),
         tun_mtu: prefs.tun.mtu.map_or(NOT_SET, i32::from),
+        tun_auto_route: prefs.tun.auto_route.unwrap_or(true),
+        tun_dns_hijack: dns_hijack_text(prefs.tun.dns_hijack.as_deref()).into(),
         auto_refresh_minutes: prefs.auto_refresh_minutes.map_or(NOT_SET, saturating_i32),
+        auto_close_connections_on_switch: prefs.auto_close_connections_on_switch,
+        system_proxy: prefs.system_proxy,
+        sysproxy_mode: prefs.sysproxy_mode.as_str().into(),
+        sysproxy_bypass: prefs.sysproxy_bypass.clone().into(),
+        pac_script: prefs.pac_script.clone().into(),
+        autostart: prefs.autostart,
+        silent_start: prefs.silent_start,
+        auto_connect: prefs.auto_connect_on_start,
+        close_to_tray: prefs.close_to_tray,
+        language: prefs.language.as_str().into(),
     }
+}
+
+/// The DNS hijack targets as the form shows them: one per line.
+fn dns_hijack_text(targets: Option<&[String]>) -> String {
+    targets
+        .map(|targets| targets.join("\n"))
+        .unwrap_or_default()
+}
+
+/// The DNS hijack targets from the form. Blank lines are dropped, and an
+/// empty form is "not set", which the engine reads as its default.
+fn dns_hijack_lines(text: &str) -> Option<Vec<String>> {
+    let targets: Vec<String> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    (!targets.is_empty()).then_some(targets)
 }
 
 /// The settings form as plain Rust values, so it can cross into a task.
@@ -298,8 +788,32 @@ pub struct SettingsInput {
     pub tun_device: String,
     /// [`NOT_SET`] means the engine default; otherwise `1280` to `9000`.
     pub tun_mtu: i32,
+    /// Whether the engine installs the TUN routes on startup.
+    pub tun_auto_route: bool,
+    /// The DNS hijack targets, one `host:port` per line. Empty is not set.
+    pub tun_dns_hijack: String,
     /// [`NOT_SET`] means the app default; `0` is manual refresh only.
     pub auto_refresh_minutes: i32,
+    /// Whether choosing a group's member closes the connections through it.
+    pub auto_close_connections_on_switch: bool,
+    /// Whether the operating system's proxy points at the engine.
+    pub system_proxy: bool,
+    /// `manual` or `pac`.
+    pub sysproxy_mode: String,
+    /// The bypass list, in the operating system's syntax.
+    pub sysproxy_bypass: String,
+    /// The PAC script, with `%mixed-port%` for the engine's port.
+    pub pac_script: String,
+    /// Whether Starpod starts at login.
+    pub autostart: bool,
+    /// Whether a login start stays in the tray.
+    pub silent_start: bool,
+    /// Whether Starpod connects once its state has loaded.
+    pub auto_connect: bool,
+    /// Whether closing the window hides Starpod to the tray.
+    pub close_to_tray: bool,
+    /// The saved language: `""` follows the system, `"en"` or `"ru"` pins it.
+    pub language: String,
 }
 
 impl SettingsInput {
@@ -316,9 +830,32 @@ impl SettingsInput {
             tun_enabled: model.tun_enabled,
             tun_device: model.tun_device.to_string(),
             tun_mtu: model.tun_mtu,
+            tun_auto_route: model.tun_auto_route,
+            tun_dns_hijack: model.tun_dns_hijack.to_string(),
             auto_refresh_minutes: model.auto_refresh_minutes,
+            auto_close_connections_on_switch: model.auto_close_connections_on_switch,
+            system_proxy: model.system_proxy,
+            sysproxy_mode: model.sysproxy_mode.to_string(),
+            sysproxy_bypass: model.sysproxy_bypass.to_string(),
+            pac_script: model.pac_script.to_string(),
+            autostart: model.autostart,
+            silent_start: model.silent_start,
+            auto_connect: model.auto_connect,
+            close_to_tray: model.close_to_tray,
+            language: model.language.to_string(),
         }
     }
+}
+
+/// The saved language for a form value: `"en"` or `"ru"`, or `""` for the
+/// system language. Anything else is the system language.
+pub fn normalize_language(text: &str) -> String {
+    match text.trim() {
+        "en" => "en",
+        "ru" => "ru",
+        _ => "",
+    }
+    .to_string()
 }
 
 fn invalid(message: impl Into<String>) -> AppError {
@@ -429,6 +966,16 @@ pub fn build_preferences(
         |value| input.tun_device.trim() == value.as_deref().unwrap_or(""),
         || Ok(non_empty(input.tun_device.trim())),
     )?;
+    let auto_route = keep_unless_edited(
+        current.tun.auto_route,
+        |value| input.tun_auto_route == value.unwrap_or(true),
+        || Ok(Some(input.tun_auto_route)),
+    )?;
+    let dns_hijack = keep_unless_edited(
+        current.tun.dns_hijack.clone(),
+        |value| dns_hijack_lines(&input.tun_dns_hijack) == *value,
+        || Ok(dns_hijack_lines(&input.tun_dns_hijack)),
+    )?;
     let auto_refresh_minutes = keep_unless_edited(
         current.auto_refresh_minutes,
         |value| input.auto_refresh_minutes == value.map_or(NOT_SET, saturating_i32),
@@ -441,6 +988,7 @@ pub fn build_preferences(
                 .map_err(|_| invalid("the automatic refresh interval cannot be negative"))
         },
     )?;
+    let (sysproxy_mode, pac_script) = sysproxy_fields(input)?;
     Ok(UserPreferences {
         mixed_port,
         socks_port,
@@ -453,12 +1001,40 @@ pub fn build_preferences(
             enabled: input.tun_enabled,
             device,
             mtu,
-            auto_route: current.tun.auto_route,
-            dns_hijack: current.tun.dns_hijack.clone(),
+            auto_route,
+            dns_hijack,
         },
         auto_refresh_minutes,
+        auto_close_connections_on_switch: input.auto_close_connections_on_switch,
+        system_proxy: input.system_proxy,
+        sysproxy_mode,
+        sysproxy_bypass: input.sysproxy_bypass.trim().to_string(),
+        pac_script,
+        autostart: input.autostart,
+        silent_start: input.silent_start,
+        auto_connect_on_start: input.auto_connect,
+        close_to_tray: input.close_to_tray,
+        language: normalize_language(&input.language),
         ..current.clone()
     })
+}
+
+/// The PAC mode and script from the form. A script that does not define
+/// `FindProxyForURL` would make the system refuse every request, so it is
+/// refused here instead.
+fn sysproxy_fields(input: &SettingsInput) -> Result<(SystemProxyMode, String), AppError> {
+    let mode = SystemProxyMode::from_str_exact(&input.sysproxy_mode).ok_or_else(|| {
+        invalid(format!(
+            "“{}” is not a system proxy mode",
+            input.sysproxy_mode
+        ))
+    })?;
+    if !input.pac_script.contains("FindProxyForURL") {
+        return Err(invalid(
+            "the PAC script must define FindProxyForURL, or it cannot be used",
+        ));
+    }
+    Ok((mode, input.pac_script.clone()))
 }
 
 /// Parse a routing mode from the UI.
@@ -492,8 +1068,9 @@ pub fn rule_line(kind: &str, payload: &str, target: &str) -> String {
 /// Parse one engine rule line. A rejected line is reported as the reason.
 ///
 /// A line the grammar accepts but the app cannot supply the target of
-/// (`RULE-SET`, `SUB-RULE`) is rejected here with the reason, so the editor
-/// shows it at once rather than after a save.
+/// (`SUB-RULE`) is rejected here with the reason, so the editor shows it at
+/// once rather than after a save. A `RULE-SET` is accepted: whether its
+/// provider exists is checked when the configuration is composed.
 pub fn parse_rule_line(line: &str) -> Result<RuleSpec, AppError> {
     let spec = parse_line(line).map_err(AppError::Invalid)?;
     match unsupported_rule(&spec) {
@@ -533,28 +1110,39 @@ pub fn detect_level(text: &str) -> &'static str {
 /// A log line the service stamped: `<rfc3339>  <text>`.
 fn app_item(line: &str) -> LogItem {
     let (time, message) = line.split_once("  ").unwrap_or(("", line));
+    log_item(time, detect_level(message), "app", message)
+}
+
+/// One Logs row. The message and the source carry their runs.
+pub fn log_item(time: &str, level: &str, source: &str, message: &str) -> LogItem {
     LogItem {
         time: time.into(),
-        level: detect_level(message).into(),
-        source: "app".into(),
+        level: level.into(),
+        source: source.into(),
+        source_runs: runs_model(source),
         message: message.into(),
+        message_runs: runs_model(message),
     }
 }
 
 /// An engine line. The engine's text carries no timestamp of its own here.
 fn engine_item(line: &str) -> LogItem {
-    LogItem {
-        time: SharedString::default(),
-        level: detect_level(line).into(),
-        source: "engine".into(),
-        message: line.into(),
-    }
+    log_item("", detect_level(line), "engine", line)
 }
 
 /// Whether a line of level `level` passes the Logs filter. `all` and the
 /// empty filter pass everything.
 pub fn level_passes(filter: &str, level: &str) -> bool {
-    filter.is_empty() || filter == "all" || filter == level
+    filter.is_empty() || filter == "all" || canonical_level(filter) == canonical_level(level)
+}
+
+/// One spelling for each level: `warn` is `warning`, the spelling the Logs
+/// screen and [`detect_level`] use.
+fn canonical_level(level: &str) -> &str {
+    match level {
+        "warn" => "warning",
+        other => other,
+    }
 }
 
 /// The lines in a rolling window that have not been cleared. `start` is the
@@ -663,6 +1251,19 @@ pub struct ViewState {
     pub engine_cleared_before: u64,
     applied_prefs: Option<UserPreferences>,
     applied_rules: Option<String>,
+    /// The Connections page's filter, as the UI last reported it.
+    pub connections_filter: String,
+    /// The Connections page's sort (see [`connections::SORT_NEWEST`]).
+    pub connections_sort: i32,
+    /// The Proxies page's member sort (`0`, `1` or `2`), as the UI last reported it.
+    pub proxies_sort: i32,
+    /// Whether the Proxies page hides timed-out members, as the UI last reported it.
+    pub hide_unavailable: bool,
+    /// The groups the Proxies page has collapsed. Every other group is expanded.
+    pub collapsed_groups: BTreeSet<String>,
+    /// Whether the list settings were taken from the saved preferences. Until
+    /// they are, the page's own values are not saved over the saved ones.
+    pub list_prefs_loaded: bool,
 }
 
 impl ViewState {
@@ -674,6 +1275,64 @@ impl ViewState {
         self.node_filter = node_filter.to_string();
         self.log_filter = log_filter.to_string();
         true
+    }
+
+    /// Store the Connections and Proxies list controls the UI shows. Returns
+    /// whether any changed.
+    pub fn set_list_controls(
+        &mut self,
+        connections_filter: &str,
+        connections_sort: i32,
+        proxies_sort: i32,
+        hide_unavailable: bool,
+    ) -> bool {
+        let changed = self.connections_filter != connections_filter
+            || self.connections_sort != connections_sort
+            || self.proxies_sort != proxies_sort
+            || self.hide_unavailable != hide_unavailable;
+        if changed {
+            self.connections_filter = connections_filter.to_string();
+            self.connections_sort = connections_sort;
+            self.proxies_sort = proxies_sort;
+            self.hide_unavailable = hide_unavailable;
+        }
+        changed
+    }
+
+    /// Take the Proxies list settings from the saved preferences, once.
+    /// Returns whether they were taken now.
+    pub fn load_list_prefs(&mut self, prefs: &UserPreferences) -> bool {
+        if self.list_prefs_loaded {
+            return false;
+        }
+        self.list_prefs_loaded = true;
+        self.proxies_sort = i32::from(prefs.proxies_sort);
+        self.hide_unavailable = prefs.hide_unavailable;
+        true
+    }
+
+    /// Flip one group between expanded and collapsed.
+    pub fn toggle_group(&mut self, group: &str) {
+        if !self.collapsed_groups.remove(group) {
+            self.collapsed_groups.insert(group.to_string());
+        }
+    }
+
+    /// Expand every group (`expanded` true), or collapse the named groups.
+    pub fn set_all_expanded(&mut self, expanded: bool, groups: impl IntoIterator<Item = String>) {
+        if expanded {
+            self.collapsed_groups.clear();
+        } else {
+            self.collapsed_groups.extend(groups);
+        }
+    }
+
+    /// The order the Proxies page shows each group's members in.
+    pub fn member_order(&self) -> MemberOrder {
+        MemberOrder {
+            sort: self.proxies_sort,
+            hide_unavailable: self.hide_unavailable,
+        }
     }
 
     /// Hide every line seen so far.
@@ -692,21 +1351,26 @@ impl ViewState {
     }
 }
 
-/// Whether the model already holds exactly `next`.
-fn matches_model<T: Clone + PartialEq + 'static>(model: &ModelRc<T>, next: &[T]) -> bool {
+/// Whether the model already holds exactly `next`, row by row under `same`.
+fn matches_model<T: Clone + 'static>(
+    model: &ModelRc<T>,
+    next: &[T],
+    same: fn(&T, &T) -> bool,
+) -> bool {
     model.row_count() == next.len()
         && next
             .iter()
             .enumerate()
-            .all(|(row, item)| model.row_data(row).as_ref() == Some(item))
+            .all(|(row, item)| model.row_data(row).is_some_and(|old| same(&old, item)))
 }
 
 /// A new model holding `next`, or `None` when `current` already holds it.
-fn changed_model<T: Clone + PartialEq + 'static>(
+fn changed_model<T: Clone + 'static>(
     current: ModelRc<T>,
     next: Vec<T>,
+    same: fn(&T, &T) -> bool,
 ) -> Option<ModelRc<T>> {
-    if matches_model(&current, &next) {
+    if matches_model(&current, &next, same) {
         None
     } else {
         Some(ModelRc::new(VecModel::from(next)))
@@ -723,8 +1387,136 @@ pub fn apply_snapshot(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState)
     set_servers(bridge, snap, view);
     set_rules(bridge, snap, view);
     set_logs(bridge, snap, view);
+    set_connections(bridge, snap, view);
     set_settings(bridge, snap, view);
     set_shell(bridge, snap);
+    set_profile(bridge, snap);
+}
+
+/// The Home page profile card, the Global-mode gate, the device-header switch
+/// and the live session traffic.
+fn set_profile(bridge: &Bridge<'_>, snap: &AppSnapshot) {
+    let previous = bridge.get_profile_card();
+    let card = profile_card_item(snap.profile_card.as_ref(), &previous);
+    if !same_profile_card(&previous, &card) {
+        bridge.set_profile_card(card);
+    }
+    bridge.set_global_mode_allowed(snap.global_mode_allowed);
+    bridge.set_send_device_id(snap.preferences.send_device_id);
+    // The engine's totals since it started. They come from the connections
+    // poll, so they are shown only while the engine runs.
+    let running = snap.engine.phase.is_running();
+    bridge.set_session_traffic_visible(running);
+    let (upload, download) = if running {
+        (
+            format_bytes(snap.connections.upload_total),
+            format_bytes(snap.connections.download_total),
+        )
+    } else {
+        (String::new(), String::new())
+    };
+    bridge.set_session_upload(upload.into());
+    bridge.set_session_download(download.into());
+}
+
+/// The profile card as the Bridge shows it. The logo is loaded from its file
+/// only when its path changed, so a snapshot does not reread the image.
+pub fn profile_card_item(
+    card: Option<&ProfileCard>,
+    previous: &ProfileCardItem,
+) -> ProfileCardItem {
+    let Some(card) = card else {
+        return ProfileCardItem::default();
+    };
+    let logo_path = card
+        .logo_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let (logo, has_logo) = if logo_path.is_empty() {
+        (Image::default(), false)
+    } else if previous.has_logo && previous.logo_path.as_str() == logo_path {
+        (previous.logo.clone(), true)
+    } else {
+        match Image::load_from_path(std::path::Path::new(&logo_path)) {
+            Ok(image) => (image, true),
+            Err(_) => (Image::default(), false),
+        }
+    };
+
+    let used = card.traffic_used_bytes;
+    let total = card.traffic_total_bytes;
+    let (traffic_text, remaining_text, quota_used_fraction) = if !card.has_quota {
+        (String::new(), String::new(), 0.0)
+    } else if total > 0 {
+        (
+            crate::i18n::fmt("{} of {}", &[&format_bytes(used), &format_bytes(total)]),
+            crate::i18n::fmt("{} left", &[&format_bytes(total.saturating_sub(used))]),
+            (used as f64 / total as f64).clamp(0.0, 1.0) as f32,
+        )
+    } else {
+        (
+            crate::i18n::fmt("{} used", &[&format_bytes(used)]),
+            crate::i18n::t("Unlimited").to_string(),
+            0.0,
+        )
+    };
+    let expires_text = card.expires.as_deref().map_or_else(String::new, |text| {
+        let date = text.get(..10).unwrap_or(text);
+        if card.expired {
+            crate::i18n::fmt("Expired {}", &[date])
+        } else {
+            crate::i18n::fmt("Expires {}", &[date])
+        }
+    });
+    let announce = card.announce.clone().unwrap_or_default();
+
+    ProfileCardItem {
+        present: true,
+        subscription_id: card.subscription_id.as_str().into(),
+        title: card.title.as_str().into(),
+        title_runs: runs_model(&card.title),
+        has_logo,
+        logo,
+        logo_path: logo_path.into(),
+        announce: announce.as_str().into(),
+        announce_runs: runs_model(&announce),
+        announce_url: card.announce_url.clone().unwrap_or_default().into(),
+        support_url: card.support_url.clone().unwrap_or_default().into(),
+        web_url: card.web_url.clone().unwrap_or_default().into(),
+        web_page_name: card.web_page_name.clone().unwrap_or_default().into(),
+        traffic_text: traffic_text.into(),
+        remaining_text: remaining_text.into(),
+        expires_text: expires_text.into(),
+        days_remaining: i32::try_from(card.days_remaining).unwrap_or(-1),
+        expiring_soon: card.expiring_soon,
+        device_limit: card.device_limit,
+        has_quota: card.has_quota,
+        quota_used_fraction,
+    }
+}
+
+/// Whether two cards show the same thing. The logo image itself is not
+/// compared: its path and `has_logo` stand for it.
+fn same_profile_card(a: &ProfileCardItem, b: &ProfileCardItem) -> bool {
+    a.present == b.present
+        && a.subscription_id == b.subscription_id
+        && a.title == b.title
+        && a.has_logo == b.has_logo
+        && a.logo_path == b.logo_path
+        && a.announce == b.announce
+        && a.announce_url == b.announce_url
+        && a.support_url == b.support_url
+        && a.web_url == b.web_url
+        && a.web_page_name == b.web_page_name
+        && a.traffic_text == b.traffic_text
+        && a.remaining_text == b.remaining_text
+        && a.expires_text == b.expires_text
+        && a.days_remaining == b.days_remaining
+        && a.expiring_soon == b.expiring_soon
+        && a.device_limit == b.device_limit
+        && a.has_quota == b.has_quota
+        && a.quota_used_fraction == b.quota_used_fraction
 }
 
 /// The text the Bridge shows when Connect is blocked. Empty when it is allowed.
@@ -735,18 +1527,30 @@ pub fn connect_blocked_text(snap: &AppSnapshot) -> String {
 fn set_engine(bridge: &Bridge<'_>, snap: &AppSnapshot) {
     bridge.set_loaded(true);
     bridge.set_engine_phase(phase_str(snap.engine.phase).into());
-    bridge.set_engine_error(snap.engine.error.clone().unwrap_or_default().into());
+    let engine_error = snap.engine.error.clone().unwrap_or_default();
+    bridge.set_engine_error_runs(runs_model(&engine_error));
+    bridge.set_engine_error(engine_error.into());
     bridge.set_engine_installed(snap.engine.installed);
-    bridge.set_connect_blocked_reason(connect_blocked_text(snap).into());
+    let update = &snap.engine_update;
+    bridge
+        .set_engine_installed_version(update.installed_version.clone().unwrap_or_default().into());
+    bridge.set_engine_latest_version(update.latest_version.clone().unwrap_or_default().into());
+    bridge.set_engine_update_available(update.update_available);
+    // Unix seconds as the Bridge's `int`; 0 means never.
+    let geo = snap.geo_updated_at.and_then(|at| i32::try_from(at).ok());
+    bridge.set_geo_updated_at(geo.unwrap_or(0));
+    let blocked = connect_blocked_text(snap);
+    bridge.set_connect_blocked_reason_runs(runs_model(&blocked));
+    bridge.set_connect_blocked_reason(blocked.into());
     bridge.set_engine_version(snap.engine.version.clone().unwrap_or_default().into());
     bridge.set_mode(snap.mode.as_str().into());
-    bridge.set_current_node(
-        snap.current_node
-            .as_ref()
-            .map(|node| node.name.clone())
-            .unwrap_or_default()
-            .into(),
-    );
+    let current = snap
+        .current_node
+        .as_ref()
+        .map(|node| node.name.clone())
+        .unwrap_or_default();
+    bridge.set_current_node_runs(runs_model(&current));
+    bridge.set_current_node(current.into());
     bridge.set_uptime(
         snap.engine
             .uptime_secs
@@ -760,7 +1564,8 @@ fn set_engine(bridge: &Bridge<'_>, snap: &AppSnapshot) {
 fn set_servers(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
     let subscriptions: Vec<SubscriptionItem> =
         snap.subscriptions.iter().map(subscription_item).collect();
-    if let Some(model) = changed_model(bridge.get_subscriptions(), subscriptions) {
+    if let Some(model) = changed_model(bridge.get_subscriptions(), subscriptions, same_subscription)
+    {
         bridge.set_subscriptions(model);
     }
     let nodes: Vec<NodeItem> = snap
@@ -769,18 +1574,40 @@ fn set_servers(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
         .filter(|node| node_matches(node, &view.node_filter))
         .map(node_item)
         .collect();
-    if let Some(model) = changed_model(bridge.get_nodes(), nodes) {
+    if let Some(model) = changed_model(bridge.get_nodes(), nodes, same_node) {
         bridge.set_nodes(model);
+    }
+    let order = view.member_order();
+    let groups: Vec<GroupItem> = snap
+        .groups
+        .iter()
+        .map(|group| group_item_in(group, order, !view.collapsed_groups.contains(&group.name)))
+        .collect();
+    if groups_changed(&bridge.get_groups(), &groups) {
+        bridge.set_groups(ModelRc::new(VecModel::from(groups)));
+    }
+    let primary = snap.primary_group.clone().unwrap_or_default();
+    bridge.set_primary_group_runs(runs_model(&primary));
+    bridge.set_primary_group(primary.into());
+    let group_rows = group_choices(&snap.groups);
+    if let Some(model) = changed_model(bridge.get_group_choices(), group_rows, same_select) {
+        bridge.set_group_choices(model);
+    }
+    let announcements: Vec<AnnouncementItem> =
+        snap.announcements.iter().map(announcement_item).collect();
+    if let Some(model) = changed_model(bridge.get_announcements(), announcements, same_announcement)
+    {
+        bridge.set_announcements(model);
     }
 }
 
 fn set_rules(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
     let user: Vec<RuleItem> = snap.rules.iter().map(rule_item).collect();
-    if let Some(model) = changed_model(bridge.get_user_rules(), user) {
+    if let Some(model) = changed_model(bridge.get_user_rules(), user, same_rule) {
         bridge.set_user_rules(model);
     }
     let subscription: Vec<RuleItem> = snap.subscription_rules.iter().map(rule_item).collect();
-    if let Some(model) = changed_model(bridge.get_subscription_rules(), subscription) {
+    if let Some(model) = changed_model(bridge.get_subscription_rules(), subscription, same_rule) {
         bridge.set_subscription_rules(model);
     }
     let kinds: Vec<SharedString> = snap
@@ -788,7 +1615,7 @@ fn set_rules(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
         .iter()
         .map(|kind| SharedString::from(kind.token.as_str()))
         .collect();
-    if let Some(model) = changed_model(bridge.get_rule_kinds(), kinds) {
+    if let Some(model) = changed_model(bridge.get_rule_kinds(), kinds, |a, b| a == b) {
         bridge.set_rule_kinds(model);
     }
     let targets: Vec<SharedString> = snap
@@ -796,7 +1623,7 @@ fn set_rules(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
         .iter()
         .map(|target| SharedString::from(target.as_str()))
         .collect();
-    if let Some(model) = changed_model(bridge.get_rule_targets(), targets) {
+    if let Some(model) = changed_model(bridge.get_rule_targets(), targets, |a, b| a == b) {
         bridge.set_rule_targets(model);
     }
     let raw = rules_raw_text(&snap.rules);
@@ -806,14 +1633,40 @@ fn set_rules(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
 }
 
 fn set_logs(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
-    if let Some(model) = changed_model(bridge.get_logs(), log_items(snap, view)) {
+    if let Some(model) = changed_model(bridge.get_logs(), log_items(snap, view), same_log) {
         bridge.set_logs(model);
     }
+}
+
+/// The Connections page: the open connections and the closed history, each
+/// filtered and sorted by the page's controls, and the engine's totals.
+fn set_connections(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
+    let active = connection_rows(
+        &snap.connections.active,
+        &view.connections_filter,
+        view.connections_sort,
+    );
+    if let Some(model) = changed_model(bridge.get_connections(), active, same_connection) {
+        bridge.set_connections(model);
+    }
+    let closed = connection_rows(
+        &snap.connections.closed,
+        &view.connections_filter,
+        view.connections_sort,
+    );
+    if let Some(model) = changed_model(bridge.get_closed_connections(), closed, same_connection) {
+        bridge.set_closed_connections(model);
+    }
+    bridge.set_connections_active_count(saturating_i32(snap.connections.active.len()));
+    bridge.set_connections_total_upload(format_bytes(snap.connections.upload_total).into());
+    bridge.set_connections_total_download(format_bytes(snap.connections.download_total).into());
 }
 
 fn set_settings(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
     if view.applied_prefs.as_ref() != Some(&snap.preferences) {
         bridge.set_settings(settings_model(&snap.preferences));
+        let engine = EngineForm::from_prefs(&snap.preferences);
+        bridge.set_engine_settings(engine_settings_model(&engine));
     }
 }
 
@@ -827,13 +1680,26 @@ fn set_shell(bridge: &Bridge<'_>, snap: &AppSnapshot) {
             .into(),
     );
     bridge.set_data_dir(snap.data_dir.display().to_string().into());
+    bridge.set_system_proxy_active(snap.system_proxy_active);
+    bridge.set_system_proxy_error(snap.system_proxy_error.clone().unwrap_or_default().into());
     let warnings: Vec<SharedString> = snap
         .warnings
         .iter()
         .map(|warning| SharedString::from(warning.as_str()))
         .collect();
-    if let Some(model) = changed_model(bridge.get_warnings(), warnings) {
+    if let Some(model) = changed_model(bridge.get_warnings(), warnings, |a, b| a == b) {
         bridge.set_warnings(model);
+    }
+    let warning_items: Vec<WarningItem> = snap
+        .warnings
+        .iter()
+        .map(|warning| WarningItem {
+            text: warning.as_str().into(),
+            runs: runs_model(warning),
+        })
+        .collect();
+    if let Some(model) = changed_model(bridge.get_warning_items(), warning_items, same_warning) {
+        bridge.set_warning_items(model);
     }
 }
 
@@ -841,6 +1707,14 @@ fn set_shell(bridge: &Bridge<'_>, snap: &AppSnapshot) {
 mod tests {
     use super::*;
     use crate::EngineView;
+
+    #[test]
+    fn the_engine_form_survives_a_trip_through_the_bridge_model() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let form = EngineForm::from_prefs(&UserPreferences::default());
+        let model = engine_settings_model(&form);
+        assert_eq!(engine_form_from_model(&model), form);
+    }
 
     fn node(name: &str, group: Option<&str>, protocol: &str) -> NodeView {
         NodeView {
@@ -865,6 +1739,17 @@ mod tests {
             group_count: 2,
             quota,
             has_auth_header: false,
+            title: "Main".to_string(),
+            announce: None,
+            support_url: None,
+            web_url: None,
+            web_page_name: None,
+            announce_url: None,
+            logo_path: None,
+            interval_secs: 3600,
+            global_mode_disabled: false,
+            expand_proxy_groups: None,
+            device_limit: false,
         }
     }
 
@@ -874,6 +1759,7 @@ mod tests {
 
     #[test]
     fn a_blocked_connect_reaches_the_bridge_as_its_reason_and_an_allowed_one_as_empty() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let blocked = AppSnapshot {
             connect_blocked: Some(crate::snapshot::NO_SUBSCRIPTION_REASON.to_string()),
             ..AppSnapshot::default()
@@ -884,6 +1770,7 @@ mod tests {
 
     #[test]
     fn uptime_reads_as_hours_minutes_and_seconds() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         assert_eq!(format_uptime(3720), "1h 02m");
         assert_eq!(format_uptime(249), "4m 09s");
         assert_eq!(format_uptime(42), "42s");
@@ -891,6 +1778,7 @@ mod tests {
 
     #[test]
     fn bytes_use_decimal_units_without_a_trailing_point_zero() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         assert_eq!(format_bytes(512), "512 B");
         assert_eq!(format_bytes(12_300_000_000), "12.3 GB");
         assert_eq!(format_bytes(100_000_000_000), "100 GB");
@@ -899,6 +1787,7 @@ mod tests {
 
     #[test]
     fn quota_shows_a_fraction_and_text_only_for_a_known_total() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let known = SubscriptionQuota {
             used: 12_300_000_000,
             total: Some(100_000_000_000),
@@ -918,6 +1807,7 @@ mod tests {
 
     #[test]
     fn a_subscription_row_carries_its_quota_and_error() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let item = subscription_item(&subscription(Some(SubscriptionQuota {
             used: 1_000_000_000,
             total: Some(4_000_000_000),
@@ -935,6 +1825,7 @@ mod tests {
 
     #[test]
     fn a_subscription_without_quota_has_no_quota_fields() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let item = subscription_item(&subscription(None));
         assert!(!item.has_quota);
         assert_eq!(item.quota_text, "");
@@ -944,6 +1835,7 @@ mod tests {
 
     #[test]
     fn engine_phases_and_statuses_use_the_contract_words() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         assert_eq!(phase_str(EnginePhase::Stopped), "stopped");
         assert_eq!(phase_str(EnginePhase::Failed), "failed");
         assert_eq!(status_str(SubscriptionStatus::NeverFetched), "never");
@@ -952,6 +1844,7 @@ mod tests {
 
     #[test]
     fn node_filter_is_a_case_insensitive_substring_match() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let tokyo = node("Tokyo-01", Some("Asia"), "vless");
         assert!(node_matches(&tokyo, ""));
         assert!(node_matches(&tokyo, "   "));
@@ -963,6 +1856,7 @@ mod tests {
 
     #[test]
     fn an_untested_node_has_latency_minus_one() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let mut fast = node("a", None, "ss");
         assert_eq!(node_item(&fast).latency_ms, -1);
         assert_eq!(node_item(&fast).group, "");
@@ -971,7 +1865,81 @@ mod tests {
     }
 
     #[test]
+    fn a_member_latency_is_minus_one_untested_and_zero_timed_out() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        assert_eq!(latency_ms(Latency::Untested), -1);
+        assert_eq!(latency_ms(Latency::TimedOut), 0);
+        assert_eq!(latency_ms(Latency::Measured(131)), 131);
+    }
+
+    #[test]
+    fn a_group_carries_its_selection_and_members_in_order() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let view = GroupView {
+            name: "Airport / Proxy".to_string(),
+            label: "Proxy".to_string(),
+            kind: "select".to_string(),
+            selected: None,
+            members: vec![
+                MemberView {
+                    name: "Airport / Node A".to_string(),
+                    label: "Node A".to_string(),
+                    protocol: "trojan".to_string(),
+                    latency: Latency::TimedOut,
+                },
+                MemberView {
+                    name: "DIRECT".to_string(),
+                    label: "DIRECT".to_string(),
+                    protocol: "direct".to_string(),
+                    latency: Latency::Untested,
+                },
+            ],
+        };
+        let item = group_item(&view);
+        assert_eq!(item.name, "Airport / Proxy", "the engine name is kept");
+        assert_eq!(item.label, "Proxy", "the shown name drops the prefix");
+        assert_eq!(item.selected, "", "an unknown selection is empty");
+        let members: Vec<MemberItem> = item.members.iter().collect();
+        assert_eq!(members[0].name, "Airport / Node A");
+        assert_eq!(members[0].label, "Node A");
+        assert_eq!(members[0].latency_ms, 0);
+        assert_eq!(members[1].latency_ms, -1);
+    }
+
+    #[test]
+    fn a_group_row_is_unchanged_only_when_every_field_is() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let view = GroupView {
+            name: "Proxy".to_string(),
+            label: "Proxy".to_string(),
+            kind: "select".to_string(),
+            selected: Some("A".to_string()),
+            members: vec![MemberView {
+                name: "A".to_string(),
+                label: "A".to_string(),
+                protocol: "ss".to_string(),
+                latency: Latency::Measured(10),
+            }],
+        };
+        let model = ModelRc::new(VecModel::from(vec![group_item(&view)]));
+        assert!(!groups_changed(&model, &[group_item(&view)]));
+
+        let mut moved = view.clone();
+        moved.members[0].latency = Latency::Measured(11);
+        assert!(groups_changed(&model, &[group_item(&moved)]));
+    }
+
+    #[test]
+    fn a_subscription_row_carries_its_title() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let mut view = subscription(None);
+        view.title = "Foxgirls VPN".to_string();
+        assert_eq!(subscription_item(&view).title, "Foxgirls VPN");
+    }
+
+    #[test]
     fn rule_raw_text_joins_the_lines_in_order() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let rule = |index: usize, line: &str| RuleView {
             index,
             id: Some(format!("r{index}")),
@@ -989,6 +1957,7 @@ mod tests {
 
     #[test]
     fn unset_values_show_as_not_set_and_chosen_values_as_numbers() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let prefs = UserPreferences {
             mixed_port: None,
             socks_port: Some(7891),
@@ -1011,6 +1980,7 @@ mod tests {
 
     #[test]
     fn default_preferences_round_trip_to_identity() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let current = UserPreferences::default();
         let saved = build_preferences(&current, &input_from(&current)).unwrap();
         assert_eq!(saved, current);
@@ -1018,6 +1988,7 @@ mod tests {
 
     #[test]
     fn populated_preferences_round_trip_to_identity() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let current = UserPreferences {
             mixed_port: Some(7890),
             socks_port: Some(1080),
@@ -1041,6 +2012,7 @@ mod tests {
 
     #[test]
     fn cleared_fields_save_as_not_set() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let current = UserPreferences {
             mixed_port: Some(7890),
             socks_port: Some(1080),
@@ -1074,6 +2046,7 @@ mod tests {
 
     #[test]
     fn an_explicit_refresh_of_sixty_is_saved_not_dropped() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let current = UserPreferences::default();
         let mut input = input_from(&current);
         input.auto_refresh_minutes = 60;
@@ -1083,6 +2056,7 @@ mod tests {
 
     #[test]
     fn the_tun_mtu_is_checked_only_when_a_value_is_entered() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let current = UserPreferences::default();
         let mut input = input_from(&current);
         input.tun_mtu = NOT_SET;
@@ -1107,6 +2081,7 @@ mod tests {
 
     #[test]
     fn saving_the_form_round_trips_and_keeps_selection() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let current = UserPreferences {
             mixed_port: Some(7890),
             selected_node_id: Some("node-7".to_string()),
@@ -1126,6 +2101,7 @@ mod tests {
 
     #[test]
     fn an_edited_field_is_saved_and_an_untouched_one_is_not() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let current = UserPreferences::default();
         let mut input = input_from(&current);
         input.allow_lan = true;
@@ -1138,6 +2114,7 @@ mod tests {
 
     #[test]
     fn an_empty_port_is_not_set_and_an_explicit_zero_is_refused() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let current = UserPreferences {
             socks_port: Some(7891),
             ..UserPreferences::default()
@@ -1156,6 +2133,7 @@ mod tests {
 
     #[test]
     fn out_of_range_settings_are_rejected_with_a_reason() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let current = UserPreferences::default();
 
         let mut input = input_from(&current);
@@ -1188,6 +2166,7 @@ mod tests {
 
     #[test]
     fn rule_lines_are_built_from_the_editor_fields() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         assert_eq!(
             rule_line("DOMAIN-SUFFIX", "example.com", "DIRECT"),
             "DOMAIN-SUFFIX,example.com,DIRECT"
@@ -1198,6 +2177,7 @@ mod tests {
 
     #[test]
     fn a_valid_rule_line_parses_and_a_bad_one_reports_why() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         assert!(parse_rule_line("DOMAIN-SUFFIX,example.com,DIRECT").is_ok());
         assert!(parse_rule_line("MATCH,DIRECT").is_ok());
         assert!(matches!(
@@ -1208,15 +2188,16 @@ mod tests {
     }
 
     #[test]
-    fn a_rule_that_needs_a_provider_or_block_says_the_feature_is_missing() {
-        let set = parse_rule_line("RULE-SET,my-set,DIRECT").unwrap_err();
-        assert!(set.to_string().contains("rule providers"), "{set}");
+    fn a_rule_set_is_accepted_and_a_sub_rule_block_says_the_feature_is_missing() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        assert!(parse_rule_line("RULE-SET,my-set,DIRECT,no-resolve").is_ok());
         let block = parse_rule_line("SUB-RULE,my-block").unwrap_err();
         assert!(block.to_string().contains("not supported yet"), "{block}");
     }
 
     #[test]
     fn the_rule_item_carries_the_enabled_flag() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let rule = RuleView {
             index: 2,
             id: Some("r2".to_string()),
@@ -1234,6 +2215,7 @@ mod tests {
 
     #[test]
     fn moving_a_rule_clamps_to_the_list() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         assert_eq!(moved_position(0, 1, 3), Some(1));
         assert_eq!(moved_position(2, 1, 3), Some(2));
         assert_eq!(moved_position(0, -1, 3), Some(0));
@@ -1245,6 +2227,7 @@ mod tests {
 
     #[test]
     fn levels_are_read_from_the_words_in_a_line() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         assert_eq!(detect_level("level=error dial failed"), "error");
         assert_eq!(detect_level("WARN slow handshake"), "warning");
         assert_eq!(detect_level("debug: tick"), "debug");
@@ -1255,7 +2238,56 @@ mod tests {
     }
 
     #[test]
+    fn the_warn_and_warning_filters_both_pass_warning_lines() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        assert!(level_passes("warn", "warning"));
+        assert!(level_passes("warning", "warning"));
+        assert!(level_passes("warning", "warn"));
+        assert!(!level_passes("warn", "error"));
+        assert!(!level_passes("warning", "info"));
+    }
+
+    #[test]
+    fn a_member_choice_shows_its_label_and_latency() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let member = |latency| MemberView {
+            name: "Airport / Node A".to_string(),
+            label: "Node A".to_string(),
+            protocol: "trojan".to_string(),
+            latency,
+        };
+        let untested = member_choice(&member(Latency::Untested));
+        assert_eq!(untested.text, "Node A");
+        assert_eq!(untested.detail, "—");
+        let timed_out = member_choice(&member(Latency::TimedOut));
+        assert_eq!(timed_out.detail, "timeout");
+        assert_eq!(timed_out.detail_color, latency_color(0));
+        let fast = member_choice(&member(Latency::Measured(120)));
+        assert_eq!(fast.detail, "120 ms");
+        assert_eq!(fast.detail_color, latency_color(120));
+        assert_ne!(latency_color(120), latency_color(300));
+        assert_ne!(latency_color(300), latency_color(500));
+    }
+
+    #[test]
+    fn a_group_choice_shows_the_label_without_detail() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let view = GroupView {
+            name: "Airport / Pick".to_string(),
+            label: "Pick".to_string(),
+            kind: "select".to_string(),
+            selected: None,
+            members: Vec::new(),
+        };
+        let rows = group_choices(&[view]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, "Pick");
+        assert_eq!(rows[0].detail, "");
+    }
+
+    #[test]
     fn a_line_tracker_gives_stable_indexes_as_the_window_rolls() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let mut tracker = LineTracker::default();
         tracker.advance(&lines(&["a", "b", "c"]));
         assert_eq!(tracker.seen(), 3);
@@ -1281,6 +2313,7 @@ mod tests {
 
     #[test]
     fn cleared_logs_stay_hidden_and_newer_lines_show() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let mut view = ViewState::default();
         let first = snapshot_with_logs(
             &["2026-01-01T00:00:00Z  one", "2026-01-01T00:00:01Z  two"],
@@ -1307,6 +2340,7 @@ mod tests {
 
     #[test]
     fn the_logs_keep_only_the_last_two_thousand_lines() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let many: Vec<String> = (0..2500)
             .map(|i| format!("2026-01-01T00:00:00Z  line {i}"))
             .collect();
@@ -1323,6 +2357,7 @@ mod tests {
 
     #[test]
     fn the_level_filter_applies_to_both_sources() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let snap = snapshot_with_logs(
             &["2026-01-01T00:00:00Z  connection error"],
             &["info: ready"],
@@ -1337,19 +2372,10 @@ mod tests {
 
     #[test]
     fn log_text_keeps_every_visible_entry() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let items = vec![
-            LogItem {
-                time: "t".into(),
-                level: "info".into(),
-                source: "app".into(),
-                message: "hello".into(),
-            },
-            LogItem {
-                time: "".into(),
-                level: "error".into(),
-                source: "engine".into(),
-                message: "boom".into(),
-            },
+            log_item("t", "info", "app", "hello"),
+            log_item("", "error", "engine", "boom"),
         ];
         assert_eq!(
             log_text(&items),
@@ -1359,15 +2385,18 @@ mod tests {
 
     #[test]
     fn a_model_is_replaced_only_when_its_contents_differ() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         let model: ModelRc<i32> = ModelRc::new(VecModel::from(vec![1, 2]));
-        assert!(matches_model(&model, &[1, 2]));
-        assert!(changed_model(model.clone(), vec![1, 2]).is_none());
-        assert!(changed_model(model.clone(), vec![1, 2, 3]).is_some());
-        assert!(changed_model(model, vec![2, 1]).is_some());
+        let same = |a: &i32, b: &i32| a == b;
+        assert!(matches_model(&model, &[1, 2], same));
+        assert!(changed_model(model.clone(), vec![1, 2], same).is_none());
+        assert!(changed_model(model.clone(), vec![1, 2, 3], same).is_some());
+        assert!(changed_model(model, vec![2, 1], same).is_some());
     }
 
     #[test]
     fn a_notice_becomes_a_banner_of_the_matching_kind() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         assert_eq!(
             notice_banner(&(NoticeKind::Error, "x".into())).kind,
             "error"
@@ -1379,8 +2408,249 @@ mod tests {
         assert_eq!(Banner::success("ok").kind, "success");
     }
 
+    fn listed(name: &str, latency: Latency) -> MemberView {
+        MemberView {
+            name: name.to_string(),
+            label: name.to_string(),
+            protocol: "trojan".to_string(),
+            latency,
+        }
+    }
+
+    fn proxy_group(members: Vec<MemberView>, selected: Option<&str>) -> GroupView {
+        GroupView {
+            name: "Proxy".to_string(),
+            label: "Proxy".to_string(),
+            kind: "select".to_string(),
+            selected: selected.map(str::to_string),
+            members,
+        }
+    }
+
+    fn names(members: &[MemberView]) -> Vec<&str> {
+        members.iter().map(|member| member.name.as_str()).collect()
+    }
+
+    #[test]
+    fn members_sort_by_latency_with_untested_and_timed_out_last() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let members = vec![
+            listed("slow", Latency::Measured(300)),
+            listed("dead", Latency::TimedOut),
+            listed("new", Latency::Untested),
+            listed("fast", Latency::Measured(40)),
+        ];
+        let by_latency = MemberOrder {
+            sort: 1,
+            hide_unavailable: false,
+        };
+        let shown = ordered_members(&members, by_latency);
+        assert_eq!(names(&shown), vec!["fast", "slow", "new", "dead"]);
+    }
+
+    #[test]
+    fn members_sort_by_name_and_stay_as_configured_by_default() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let members = vec![
+            listed("beta", Latency::Untested),
+            listed("Alpha", Latency::Untested),
+        ];
+        let by_name = MemberOrder {
+            sort: 2,
+            hide_unavailable: false,
+        };
+        assert_eq!(
+            names(&ordered_members(&members, by_name)),
+            vec!["Alpha", "beta"]
+        );
+        assert_eq!(
+            names(&ordered_members(&members, MemberOrder::default())),
+            vec!["beta", "Alpha"]
+        );
+    }
+
+    #[test]
+    fn hiding_leaves_out_only_the_timed_out_members() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let members = vec![
+            listed("dead", Latency::TimedOut),
+            listed("new", Latency::Untested),
+            listed("fast", Latency::Measured(40)),
+        ];
+        let hide = MemberOrder {
+            sort: 0,
+            hide_unavailable: true,
+        };
+        assert_eq!(names(&ordered_members(&members, hide)), vec!["new", "fast"]);
+    }
+
+    #[test]
+    fn the_selected_index_follows_the_shown_order_and_is_minus_one_when_hidden() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let members = vec![
+            listed("a", Latency::Measured(300)),
+            listed("b", Latency::TimedOut),
+            listed("c", Latency::Measured(40)),
+        ];
+        let by_latency = MemberOrder {
+            sort: 1,
+            hide_unavailable: false,
+        };
+        let on_a = group_item_in(&proxy_group(members.clone(), Some("a")), by_latency, true);
+        assert_eq!(
+            on_a.selected_index, 1,
+            "a is second after sorting by latency"
+        );
+
+        let hidden = MemberOrder {
+            sort: 1,
+            hide_unavailable: true,
+        };
+        let on_b = group_item_in(&proxy_group(members.clone(), Some("b")), hidden, true);
+        assert_eq!(
+            on_b.selected_index, -1,
+            "a hidden member is not in the list"
+        );
+
+        let none = group_item_in(&proxy_group(members, None), by_latency, true);
+        assert_eq!(none.selected_index, -1);
+    }
+
+    #[test]
+    fn the_member_choices_follow_the_members_order_and_a_group_can_be_collapsed() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let members = vec![
+            listed("slow", Latency::Measured(300)),
+            listed("fast", Latency::Measured(40)),
+        ];
+        let by_latency = MemberOrder {
+            sort: 1,
+            hide_unavailable: false,
+        };
+        let item = group_item_in(&proxy_group(members, Some("fast")), by_latency, false);
+        assert!(!item.expanded);
+        assert_eq!(
+            item.members
+                .row_data(0)
+                .map(|m| m.name.to_string())
+                .as_deref(),
+            Some("fast")
+        );
+        assert_eq!(
+            item.member_choices
+                .row_data(0)
+                .map(|choice| choice.text.to_string())
+                .as_deref(),
+            Some("fast"),
+            "the Select rows use the same order, so the selected index is valid for both"
+        );
+        assert_eq!(item.selected_index, 0);
+    }
+
+    #[test]
+    fn the_page_controls_load_once_and_collapse_and_expand_groups() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let mut view = ViewState::default();
+        let prefs = UserPreferences {
+            proxies_sort: 2,
+            hide_unavailable: true,
+            ..UserPreferences::default()
+        };
+        assert!(
+            view.load_list_prefs(&prefs),
+            "the saved settings load the first time"
+        );
+        assert!(!view.load_list_prefs(&prefs), "and not again");
+        assert_eq!(
+            view.member_order(),
+            MemberOrder {
+                sort: 2,
+                hide_unavailable: true
+            }
+        );
+
+        view.toggle_group("Proxy");
+        assert!(view.collapsed_groups.contains("Proxy"));
+        view.toggle_group("Proxy");
+        assert!(!view.collapsed_groups.contains("Proxy"));
+
+        view.set_all_expanded(false, vec!["Proxy".to_string()]);
+        assert!(view.collapsed_groups.contains("Proxy"));
+        view.set_all_expanded(true, Vec::<String>::new());
+        assert!(view.collapsed_groups.is_empty());
+    }
+
+    #[test]
+    fn a_connection_row_shows_its_formatted_figures_chain_and_rule() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let view = ConnectionView {
+            id: "c1".to_string(),
+            host: "example.com".to_string(),
+            destination: "203.0.113.7:443".to_string(),
+            chains: vec!["Node A".to_string(), "Proxy".to_string()],
+            rule: "DOMAIN-SUFFIX,example.com".to_string(),
+            upload: 1500,
+            download: 2_000_000,
+            upload_speed: 2000,
+            download_speed: 0,
+            started_at: Some("2026-11-14T12:03:44+03:00".to_string()),
+            duration_secs: 270,
+            ..ConnectionView::default()
+        };
+        let row = connection_item(&view);
+        assert_eq!(row.chain.as_str(), "Node A → Proxy");
+        assert_eq!(row.rule.as_str(), "DOMAIN-SUFFIX,example.com");
+        assert_eq!(row.upload.as_str(), "1.5 KB");
+        assert_eq!(row.download.as_str(), "2 MB");
+        assert_eq!(row.upload_speed.as_str(), "2 KB/s");
+        assert_eq!(row.download_speed.as_str(), "0 B/s");
+        assert_eq!(row.start.as_str(), "12:03:44");
+        assert_eq!(row.duration.as_str(), "4m 30s");
+        assert!(!row.closed);
+    }
+
+    #[test]
+    fn the_connection_rows_are_filtered_then_sorted_for_the_page() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let view = |id: &str, host: &str, upload: u64| ConnectionView {
+            id: id.to_string(),
+            host: host.to_string(),
+            upload,
+            ..ConnectionView::default()
+        };
+        let views = vec![
+            view("a", "a.test", 1),
+            view("b", "b.test", 9),
+            view("c", "other.test", 5),
+        ];
+        let rows = connection_rows(&views, "test", connections::SORT_UPLOAD);
+        let ids: Vec<String> = rows.iter().map(|row| row.id.to_string()).collect();
+        assert_eq!(ids, vec!["b", "c", "a"]);
+
+        let filtered = connection_rows(&views, "other", connections::SORT_UPLOAD);
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn the_auto_close_setting_is_on_by_default_and_saved_from_the_form() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let current = UserPreferences::default();
+        assert!(settings_model(&current).auto_close_connections_on_switch);
+
+        let mut model = settings_model(&current);
+        model.auto_close_connections_on_switch = false;
+        let saved = build_preferences(&current, &SettingsInput::from_model(&model))
+            .expect("the form saves");
+        assert!(!saved.auto_close_connections_on_switch);
+        assert_eq!(
+            saved.proxies_sort, current.proxies_sort,
+            "the list settings are kept"
+        );
+    }
+
     #[test]
     fn a_date_is_shortened_to_the_day() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
         assert_eq!(short_date("2026-12-01T00:00:00Z"), "2026-12-01");
         assert_eq!(short_date("next month"), "next month");
         assert_eq!(display_time("2026-11-13T10:05:33Z"), "2026-11-13 10:05");

@@ -21,7 +21,7 @@
 //! around, and it is why a subscription refresh can never leak a token by
 //! writing metadata.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -416,8 +416,37 @@ impl Store {
         crate::atomic::write_atomic(&path, bytes)
     }
 
-    /// Remove the cached payload of one subscription.
+    /// Write the cached logo of one subscription, replacing any earlier logo of
+    /// it. Returns the path written; its file name is what the subscription
+    /// record keeps.
+    pub fn write_subscription_logo(
+        &self,
+        id: &str,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Result<PathBuf, StoreError> {
+        self.remove_subscription_logos(id)?;
+        let path = self.paths.subscription_logo_file(id, extension)?;
+        crate::atomic::write_atomic(&path, bytes)?;
+        Ok(path)
+    }
+
+    /// Remove every cached logo of one subscription, whatever its format.
+    pub fn remove_subscription_logos(&self, id: &str) -> Result<(), StoreError> {
+        for extension in ["png", "jpg", "svg"] {
+            let path = self.paths.subscription_logo_file(id, extension)?;
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(io_at(&path, err)),
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove the cached payload of one subscription, and its logo.
     pub fn remove_subscription_cache(&self, id: &str) -> Result<(), StoreError> {
+        self.remove_subscription_logos(id)?;
         let path = self.paths.subscription_cache_file(id)?;
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
@@ -677,6 +706,16 @@ mod tests {
                 node_count: 0,
                 group_count: 0,
                 last_error: None,
+                profile_title: None,
+                announce: None,
+                support_url: None,
+                web_url: None,
+                web_page_name: None,
+                announce_url: None,
+                logo_file: None,
+                global_mode_disabled: false,
+                expand_proxy_groups: None,
+                device_limit: false,
             }],
             url_keys: vec![SecretRef {
                 subscription_id: "sub-1".to_string(),

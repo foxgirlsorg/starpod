@@ -25,6 +25,7 @@
 
 pub mod adopt;
 pub mod config;
+pub mod connections;
 pub mod download;
 pub mod elevate;
 pub mod engine;
@@ -39,6 +40,7 @@ pub mod supervisor;
 pub mod tun;
 pub mod validate;
 
+pub use connections::{ConnectionsReply, EngineConnection};
 pub use engine::{
     EngineHandle, EnginePhase, EngineStatus, ExitInfo, ProxyEngine, StopRequest, ValidationReport,
 };

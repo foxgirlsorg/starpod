@@ -17,8 +17,8 @@ pub mod timestamp;
 
 pub use config::build;
 pub use domain::{
-    BuildInput, BuildOutcome, EngineManagedSubscription, Finding, LogLevel, Node, ProxyGroup,
-    ProxyMode, RuleProvider, RuleProviderBehavior, RuntimeConfig, Severity, StoredRule,
+    BuildInput, BuildOutcome, EngineManagedSubscription, Finding, HotkeyBindings, LogLevel, Node,
+    ProxyGroup, ProxyMode, RuleProvider, RuleProviderBehavior, RuntimeConfig, Severity, StoredRule,
     Subscription, SubscriptionMode, SubscriptionPayload, SubscriptionQuota, SubscriptionSettings,
     TunSettings, UserPreferences,
 };

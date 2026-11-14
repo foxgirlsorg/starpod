@@ -86,6 +86,27 @@ pub struct FetchRequest {
     pub authorization: Option<String>,
     /// The bound on the whole request, including reading the body.
     pub timeout: Duration,
+    /// The device headers to send, or `None` to send none (the user turned
+    /// device identification off).
+    pub device: Option<DeviceHeaders>,
+}
+
+/// The device identification a provider's panel reads from the request.
+///
+/// The values are computed by the app, which owns the platform probing. This
+/// crate only puts them on the wire, so it stays free of OS calls. Every value
+/// must be printable ASCII, because an HTTP header cannot carry anything else;
+/// the app sanitises them before they reach here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceHeaders {
+    /// `x-hwid`: a stable, anonymous device id.
+    pub hwid: String,
+    /// `x-device-os`: `Windows`, `Linux` or `macOS`.
+    pub os: String,
+    /// `x-ver-os`: the OS version, best effort.
+    pub os_version: String,
+    /// `x-device-model`: the device model, or the CPU architecture.
+    pub model: String,
 }
 
 impl FetchRequest {
@@ -95,7 +116,14 @@ impl FetchRequest {
             url: url.into(),
             authorization: None,
             timeout: Duration::from_secs(30),
+            device: None,
         }
+    }
+
+    /// The same request with device headers.
+    pub fn with_device(mut self, device: DeviceHeaders) -> Self {
+        self.device = Some(device);
+        self
     }
 
     /// The same request with an `Authorization` header.
@@ -286,6 +314,13 @@ impl SubscriptionProvider for HttpSubscriptionProvider {
         let mut builder = self.client.get(&request.url);
         if let Some(authorization) = &request.authorization {
             builder = builder.header(reqwest::header::AUTHORIZATION, authorization);
+        }
+        if let Some(device) = &request.device {
+            builder = builder
+                .header("x-hwid", device.hwid.as_str())
+                .header("x-device-os", device.os.as_str())
+                .header("x-ver-os", device.os_version.as_str())
+                .header("x-device-model", device.model.as_str());
         }
         // The request-level timeout overrides the client's: the caller
         // decides how long *this* subscription may take.

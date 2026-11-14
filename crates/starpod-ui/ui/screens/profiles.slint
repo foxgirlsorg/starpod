@@ -1,0 +1,395 @@
+// ProfilesPage (ui-spec.md section 5.2): the subscriptions, the inline add
+// form and the remove confirmation. Rust owns the data; this page only lays it
+// out and calls the Bridge.
+
+import { Design } from "../design.slint";
+import { Bridge } from "../bridge.slint";
+import { EmojiText } from "../emoji-text.slint";
+import {
+    Button, ButtonVariant, ButtonSize, IconButton, Input, Segmented, Badge, BadgeVariant,
+    Card, EmptyState, PageHeader, PageFrame, Progress, ConfirmDialog, Spinner
+} from "../primitives.slint";
+
+export component ProfilesPage inherits Rectangle {
+    // --- add form -------------------------------------------------------------
+    private property <bool> form-open: false;
+    private property <bool> advanced: false;
+    // true from the Add click until the Bridge reports the work is done
+    private property <bool> submitting: false;
+    // 0 = Starpod (app-managed), 1 = Engine (engine-managed)
+    private property <int> mode-index: 0;
+    private property <string> draft-url: "";
+    private property <string> draft-name: "";
+    private property <string> draft-auth: "";
+    private property <string> url-error: "";
+
+    // --- remove confirmation --------------------------------------------------
+    private property <string> remove-id: "";
+    private property <string> remove-name: "";
+
+    // A private copy of Bridge.busy: `changed` only fires on this element's
+    // own properties, so the form watches the copy to learn when Add is done.
+    private property <bool> mirror-busy: Bridge.busy;
+
+    changed mirror-busy => {
+        if (!root.mirror-busy && root.submitting) {
+            root.submitting = false;
+            // Errors arrive as the banner; keep the form open so the user can fix the link.
+            if (Bridge.banner-kind != "error") {
+                root.close-form();
+            }
+        }
+    }
+
+    function close-form() {
+        root.form-open = false;
+        root.advanced = false;
+        root.draft-url = "";
+        root.draft-name = "";
+        root.draft-auth = "";
+        root.url-error = "";
+        root.mode-index = 0;
+    }
+
+    function submit() {
+        if (!(root.draft-url.starts-with("https://") || root.draft-url.starts-with("http://"))) {
+            root.url-error = root.draft-url == ""
+                ? @tr("Paste the subscription link.")
+                : @tr("The link must start with https://");
+            return;
+        }
+        root.url-error = "";
+        root.submitting = true;
+        Bridge.add-subscription(
+            root.draft-name,
+            root.draft-url,
+            root.draft-auth,
+            root.mode-index == 0 ? @tr("app-managed") : @tr("engine-managed"));
+    }
+
+    // The status badge text and colour for a subscription status.
+    pure function status-text(status: string) -> string {
+        return status == "syncing" ? @tr("Updating…")
+            : status == "error" ? @tr("Update failed")
+            : status == "never" ? @tr("Not updated yet")
+            : @tr("Up to date");
+    }
+
+    pure function status-variant(status: string) -> BadgeVariant {
+        return status == "syncing" ? BadgeVariant.primary
+            : status == "error" ? BadgeVariant.destructive
+            : BadgeVariant.neutral;
+    }
+
+    remove-dlg := ConfirmDialog {
+        width: parent.width;
+        height: parent.height;
+        title: @tr("Remove “{}”?", root.remove-name);
+        message: @tr("Its servers and rules will no longer be used. You can add the link again later.");
+        confirm-text: @tr("Remove");
+        confirmed => {
+            Bridge.remove-subscription(root.remove-id);
+            remove-dlg.close();
+        }
+    }
+
+    PageFrame {
+
+        VerticalLayout {
+            spacing: 0px;
+
+            PageHeader {
+                title: @tr("Profiles");
+                description: @tr("Subscriptions that supply your servers and rules.");
+
+                Button {
+                    text: @tr("Update all");
+                    variant: ButtonVariant.outline;
+                    size: ButtonSize.md;
+                    icon: @image-url("../assets/icons/refresh-cw.svg");
+                    busy: Bridge.busy && !root.submitting;
+                    enabled: Bridge.subscriptions.length > 0;
+                    clicked => {
+                        Bridge.refresh-all();
+                    }
+                }
+
+                Button {
+                    text: @tr("Add profile");
+                    variant: ButtonVariant.primary;
+                    size: ButtonSize.md;
+                    icon: @image-url("../assets/icons/plus.svg");
+                    enabled: !root.form-open;
+                    clicked => {
+                        root.form-open = true;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 12px;
+
+                if (Bridge.busy && Bridge.busy-message != "") : HorizontalLayout {
+                    height: 20px;
+                    spacing: 8px;
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Spinner {
+                            size: 16px;
+                        }
+                    }
+
+                    EmojiText {
+                        runs: Bridge.busy-message-runs;
+                        fallback: Bridge.busy-message;
+                        color: Design.muted-foreground;
+                        font-size: Design.font-sm;
+                        height: 20px;
+                        wrap: false;
+                    }
+                }
+
+                if (root.form-open) : Card {
+                    inner-padding: 20px;
+
+                    VerticalLayout {
+                        spacing: 12px;
+
+                        Input {
+                            label: @tr("Subscription URL");
+                            placeholder: "https://…";
+                            text <=> root.draft-url;
+                            error: root.url-error;
+                        }
+
+                        Input {
+                            label: @tr("Name");
+                            placeholder: @tr("Optional — taken from the link");
+                            text <=> root.draft-name;
+                        }
+
+                        HorizontalLayout {
+                            alignment: start;
+
+                            Button {
+                                text: @tr("Advanced");
+                                variant: ButtonVariant.ghost;
+                                size: ButtonSize.sm;
+                                horizontal-stretch: 0;
+                                icon: root.advanced ? @image-url("../assets/icons/chevron-down.svg")
+                                    : @image-url("../assets/icons/chevron-right.svg");
+                                clicked => {
+                                    root.advanced = !root.advanced;
+                                }
+                            }
+                        }
+
+                        if (root.advanced) : Input {
+                            label: @tr("Authorization header");
+                            placeholder: @tr("Optional");
+                            hint: @tr("Sent with every update, stored in your system keychain");
+                            text <=> root.draft-auth;
+                        }
+
+                        VerticalLayout {
+                            spacing: 8px;
+
+                            Text {
+                                text: @tr("Updated by");
+                                color: Design.foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-sm;
+                                font-weight: 500;
+                                height: 16px;
+                                vertical-alignment: center;
+                                wrap: no-wrap;
+                            }
+
+                            HorizontalLayout {
+                                alignment: start;
+
+                                Segmented {
+                                    options: ["Starpod", @tr("Engine")];
+                                    current-index <=> root.mode-index;
+                                    horizontal-stretch: 0;
+                                }
+                            }
+
+                            if (root.mode-index == 1) : Text {
+                                text: @tr("No traffic/expiry info, the engine refreshes it itself");
+                                color: Design.muted-foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-xs;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            alignment: end;
+                            spacing: 8px;
+
+                            Button {
+                                text: @tr("Cancel");
+                                variant: ButtonVariant.ghost;
+                                size: ButtonSize.md;
+                                horizontal-stretch: 0;
+                                clicked => {
+                                    root.close-form();
+                                }
+                            }
+
+                            Button {
+                                text: @tr("Add");
+                                variant: ButtonVariant.primary;
+                                size: ButtonSize.md;
+                                horizontal-stretch: 0;
+                                busy: Bridge.busy && root.submitting;
+                                clicked => {
+                                    root.submit();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (Bridge.loaded && Bridge.subscriptions.length == 0 && !root.form-open) : Card {
+                    inner-padding: 0px;
+
+                    EmptyState {
+                        icon: @image-url("../assets/icons/layers.svg");
+                        title: @tr("No profiles yet");
+                        text: @tr("Add your subscription link to get servers.");
+                        action-text: @tr("Add profile");
+                        action => {
+                            root.form-open = true;
+                        }
+                    }
+                }
+
+                for s[i] in Bridge.subscriptions : Card {
+                    inner-padding: 16px;
+
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        // Row 1: name, status, actions
+                        HorizontalLayout {
+                            height: 28px;
+                            spacing: 8px;
+
+                            EmojiText {
+                                runs: s.title-runs;
+                                fallback: s.title;
+                                color: Design.foreground;
+                                font-size: Design.font-base + 1px;
+                                font-weight: 600;
+                                horizontal-stretch: 1;
+                                vertical-stretch: 1;
+                                min-width: 0px;
+                                wrap: false;
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+
+                                HorizontalLayout {
+                                    Badge {
+                                        horizontal-stretch: 0;
+                                        text: root.status-text(s.status);
+                                        variant: root.status-variant(s.status);
+                                    }
+                                }
+                            }
+
+                            IconButton {
+                                icon: @image-url("../assets/icons/refresh-cw.svg");
+                                size: ButtonSize.sm;
+                                variant: ButtonVariant.ghost;
+                                tooltip: @tr("Update now");
+                                enabled: s.status != "syncing";
+                                clicked => {
+                                    Bridge.refresh-subscription(s.id);
+                                }
+                            }
+
+                            IconButton {
+                                icon: @image-url("../assets/icons/trash-2.svg");
+                                size: ButtonSize.sm;
+                                variant: ButtonVariant.ghost;
+                                tooltip: @tr("Remove");
+                                clicked => {
+                                    root.remove-id = s.id;
+                                    root.remove-name = s.title;
+                                    remove-dlg.show();
+                                }
+                            }
+                        }
+
+                        // Row 2: counts and update time
+                        Text {
+                            text: @tr("{n} server" | "{n} servers" % s.node-count)
+                                + (s.last-updated != "" ? @tr(" · Updated {}", s.last-updated) : "")
+                                + (s.mode == "engine-managed" ? @tr(" · Updated by the engine") : "");
+                            color: Design.muted-foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-sm;
+                            height: 18px;
+                            vertical-alignment: center;
+                            wrap: no-wrap;
+                            overflow: elide;
+                        }
+
+                        // Row 3: quota
+                        if (s.has-quota) : VerticalLayout {
+                            spacing: 6px;
+
+                            Progress {
+                                value: s.quota-used-fraction;
+                            }
+
+                            HorizontalLayout {
+                                height: 16px;
+                                spacing: 8px;
+
+                                Text {
+                                    text: s.quota-text;
+                                    color: Design.muted-foreground;
+                                    font-family: Design.font-family;
+                                    font-size: Design.font-xs;
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    vertical-alignment: center;
+                                    wrap: no-wrap;
+                                    overflow: elide;
+                                }
+
+                                Text {
+                                    text: s.expires != "" ? @tr("Expires {}", s.expires) : "";
+                                    color: Design.muted-foreground;
+                                    font-family: Design.font-family;
+                                    font-size: Design.font-xs;
+                                    horizontal-alignment: right;
+                                    horizontal-stretch: 0;
+                                    vertical-alignment: center;
+                                    wrap: no-wrap;
+                                }
+                            }
+                        }
+
+                        // Error
+                        if (s.error != "") : EmojiText {
+                            runs: s.error-runs;
+                            fallback: s.error;
+                            color: Design.destructive;
+                            font-size: Design.font-sm;
+                            wrap: true;
+                            max-height: 54px;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,175 +1,820 @@
-// The primitives.
+// The UI primitives: the small components every page is built from.
 //
-// Every screen is built from these. They carry the foxgirls treatments:
-// the card's *ring* rather than a border, the button's brand-red focus
-// halo, and the badge pill.
+// They follow docs/design/ui-spec.md section 3. A page never draws a button,
+// an input or a card by hand; it composes these. Icons are passed as `image`
+// properties (`@image-url("assets/icons/x.svg")`) and tinted with `colorize`,
+// so one component serves every icon.
 //
-// A primitive is presentational only. It has no business logic — a
-// component that needs to know something calls a callback, and the
-// handler lives in `starpod-app` (ARCHITECTURE §6.3).
-//
-// Two Slint 1.18 rules shape this file:
-//
-// - There is no element-level `else`. A conditional element is
-//   `if (condition) : Element { }` and nothing else, so a two-way choice
-//   is two conditional elements, or one element whose *contents* are
-//   chosen by a binding.
-// - `Tooltip` is a child element of the thing it describes, not a
-//   wrapper. `TooltipArea` is the compiler's internal machinery.
+// Common rules for every interactive primitive: disabled means opacity 0.5
+// and no hover; keyboard focus shows a 2px ring (Design.ring) offset 2px from
+// the edge; clickable things show a pointer cursor.
 
 import { Design } from "design.slint";
-import { IconCheck, IconChevronDown, IconRefreshCw, IconTriangleAlert, IconX } from "icons.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
+// `SelectItem` lives in bridge.slint, where the Rust side builds it; it is
+// re-exported here so the pages that import it from this file still compile.
+import { SelectItem, TextRun } from "bridge.slint";
+export { SelectItem }
+// EmojiText draws a string with its emoji as pictures (see emoji-text.slint).
+import { EmojiText } from "emoji-text.slint";
+export { EmojiText }
 
-// ---------------------------------------------------------------------------
-// Button
-// ---------------------------------------------------------------------------
+// --- shared enums and structs -----------------------------------------------
 
-export enum ButtonVariant {
-    default,
-    outline,
-    secondary,
-    ghost,
-    destructive,
-}
+export enum ButtonVariant { primary, secondary, outline, ghost, destructive, destructive-outline }
+export enum ButtonSize { sm, md, lg }
+export enum BadgeVariant { neutral, primary, success, warning, destructive, outline }
+export enum AlertVariant { info, error, success, warning }
 
-export enum ButtonSize {
-    sm,
-    md,
-    lg,
-}
-
-// Heights 28 / 32 / 36px. The width hugs the label: text plus the side
-// padding (10 / 12 / 16px), so a caller that sets no width gets a button
-// that fits its words. A busy button makes room for the spinner on the left.
-export component AppButton inherits Rectangle {
-    in property <string> text;
-    in property <ButtonVariant> variant: ButtonVariant.default;
-    in property <ButtonSize> size: ButtonSize.md;
-    in property <bool> enabled: true;
-    in property <bool> busy: false;
-    in property <string> busy-text;
-    /// The reason the button is disabled, shown as a tooltip.
-    ///
-    /// GOAL.md §5 requires that an unavailable control be *visibly
-    /// disabled with a reason*, not silently inert. The tooltip is where
-    /// the reason goes.
-    in property <string> disabled-reason;
-    callback clicked();
-
-    private property <length> pad-x: root.size == ButtonSize.sm ? 10px
-        : root.size == ButtonSize.lg ? 16px : 12px;
-    private property <length> spinner-room: root.busy ? 22px : 0px;
-
-    background: variant == ButtonVariant.default ? Design.primary
-        : variant == ButtonVariant.outline ? Design.background
-        : variant == ButtonVariant.secondary ? Design.secondary
-        : variant == ButtonVariant.destructive ? Design.destructive
-        : transparent;
-
-    border-width: variant == ButtonVariant.outline ? 1px : 0px;
-    border-color: Design.input;
-
-    border-radius: Design.radius-lg;
-    opacity: enabled ? 1 : 0.5;
-
-    height: size == ButtonSize.sm ? 28px : size == ButtonSize.lg ? 36px : 32px;
-    width: label.preferred-width + 2 * root.pad-x + root.spinner-room;
-
-    // The focus ring: a brand-red halo at half strength, the site's
-    // `focus-visible:ring-3 ring-ring/50`.
-    Rectangle {
-        x: -3px;
-        y: -3px;
-        width: parent.width + 6px;
-        height: parent.height + 6px;
-        border-radius: Design.radius-lg + 3px;
-        border-width: 3px;
-        border-color: Design.ring;
-        opacity: 0.5;
-        visible: focus-scope.has-focus;
+// The latency colour and text rules, shared by LatencyText and Select items.
+// -1 = untested, 0 = timeout, otherwise milliseconds.
+export global LatencyFormat {
+    public pure function latency-color(ms: int) -> color {
+        if (ms < 0) {
+            return Design.subtle-foreground;
+        }
+        if (ms == 0) {
+            return Design.destructive;
+        }
+        if (ms < 200) {
+            return Design.success;
+        }
+        if (ms < 500) {
+            return Design.warning;
+        }
+        return Design.destructive;
     }
 
-    // The label. It fills the button's width minus any spinner room and is
-    // centred in that space on both axes.
+    public pure function latency-text(ms: int) -> string {
+        if (ms < 0) {
+            return "—";
+        }
+        if (ms == 0) {
+            return @tr("timeout");
+        }
+        return ms + @tr(" ms");
+    }
+}
+
+// The size of the application window, kept up to date by app.slint. Popups
+// read it to decide whether they open below or above their box.
+export global WindowMetrics {
+    in-out property <length> width: 0px;
+    in-out property <length> height: 0px;
+}
+
+// --- Spinner ----------------------------------------------------------------
+
+// A rotating ring, one turn every 800 ms. Only instantiate it while busy:
+// the timer runs for as long as the element exists.
+export component Spinner inherits Rectangle {
+    in property <length> size: 16px;
+    in property <color> tint: Design.primary;
+
+    private property <angle> turn: 0deg;
+
+    width: root.size;
+    height: root.size;
+
+    Timer {
+        // 9 degrees every 20 ms is 360 degrees every 800 ms.
+        interval: 20ms;
+        running: true;
+        triggered => {
+            root.turn += 9deg;
+        }
+    }
+
+    Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("assets/icons/loader-circle.svg");
+        colorize: root.tint;
+        transform-rotation: root.turn;
+    }
+}
+
+// --- Button -----------------------------------------------------------------
+
+// A text button with an optional leading icon. Its width is its content unless
+// the parent stretches it (horizontal-stretch: 1). Set `busy` to replace the
+// icon with a spinner; a busy button ignores clicks.
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <ButtonVariant> variant: ButtonVariant.primary;
+    in property <ButtonSize> size: ButtonSize.md;
+    in property <image> icon;
+    in property <bool> busy: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    private property <bool> live: root.enabled && !root.busy;
+    private property <bool> hovered: ta.has-hover && root.live;
+    private property <length> pad: root.size == ButtonSize.sm ? 10px
+        : root.size == ButtonSize.md ? 16px : 24px;
+    private property <length> label-size: root.size == ButtonSize.sm ? 13px
+        : root.size == ButtonSize.md ? 14px : 15px;
+    private property <bool> has-lead: root.busy || root.icon.width > 0;
+    private property <length> lead-w: root.has-lead ? 16px : 0px;
+    private property <length> gap: root.has-lead ? 8px : 0px;
+    private property <length> content-w: root.lead-w + root.gap + label.preferred-width;
+
+    // White on the filled primary and destructive buttons, red on
+    // destructive-outline, the normal foreground otherwise.
+    private property <color> ink: (root.variant == ButtonVariant.primary || root.variant == ButtonVariant.destructive)
+        ? Design.primary-foreground
+        : root.variant == ButtonVariant.destructive-outline ? Design.destructive
+        : Design.foreground;
+
+    height: root.size == ButtonSize.sm ? 28px
+        : root.size == ButtonSize.md ? 36px : 44px;
+    preferred-width: root.pad * 2 + root.content-w;
+    // Content width unless the parent stretches it.
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: Design.radius-md;
+    background: root.variant == ButtonVariant.primary
+            ? (root.hovered ? (ta.pressed ? Design.primary-pressed : Design.primary-hover) : Design.primary)
+        : root.variant == ButtonVariant.secondary
+            ? (root.hovered ? Design.secondary-hover : Design.secondary)
+        : root.variant == ButtonVariant.destructive
+            ? (root.hovered ? Design.destructive.brighter(0.15) : Design.destructive)
+        : root.variant == ButtonVariant.destructive-outline
+            ? (root.hovered ? Design.destructive.with-alpha(0.1) : transparent)
+        : (root.hovered ? Design.accent : transparent);
+    border-width: root.variant == ButtonVariant.outline || root.variant == ButtonVariant.destructive-outline ? 1px : 0px;
+    border-color: root.variant == ButtonVariant.destructive-outline ? Design.destructive.with-alpha(0.5) : Design.input;
+    opacity: root.enabled ? 1 : 0.5;
+
+    // Focus ring: 2px wide, 2px outside the edge.
+    Rectangle {
+        x: -4px;
+        y: -4px;
+        width: root.width + 8px;
+        height: root.height + 8px;
+        border-radius: Design.radius-md + 4px;
+        border-width: 2px;
+        border-color: fs.has-focus ? Design.ring : transparent;
+        background: transparent;
+    }
+
+    if (root.busy) : Spinner {
+        x: (root.width - root.content-w) / 2;
+        y: (root.height - 16px) / 2;
+        size: 16px;
+        tint: root.ink;
+    }
+
+    if (!root.busy && root.icon.width > 0) : Image {
+        x: (root.width - root.content-w) / 2;
+        y: (root.height - 16px) / 2;
+        width: 16px;
+        height: 16px;
+        source: root.icon;
+        colorize: root.ink;
+    }
+
     label := Text {
-        x: root.spinner-room;
-        width: root.width - root.spinner-room;
+        x: (root.width - root.content-w) / 2 + root.lead-w + root.gap;
+        width: self.preferred-width;
         height: root.height;
-        text: root.busy && root.busy-text != "" ? root.busy-text : root.text;
-        color: root.variant == ButtonVariant.default ? Design.primary-foreground
-            : root.variant == ButtonVariant.destructive ? Design.primary-foreground
-            : Design.foreground;
+        text: root.text;
+        color: root.ink;
         font-family: Design.font-family;
-        font-size: Design.font-sm;
+        font-size: root.label-size;
         font-weight: 500;
-        horizontal-alignment: center;
         vertical-alignment: center;
         wrap: no-wrap;
     }
 
-    // A spinner, shown while the button is busy.
-    if (root.busy) : IconRefreshCw {
-        width: 14px;
-        height: 14px;
-        x: root.pad-x;
-        y: (root.height - 14px) / 2;
-        stroke: root.variant == ButtonVariant.default || root.variant == ButtonVariant.destructive
-            ? Design.primary-foreground
-            : Design.foreground;
-        stroke-width: 2px;
-        opacity: 0.7;
-    }
-
-    // The disabled reason, as a tooltip on the button itself.
-    if (!root.enabled && root.disabled-reason != "") : Tooltip {
-        text: @markdown("\{root.disabled-reason}");
-    }
-
-    // The focus scope and the touch area. They are separate elements
-    // because `has-focus` belongs to the `FocusScope`, not to the
-    // rectangle the button is drawn with.
-    focus-scope := FocusScope {
-        focus-on-click: true;
-
-        touch := TouchArea {
-            enabled: root.enabled && !root.busy;
-            clicked => {
+    fs := FocusScope {
+        width: root.width;
+        height: root.height;
+        key-pressed(event) => {
+            if (root.live && (event.text == " " || event.text == "\n")) {
                 root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.live;
+        mouse-cursor: root.live ? pointer : default;
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+}
+
+// --- IconButton -------------------------------------------------------------
+
+// A square icon-only button: 28, 36 or 44 px. `variant` is ghost (default) or
+// outline. `tooltip` shows after 500 ms of hover.
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <ButtonVariant> variant: ButtonVariant.ghost;
+    in property <ButtonSize> size: ButtonSize.md;
+    in property <string> tooltip;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    private property <bool> live: root.enabled;
+    private property <bool> hovered: ta.has-hover && root.live;
+
+    width: root.size == ButtonSize.sm ? 28px
+        : root.size == ButtonSize.md ? 36px : 44px;
+    height: self.width;
+    border-radius: Design.radius-md;
+    background: root.hovered ? Design.accent : transparent;
+    border-width: root.variant == ButtonVariant.outline ? 1px : 0px;
+    border-color: Design.input;
+    opacity: root.enabled ? 1 : 0.5;
+
+    Rectangle {
+        x: -4px;
+        y: -4px;
+        width: root.width + 8px;
+        height: root.height + 8px;
+        border-radius: Design.radius-md + 4px;
+        border-width: 2px;
+        border-color: fs.has-focus ? Design.ring : transparent;
+        background: transparent;
+    }
+
+    Image {
+        x: (parent.width - 16px) / 2;
+        y: (parent.height - 16px) / 2;
+        width: 16px;
+        height: 16px;
+        source: root.icon;
+        colorize: root.hovered ? Design.foreground : Design.muted-foreground;
+    }
+
+    if (root.tooltip != "") : Tooltip {
+        text: @markdown("\{root.tooltip}");
+    }
+
+    fs := FocusScope {
+        width: root.width;
+        height: root.height;
+        key-pressed(event) => {
+            if (root.live && (event.text == " " || event.text == "\n")) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.live;
+        mouse-cursor: root.live ? pointer : default;
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+}
+
+// --- Input ------------------------------------------------------------------
+
+// A single-line text field, 36px tall. `label` sits above it, `error` (red)
+// or `hint` (muted) below it. `icon` is an optional leading 16px icon (for a
+// search field). `secret` hides the text; `numeric` opens a number keyboard.
+export component Input inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <string> label;
+    in property <string> error;
+    in property <string> hint;
+    in property <image> icon;
+    in property <bool> enabled: true;
+    in property <bool> secret: false;
+    in property <bool> numeric: false;
+    callback edited(string);
+    callback accepted(string);
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    preferred-height: col.preferred-height;
+
+    col := VerticalLayout {
+        spacing: 8px;
+
+        if (root.label != "") : Text {
+            text: root.label;
+            color: Design.foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-sm;
+            font-weight: 500;
+            height: 16px;
+            vertical-alignment: center;
+            wrap: no-wrap;
+        }
+
+        VerticalLayout {
+            spacing: 6px;
+
+            field := Rectangle {
+                height: 36px;
+                border-radius: Design.radius-md;
+                border-width: 1px;
+                border-color: input-field.has-focus ? Design.ring
+                    : (root.error != "" ? Design.destructive : Design.input);
+                background: transparent;
+                opacity: root.enabled ? 1 : 0.5;
+
+                if (root.icon.width > 0) : Image {
+                    x: 12px;
+                    y: (parent.height - 16px) / 2;
+                    width: 16px;
+                    height: 16px;
+                    source: root.icon;
+                    colorize: Design.muted-foreground;
+                }
+
+                input-field := TextInput {
+                    x: root.icon.width > 0 ? 36px : 12px;
+                    y: 0px;
+                    width: parent.width - self.x - 12px;
+                    height: parent.height;
+                    text <=> root.text;
+                    font-family: Design.font-family;
+                    font-size: Design.font-base;
+                    color: Design.foreground;
+                    vertical-alignment: center;
+                    single-line: true;
+                    read-only: !root.enabled;
+                    input-type: root.secret ? InputType.password
+                        : root.numeric ? InputType.number : InputType.text;
+                    edited => {
+                        root.edited(self.text);
+                    }
+                    accepted => {
+                        root.accepted(self.text);
+                    }
+                }
+
+                if (root.text == "") : Text {
+                    x: input-field.x;
+                    y: 0px;
+                    width: input-field.width;
+                    height: parent.height;
+                    text: root.placeholder;
+                    color: Design.subtle-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-base;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+
+            if (root.error != "" || root.hint != "") : Text {
+                text: root.error != "" ? root.error : root.hint;
+                color: root.error != "" ? Design.destructive : Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-xs;
+                wrap: word-wrap;
             }
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Card
-// ---------------------------------------------------------------------------
+// --- Select -----------------------------------------------------------------
 
+// A dropdown that looks like Input. Click opens a popup under the box, the
+// same width as the box (or `popup-min-width`). Items are 32px; the list is
+// capped at 320px and scrolls. `current-index` is -1 for no selection.
+// `selected(index)` fires when the user picks an item.
+export component Select inherits Rectangle {
+    in property <[SelectItem]> items;
+    in-out property <int> current-index: -1;
+    in property <string> placeholder;
+    in property <string> label;
+    in property <string> error;
+    in property <string> hint;
+    in property <bool> enabled: true;
+    in property <length> popup-min-width: 0px;
+    callback selected(int);
+
+    private property <bool> has-value: root.current-index >= 0 && root.current-index < root.items.length;
+    // the popup panel is inset by `pad` on every side so its shadow is not clipped
+    private property <length> pad: 16px;
+    private property <length> pw: max(root.width, root.popup-min-width);
+    // The list's natural height: 32px per item, capped at 320px.
+    private property <length> natural-h: min(320px, root.items.length * 32px + 8px);
+    // Room above and below the box inside the window, with 8px to spare at the edge.
+    private property <length> space-below: WindowMetrics.height - field.absolute-position.y - field.height - 8px;
+    private property <length> space-above: field.absolute-position.y - 8px;
+    // Open below when the list fits there or there is more room below than above.
+    private property <bool> open-above: !(root.natural-h <= root.space-below || root.space-below >= root.space-above);
+    // The list is capped to the room on the side it opens to, at least 120px.
+    private property <length> list-h: min(root.natural-h, max(120px, root.open-above ? root.space-above : root.space-below));
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    preferred-height: col.preferred-height;
+
+    col := VerticalLayout {
+        spacing: 8px;
+
+        if (root.label != "") : Text {
+            text: root.label;
+            color: Design.foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-sm;
+            font-weight: 500;
+            height: 16px;
+            vertical-alignment: center;
+            wrap: no-wrap;
+        }
+
+        VerticalLayout {
+            spacing: 6px;
+
+            field := Rectangle {
+                height: 36px;
+                border-radius: Design.radius-md;
+                border-width: 1px;
+                border-color: root.error != "" ? Design.destructive
+                    : (open-popup.is-open ? Design.ring : Design.input);
+                background: transparent;
+                opacity: root.enabled ? 1 : 0.5;
+
+                value-text := EmojiText {
+                    x: 12px;
+                    y: 0px;
+                    width: parent.width - 12px - 12px - 16px - 8px;
+                    height: parent.height;
+                    runs: root.has-value ? root.items[root.current-index].text-runs : [];
+                    fallback: root.has-value ? root.items[root.current-index].text : root.placeholder;
+                    color: root.has-value ? Design.foreground : Design.subtle-foreground;
+                    font-size: Design.font-base;
+                    wrap: false;
+                }
+
+                Image {
+                    x: parent.width - 28px;
+                    y: (parent.height - 16px) / 2;
+                    width: 16px;
+                    height: 16px;
+                    source: @image-url("assets/icons/chevron-down.svg");
+                    colorize: Design.muted-foreground;
+                }
+
+                field-ta := TouchArea {
+                    enabled: root.enabled;
+                    mouse-cursor: root.enabled ? pointer : default;
+                    clicked => {
+                        if (!open-popup.is-open) {
+                            open-popup.show();
+                        }
+                    }
+                }
+
+                open-popup := PopupWindow {
+                    x: -root.pad;
+                    // 4px from the box, on the side with room: below, or above when
+                    // the list does not fit below.
+                    y: root.open-above ? -root.list-h - 4px - root.pad : field.height + 4px - root.pad;
+                    width: root.pw + 2 * root.pad;
+                    height: root.list-h + 2 * root.pad;
+                    close-policy: close-on-click-outside;
+
+                    Rectangle {
+                        x: root.pad;
+                        y: root.pad;
+                        width: root.pw;
+                        height: root.list-h;
+                        background: Design.popover;
+                        border-width: 1px;
+                        border-color: Design.border;
+                        border-radius: Design.radius-md;
+                        drop-shadow-blur: 24px;
+                        drop-shadow-offset-y: 8px;
+                        drop-shadow-color: Design.shadow;
+
+                        ListView {
+                            x: 4px;
+                            y: 4px;
+                            width: parent.width - 8px;
+                            height: parent.height - 8px;
+
+                            for item[i] in root.items : Rectangle {
+                                height: 32px;
+                                border-radius: Design.radius-sm;
+                                background: item-ta.has-hover ? Design.accent : transparent;
+
+                                item-label := EmojiText {
+                                    x: 8px;
+                                    y: 0px;
+                                    width: parent.width - 16px - item-detail.preferred-width
+                                        - (root.current-index == i ? 24px : 0px);
+                                    height: parent.height;
+                                    runs: item.text-runs;
+                                    fallback: item.text;
+                                    color: Design.foreground;
+                                    font-size: Design.font-base;
+                                    wrap: false;
+                                }
+
+                                item-detail := Text {
+                                    x: parent.width - self.width - 8px - (root.current-index == i ? 24px : 0px);
+                                    y: 0px;
+                                    width: self.preferred-width;
+                                    height: parent.height;
+                                    text: item.detail;
+                                    color: item.detail-color;
+                                    font-family: Design.font-family;
+                                    font-size: Design.font-xs;
+                                    vertical-alignment: center;
+                                    wrap: no-wrap;
+                                }
+
+                                if (root.current-index == i) : Image {
+                                    x: parent.width - 24px;
+                                    y: (parent.height - 16px) / 2;
+                                    width: 16px;
+                                    height: 16px;
+                                    source: @image-url("assets/icons/check.svg");
+                                    colorize: Design.foreground;
+                                }
+
+                                item-ta := TouchArea {
+                                    enabled: root.enabled;
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.current-index = i;
+                                        root.selected(i);
+                                        open-popup.close();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (root.error != "" || root.hint != "") : Text {
+                text: root.error != "" ? root.error : root.hint;
+                color: root.error != "" ? Design.destructive : Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-xs;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+// --- Switch -----------------------------------------------------------------
+
+// A 36x20 on/off switch, animated over 150 ms. It is controlled: it shows
+// `checked` and never changes it. A click or Space only calls `toggled` with
+// the new value, and the owner decides. If the owner does not update
+// `checked`, the switch stays where it was.
+export component Switch inherits Rectangle {
+    in property <bool> checked: false;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+
+    private property <bool> live: root.enabled;
+
+    width: 36px;
+    height: 20px;
+    border-radius: Design.radius-full;
+    background: root.checked ? Design.primary : Design.input;
+    opacity: root.enabled ? 1 : 0.5;
+    animate background { duration: 150ms; }
+
+    function toggle() {
+        root.toggled(!root.checked);
+    }
+
+    Rectangle {
+        x: -4px;
+        y: -4px;
+        width: root.width + 8px;
+        height: root.height + 8px;
+        border-radius: Design.radius-full;
+        border-width: 2px;
+        border-color: fs.has-focus ? Design.ring : transparent;
+        background: transparent;
+    }
+
+    Rectangle {
+        x: root.checked ? 18px : 2px;
+        y: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: Design.radius-full;
+        background: #ffffff;
+        animate x { duration: 150ms; }
+    }
+
+    fs := FocusScope {
+        width: root.width;
+        height: root.height;
+        key-pressed(event) => {
+            if (root.live && (event.text == " " || event.text == "\n")) {
+                root.toggle();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.live;
+        mouse-cursor: root.live ? pointer : default;
+        clicked => {
+            fs.focus();
+            root.toggle();
+        }
+    }
+}
+
+// --- Segmented --------------------------------------------------------------
+
+// A tab-like segmented control: a track with one selected item. Items are
+// 30px tall, sized to their text. Left and right arrows move the selection
+// while the control has focus. `selected(index)` fires on every change.
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> current-index: 0;
+    callback selected(int);
+
+    height: 36px;
+    border-radius: Design.radius-md;
+    background: Design.secondary;
+    preferred-width: row.preferred-width;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+
+    Rectangle {
+        x: -4px;
+        y: -4px;
+        width: root.width + 8px;
+        height: root.height + 8px;
+        border-radius: Design.radius-md + 4px;
+        border-width: 2px;
+        border-color: fs.has-focus ? Design.ring : transparent;
+        background: transparent;
+    }
+
+    row := HorizontalLayout {
+        padding: 3px;
+
+        for option[i] in root.options : Rectangle {
+            height: 30px;
+            border-radius: Design.radius-sm;
+            preferred-width: item-text.preferred-width + 24px;
+            background: root.current-index == i ? Design.background : transparent;
+
+            item-text := Text {
+                x: 12px;
+                y: 0px;
+                width: parent.width - 24px;
+                height: parent.height;
+                text: option;
+                color: root.current-index == i ? Design.foreground : Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-sm;
+                font-weight: 500;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: no-wrap;
+            }
+
+            item-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    fs.focus();
+                    root.current-index = i;
+                    root.selected(i);
+                }
+            }
+        }
+    }
+
+    fs := FocusScope {
+        width: root.width;
+        height: root.height;
+        key-pressed(event) => {
+            if (event.text == Key.LeftArrow && root.current-index > 0) {
+                root.current-index -= 1;
+                root.selected(root.current-index);
+                return accept;
+            }
+            if (event.text == Key.RightArrow && root.current-index < root.options.length - 1) {
+                root.current-index += 1;
+                root.selected(root.current-index);
+                return accept;
+            }
+            return reject;
+        }
+    }
+}
+
+// --- Badge ------------------------------------------------------------------
+
+// A 20px pill label. Variants tint the background at 15% of their colour.
+export component Badge inherits Rectangle {
+    in property <string> text;
+    in property <BadgeVariant> variant: BadgeVariant.neutral;
+
+    private property <color> tint: root.variant == BadgeVariant.primary ? Design.primary
+        : root.variant == BadgeVariant.success ? Design.success
+        : root.variant == BadgeVariant.warning ? Design.warning
+        : root.variant == BadgeVariant.destructive ? Design.destructive
+        : Design.foreground;
+
+    height: 20px;
+    preferred-width: label.preferred-width + 16px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: Design.radius-full;
+    background: root.variant == BadgeVariant.neutral ? Design.secondary
+        : root.variant == BadgeVariant.outline ? transparent
+        : root.tint.transparentize(0.85);
+    border-width: root.variant == BadgeVariant.outline ? 1px : 0px;
+    border-color: Design.border;
+
+    label := Text {
+        x: 8px;
+        y: 0px;
+        width: parent.width - 16px;
+        height: parent.height;
+        text: root.text;
+        color: root.variant == BadgeVariant.neutral ? Design.muted-foreground
+            : root.variant == BadgeVariant.outline ? Design.foreground
+            : root.tint;
+        font-family: Design.font-family;
+        font-size: Design.font-xs;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+}
+
+// --- Card -------------------------------------------------------------------
+
+// A surface: card background, 1px border, radius 12. The body is the children;
+// put a CardHeader first when the card needs a title. `inner-padding` defaults to 20.
 export component Card inherits Rectangle {
-    in property <string> title;
-    in property <string> description;
-    in property <bool> show-header: title != "";
+    in property <length> inner-padding: 20px;
 
     background: Design.card;
-    border-radius: Design.radius-xl;
-    // The site uses a *ring* on cards, not a border: a 1px inner line at
-    // 10% foreground.
     border-width: 1px;
-    border-color: rgba(255, 255, 255, 0.10);
+    border-color: Design.border;
+    border-radius: Design.radius-lg;
+    preferred-height: body.preferred-height;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
 
-    VerticalLayout {
-        padding: Design.space-lg;
-        spacing: Design.space-md;
+    body := VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding: root.inner-padding;
 
-        if (root.show-header) : VerticalLayout {
-            spacing: 2px;
+        @children
+    }
+}
+
+// The title block of a Card: a 16px semibold title, an optional 13px muted
+// description 4px below it, and 16px of space under the whole header. Children
+// are placed at the right edge (for example buttons), centred on the title.
+export component CardHeader inherits VerticalLayout {
+    in property <string> title;
+    in property <string> description;
+
+    vertical-stretch: 0;
+    padding-bottom: 16px;
+
+    HorizontalLayout {
+        vertical-stretch: 0;
+        spacing: 12px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            vertical-stretch: 0;
+            alignment: start;
+            spacing: 4px;
 
             Text {
                 text: root.title;
                 color: Design.foreground;
                 font-family: Design.font-family;
-                font-size: Design.font-md;
-                font-weight: 500;
-                wrap: word-wrap;
+                font-size: Design.font-lg;
+                font-weight: 600;
+                height: 22px;
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: elide;
             }
 
             if (root.description != "") : Text {
@@ -177,372 +822,276 @@ export component Card inherits Rectangle {
                 color: Design.muted-foreground;
                 font-family: Design.font-family;
                 font-size: Design.font-sm;
-                wrap: word-wrap;
+                height: 18px;
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: elide;
             }
         }
 
-        @children
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Badge
-// ---------------------------------------------------------------------------
-
-export enum BadgeVariant {
-    default,
-    secondary,
-    destructive,
-    outline,
-    success,
-    warning,
-}
-
-export component Badge inherits Rectangle {
-    in property <string> text;
-    in property <BadgeVariant> variant: BadgeVariant.secondary;
-
-    height: 20px;
-    border-radius: 10px;
-
-    background: variant == BadgeVariant.default ? Design.primary
-        : variant == BadgeVariant.destructive ? Design.destructive
-        : variant == BadgeVariant.success ? Design.success
-        : variant == BadgeVariant.warning ? Design.warning
-        : variant == BadgeVariant.secondary ? Design.secondary
-        : transparent;
-
-    border-width: variant == BadgeVariant.outline ? 1px : 0px;
-    border-color: Design.input;
-
-    Text {
-        text: root.text;
-        color: root.variant == BadgeVariant.default || root.variant == BadgeVariant.destructive
-            ? Design.primary-foreground
-            : Design.foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-xs;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        wrap: no-wrap;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Status dot
-// ---------------------------------------------------------------------------
-
-export enum StatusKind {
-    running,
-    stopped,
-    error,
-    syncing,
-}
-
-// A fixed 10px dot. It takes no stretch, so a layout that centres it
-// (a VerticalLayout with `alignment: center`) places it on the text's
-// middle line; it carries no offset of its own.
-export component StatusDot inherits Rectangle {
-    in property <StatusKind> kind: StatusKind.stopped;
-
-    width: 10px;
-    height: 10px;
-    horizontal-stretch: 0;
-    vertical-stretch: 0;
-    border-radius: 5px;
-
-    background: kind == StatusKind.running ? Design.primary
-        : kind == StatusKind.error ? Design.destructive
-        : transparent;
-
-    border-width: kind == StatusKind.running || kind == StatusKind.error ? 0px : 1.5px;
-    border-color: Design.muted-foreground;
-
-    // The syncing dot pulses at reduced opacity, the site's
-    // `prefers-reduced-motion` guarded animation. The pulse is a
-    // repeating timer that drives the opacity between two values.
-    opacity: kind == StatusKind.syncing ? pulse : 1;
-    animate opacity { duration: 900ms; }
-
-    // Private, so that the pulse is an internal detail of the dot and
-    // not something the surrounding UI can set.
-    private property <float> pulse: 0.45;
-
-    Timer {
-        interval: 900ms;
-        running: root.kind == StatusKind.syncing;
-        triggered => {
-            root.pulse = root.pulse < 0.6 ? 0.85 : 0.45;
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Field
-//
-// A labelled text box: the label sits above the box (12px, muted), the box
-// is 36px high with a 1px input border and 12px side padding, and the value
-// or placeholder is vertically centred. An error sits below the box.
-// An empty `label` renders no label row.
-// ---------------------------------------------------------------------------
-
-export enum FieldKind {
-    text,
-    password,
-    number,
-    combo,
-}
-
-export component Field inherits VerticalLayout {
-    in property <string> label;
-    in property <string> placeholder;
-    // Two-way: the TextInput writes into it, so a screen can read the value
-    // and reset it (bind with `<=>`).
-    in-out property <string> value;
-    in property <FieldKind> kind: FieldKind.text;
-    in property <bool> enabled: true;
-    in property <string> error;
-    /// The choices for a combo field.
-    in property <[string]> choices;
-    /// The index of the selected choice.
-    in property <int> selected-index: 0;
-    in property <bool> read-only: false;
-    callback edited(string);
-    callback selected(int);
-
-    spacing: Design.space-xs;
-    vertical-stretch: 0;
-
-    VerticalLayout {
-        spacing: 6px;
-        vertical-stretch: 0;
-
-        if (root.label != "") : Text {
-            text: root.label;
-            color: Design.muted-foreground;
-            font-family: Design.font-family;
-            font-size: Design.font-xs;
-            wrap: no-wrap;
-        }
-
-        box := Rectangle {
-            height: 36px;
+        VerticalLayout {
             vertical-stretch: 0;
-            background: Design.background;
-            border-radius: Design.radius-md;
-            border-width: 1px;
-            border-color: root.error != "" ? Design.destructive : Design.input;
+            alignment: center;
 
-            // The focus ring: the same halo the buttons use, in Design.ring.
-            Rectangle {
-                x: -3px;
-                y: -3px;
-                width: parent.width + 6px;
-                height: parent.height + 6px;
-                border-radius: Design.radius-md + 3px;
-                border-width: 3px;
-                border-color: Design.ring;
-                opacity: 0.5;
-                visible: input.has-focus;
-            }
+            HorizontalLayout {
+                spacing: 8px;
 
-            // The combo: a read-only value chosen from a list.
-            if (root.kind == FieldKind.combo) : Text {
-                x: Design.space-md;
-                width: parent.width - 2 * Design.space-md - 24px;
-                height: parent.height;
-                text: root.selected-index >= 0 && root.selected-index < root.choices.length
-                    ? root.choices[root.selected-index] : "";
-                color: root.enabled ? Design.foreground : Design.muted-foreground;
-                font-family: Design.font-family;
-                font-size: Design.font-sm;
-                vertical-alignment: center;
-                wrap: no-wrap;
-            }
-
-            if (root.kind == FieldKind.combo) : IconChevronDown {
-                width: 16px;
-                height: 16px;
-                x: parent.width - 12px - 16px;
-                y: (parent.height - self.height) / 2;
-                stroke: Design.muted-foreground;
-                stroke-width: 2px;
-            }
-
-            if (root.kind == FieldKind.combo) : TouchArea {
-                enabled: root.enabled;
-                clicked => {
-                    root.selected(root.selected-index);
-                }
-            }
-
-            // Everything that is not a combo is a plain input.
-            //
-            // `TextInput` has no placeholder property in Slint 1.18, so
-            // the hint is a separate `Text` that is only visible while
-            // the input is empty.
-            if (root.kind != FieldKind.combo && root.value == "") : Text {
-                x: Design.space-md;
-                width: parent.width - 2 * Design.space-md;
-                height: parent.height;
-                text: root.placeholder;
-                color: Design.muted-foreground;
-                font-family: Design.font-family;
-                font-size: Design.font-sm;
-                vertical-alignment: center;
-                wrap: no-wrap;
-            }
-
-            input := TextInput {
-                visible: root.kind != FieldKind.combo;
-                x: Design.space-md;
-                width: parent.width - 2 * Design.space-md;
-                height: parent.height;
-                color: root.enabled ? Design.foreground : Design.muted-foreground;
-                font-family: Design.font-family;
-                font-size: Design.font-sm;
-                vertical-alignment: center;
-                input-type: root.kind == FieldKind.password ? InputType.password
-                    : root.kind == FieldKind.number ? InputType.number : InputType.text;
-                read-only: root.read-only;
-                enabled: root.enabled;
-                text <=> root.value;
-
-                edited => {
-                    root.edited(self.text);
-                }
+                @children
             }
         }
-    }
-
-    if (root.error != "") : Text {
-        text: root.error;
-        color: Design.destructive;
-        font-family: Design.font-family;
-        font-size: Design.font-xs;
-        wrap: word-wrap;
     }
 }
 
-// ---------------------------------------------------------------------------
-// Select
-//
-// The same box as Field, showing the chosen value vertically centred with a
-// 16px chevron 12px from the right edge. A click opens a themed list in a
-// PopupWindow below the box: rows are 32px, hover uses Design.accent, and the
-// chosen row carries a check.
-//
-// The component never writes `value`. The caller owns it: bind it with
-// `value: ...` (or `<=>` to a property the caller writes), and set it again
-// in `selected(v)`. That keeps a binding to a struct field intact.
-// ---------------------------------------------------------------------------
+// --- Separator --------------------------------------------------------------
 
-export component AppSelect inherits VerticalLayout {
-    in property <[string]> options;
-    in-out property <string> value;
-    in property <string> label;
-    in property <string> placeholder;
-    in property <bool> enabled: true;
-    callback selected(string);
+// A 1px line in the border colour. Horizontal by default; `vertical` makes it
+// a vertical line that fills the height it is given.
+export component Separator inherits Rectangle {
+    in property <bool> vertical: false;
 
-    spacing: 6px;
-    vertical-stretch: 0;
+    horizontal-stretch: root.vertical ? 0 : 1;
+    vertical-stretch: root.vertical ? 1 : 0;
+    min-width: root.vertical ? 1px : 0px;
+    preferred-width: root.vertical ? 1px : 0px;
+    min-height: root.vertical ? 0px : 1px;
+    preferred-height: root.vertical ? 0px : 1px;
+    background: Design.border;
+}
 
-    if (root.label != "") : Text {
-        text: root.label;
-        color: Design.muted-foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-xs;
-        wrap: no-wrap;
+// --- Progress ---------------------------------------------------------------
+
+// A 6px bar. `value` is 0 to 1. The fill turns warning at 80% and destructive
+// at 95%.
+export component Progress inherits Rectangle {
+    in property <float> value: 0;
+
+    height: 6px;
+    horizontal-stretch: 1;
+    border-radius: Design.radius-full;
+    background: Design.secondary;
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width * max(0.0, min(1.0, root.value));
+        height: parent.height;
+        border-radius: Design.radius-full;
+        background: root.value >= 0.95 ? Design.destructive
+            : root.value >= 0.8 ? Design.warning
+            : Design.primary;
     }
+}
 
-    box := Rectangle {
-        height: 36px;
-        vertical-stretch: 0;
-        background: Design.background;
-        border-radius: Design.radius-md;
-        border-width: 1px;
-        border-color: popup.is-open ? Design.ring : Design.input;
-        opacity: root.enabled ? 1 : 0.5;
+// --- Alert ------------------------------------------------------------------
 
-        Text {
-            x: Design.space-md;
-            width: parent.width - 2 * Design.space-md - 16px - Design.space-sm;
-            height: parent.height;
-            text: root.value != "" ? root.value : root.placeholder;
-            color: root.value != "" ? Design.foreground : Design.muted-foreground;
-            font-family: Design.font-family;
-            font-size: Design.font-sm;
-            vertical-alignment: center;
-            overflow: elide;
-            wrap: no-wrap;
-        }
+// A banner: a 16px icon, an optional bold title, optional text, and an
+// optional close button (`closable`, fires `dismissed`). Text longer than four
+// lines is cut, and `expandable` (set it for long texts) adds a "Show more" button. `icon` defaults to a glyph for the
+// variant.
+export component Alert inherits Rectangle {
+    in property <AlertVariant> variant: AlertVariant.info;
+    in property <string> title;
+    in property <string> text;
+    in property <bool> closable: false;
+    // Set when the text is long enough to need "Show more" (the component cannot measure it).
+    in property <bool> expandable: false;
+    // Runs of `text` (emoji as pictures); empty = plain text.
+    in property <[TextRun]> text-runs;
+    // An optional button under the text, for example "Renew"; fires `action`.
+    in property <string> action-text;
+    callback action();
+    in property <image> icon: root.variant == AlertVariant.error ? @image-url("assets/icons/triangle-alert.svg")
+        : root.variant == AlertVariant.success ? @image-url("assets/icons/circle-check.svg")
+        : root.variant == AlertVariant.warning ? @image-url("assets/icons/triangle-alert.svg")
+        : @image-url("assets/icons/info.svg");
+    callback dismissed();
 
-        IconChevronDown {
+    private property <bool> expanded: false;
+    private property <color> ink: root.variant == AlertVariant.error ? Design.destructive
+        : root.variant == AlertVariant.success ? Design.success
+        : root.variant == AlertVariant.warning ? Design.warning
+        : Design.muted-foreground;
+
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    preferred-height: lay.preferred-height;
+    border-radius: Design.radius-md;
+    border-width: 1px;
+    border-color: root.variant == AlertVariant.error ? Design.destructive.transparentize(0.6)
+        : root.variant == AlertVariant.warning ? Design.warning.transparentize(0.6)
+        : root.variant == AlertVariant.success ? Design.success.transparentize(0.6)
+        : Design.border;
+    background: root.variant == AlertVariant.error ? Design.destructive.transparentize(0.9)
+        : root.variant == AlertVariant.warning ? Design.warning.transparentize(0.9)
+        : root.variant == AlertVariant.success ? Design.success.transparentize(0.9)
+        : transparent;
+
+    lay := HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: 16px;
+        padding-right: 12px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 12px;
+
+        Image {
             width: 16px;
             height: 16px;
-            x: parent.width - 12px - 16px;
-            y: (parent.height - self.height) / 2;
-            stroke: Design.muted-foreground;
-            stroke-width: 2px;
+            source: root.icon;
+            colorize: root.ink;
         }
 
-        TouchArea {
-            enabled: root.enabled;
-            clicked => {
-                popup.show();
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 4px;
+
+            if (root.title != "") : Text {
+                text: root.title;
+                color: Design.foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-base;
+                font-weight: 600;
+                wrap: word-wrap;
+            }
+
+            body-text := EmojiText {
+                visible: root.text != "" || root.text-runs.length > 0;
+                runs: root.text-runs;
+                fallback: root.text;
+                color: Design.foreground;
+                font-size: Design.font-sm;
+                wrap: true;
+                max-height: root.expanded ? 100000px : 72px;
+            }
+
+            if (root.expandable) : Button {
+                text: root.expanded ? @tr("Show less") : @tr("Show more");
+                variant: ButtonVariant.ghost;
+                size: ButtonSize.sm;
+                clicked => {
+                    root.expanded = !root.expanded;
+                }
+            }
+
+            if (root.action-text != "") : HorizontalLayout {
+                alignment: start;
+
+                Button {
+                    text: root.action-text;
+                    variant: ButtonVariant.outline;
+                    size: ButtonSize.sm;
+                    clicked => {
+                        root.action();
+                    }
+                }
             }
         }
 
-        popup := PopupWindow {
-            x: 0;
-            y: box.height + 4px;
-            width: box.width;
-            height: root.options.length * 32px + 8px;
-            close-policy: close-on-click-outside;
+        if (root.closable) : IconButton {
+            icon: @image-url("assets/icons/x.svg");
+            size: ButtonSize.sm;
+            variant: ButtonVariant.ghost;
+            clicked => {
+                root.dismissed();
+            }
+        }
+    }
+}
 
-            Rectangle {
-                background: Design.popover;
-                border-radius: Design.radius-md;
-                border-width: 1px;
-                border-color: Design.input;
+// --- ConfirmDialog ----------------------------------------------------------
 
-                VerticalLayout {
-                    padding: 4px;
-                    spacing: 0px;
+// A modal dialog: 420px, centred over the element it is placed in, with a
+// title, a message and right-aligned buttons. Place it as the last child of an
+// element that fills the area it should cover (its own width and height come
+// from its parent). Call show() and close(); `confirmed` and `cancelled` fire
+// on the buttons. The confirm button is destructive by default.
+export component ConfirmDialog inherits Rectangle {
+    in property <string> title;
+    in property <string> message;
+    in property <string> confirm-text: @tr("Confirm");
+    in property <string> cancel-text: @tr("Cancel");
+    in property <ButtonVariant> confirm-variant: ButtonVariant.destructive;
+    in property <bool> busy: false;
+    callback confirmed();
+    callback cancelled();
 
-                    for option[i] in root.options : Rectangle {
-                        height: 32px;
-                        border-radius: Design.radius-sm;
-                        background: option-touch.has-hover ? Design.accent : transparent;
+    private property <length> pad: 20px;
 
-                        Text {
-                            x: Design.space-sm;
-                            width: parent.width - 2 * Design.space-sm - 16px - Design.space-sm;
-                            height: parent.height;
-                            text: option;
-                            color: Design.foreground;
-                            font-family: Design.font-family;
-                            font-size: Design.font-sm;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            wrap: no-wrap;
+
+    public function show() {
+        dlg.show();
+    }
+
+    public function close() {
+        dlg.close();
+    }
+
+    dlg := PopupWindow {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 420px + 2 * root.pad;
+        height: panel.height + 2 * root.pad;
+        close-policy: no-auto-close;
+
+        panel := Rectangle {
+            x: root.pad;
+            y: root.pad;
+            width: 420px;
+            height: col.preferred-height;
+            background: Design.popover;
+            border-width: 1px;
+            border-color: Design.border;
+            border-radius: Design.radius-lg;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: Design.shadow;
+
+            col := VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 24px;
+                spacing: 12px;
+
+                Text {
+                    text: root.title;
+                    color: Design.foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-lg + 2px;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.message;
+                    color: Design.muted-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-base;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    padding-top: 12px;
+
+                    Button {
+                        text: root.cancel-text;
+                        variant: ButtonVariant.outline;
+                        size: ButtonSize.md;
+                        clicked => {
+                            dlg.close();
+                            root.cancelled();
                         }
+                    }
 
-                        if (option == root.value) : IconCheck {
-                            width: 16px;
-                            height: 16px;
-                            x: parent.width - 16px - Design.space-sm;
-                            y: (parent.height - self.height) / 2;
-                            stroke: Design.foreground;
-                            stroke-width: 2px;
-                        }
-
-                        option-touch := TouchArea {
-                            clicked => {
-                                root.selected(option);
-                                popup.close();
-                            }
+                    Button {
+                        text: root.confirm-text;
+                        variant: root.confirm-variant;
+                        size: ButtonSize.md;
+                        busy: root.busy;
+                        clicked => {
+                            root.confirmed();
                         }
                     }
                 }
@@ -551,228 +1100,198 @@ export component AppSelect inherits VerticalLayout {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Section header
-// ---------------------------------------------------------------------------
+// --- EmptyState -------------------------------------------------------------
 
-export component SectionHeading inherits VerticalLayout {
-    in property <string> eyebrow;
+// A centred block for an empty list: a 40px icon circle, a semibold title, one
+// line of muted text and an optional secondary button. Put it inside a Card.
+export component EmptyState inherits Rectangle {
+    in property <image> icon;
     in property <string> title;
-    in property <string> description;
-
-    spacing: 2px;
-
-    if (root.eyebrow != "") : Text {
-        text: root.eyebrow;
-        color: Design.primary;
-        font-family: Design.font-family;
-        font-size: Design.font-xs;
-        font-weight: 500;
-    }
-
-    Text {
-        text: root.title;
-        color: Design.foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-xl;
-        font-weight: 600;
-        wrap: word-wrap;
-    }
-
-    if (root.description != "") : Text {
-        text: root.description;
-        color: Design.muted-foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-sm;
-        wrap: word-wrap;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Empty state
-//
-// GOAL.md §5 requires every screen to have an explicit empty state — no
-// blank panels. It takes its natural height (no stretch), so inside a card
-// it is a compact centred block, not an empty box.
-// ---------------------------------------------------------------------------
-
-export component EmptyState inherits VerticalLayout {
-    in property <string> title;
-    in property <string> description;
+    in property <string> text;
     in property <string> action-text;
     callback action();
 
-    spacing: Design.space-xs;
-    alignment: center;
     vertical-stretch: 0;
-    padding-top: Design.space-sm;
-    padding-bottom: Design.space-sm;
+    preferred-height: col.preferred-height;
 
-    Text {
-        text: root.title;
-        color: Design.foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-sm;
-        font-weight: 500;
-        horizontal-alignment: center;
-        wrap: word-wrap;
-    }
+    col := VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding: 24px;
+        spacing: 12px;
+        alignment: center;
 
-    if (root.description != "") : Text {
-        text: root.description;
-        color: Design.muted-foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-xs;
-        horizontal-alignment: center;
-        wrap: word-wrap;
-    }
-
-    if (root.action-text != "") : AppButton {
-        text: root.action-text;
-        clicked => {
-            root.action();
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Error banner
-// ---------------------------------------------------------------------------
-
-export enum BannerKind {
-    info,
-    success,
-    error,
-}
-
-export component ErrorBanner inherits Rectangle {
-    in property <string> message;
-    in property <string> detail;
-    in property <BannerKind> kind: BannerKind.error;
-    callback dismissed();
-
-    private property <color> ink: root.kind == BannerKind.error ? Design.primary-foreground : Design.foreground;
-
-    background: root.kind == BannerKind.error ? Design.destructive
-        : root.kind == BannerKind.success ? Design.success
-        : Design.secondary;
-    border-radius: Design.radius-md;
-    border-width: root.kind == BannerKind.info ? 1px : 0px;
-    border-color: Design.input;
-    min-height: 44px;
-
-    HorizontalLayout {
-        padding: Design.space-sm;
-        padding-left: Design.space-md;
-        spacing: Design.space-sm;
-
-        IconTriangleAlert {
-            width: 18px;
-            height: 18px;
-            y: (parent.height - self.height) / 2;
-            stroke: root.ink;
-            stroke-width: 2px;
-            visible: root.kind == BannerKind.error;
-        }
-
-        VerticalLayout {
-            spacing: 0px;
+        HorizontalLayout {
             alignment: center;
 
-            Text {
-                text: root.message;
-                color: root.ink;
-                font-family: Design.font-family;
-                font-size: Design.font-sm;
-                font-weight: 500;
-                wrap: word-wrap;
-            }
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: Design.radius-full;
+                background: Design.secondary;
 
-            if (root.detail != "") : Text {
-                text: root.detail;
-                color: root.ink;
-                font-family: Design.font-family;
-                font-size: Design.font-xs;
-                opacity: 0.85;
-                wrap: word-wrap;
+                Image {
+                    x: 10px;
+                    y: 10px;
+                    width: 20px;
+                    height: 20px;
+                    source: root.icon;
+                    colorize: Design.muted-foreground;
+                }
             }
         }
 
-        // The dismiss control: an icon with a hit area, not a glyph in a
-        // text label.
-        Rectangle {
-            width: 28px;
-            height: 28px;
-            y: (parent.height - self.height) / 2;
-            border-radius: Design.radius-sm;
+        Text {
+            text: root.title;
+            color: Design.foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-base + 1px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            height: 22px;
+            vertical-alignment: center;
+            wrap: no-wrap;
+        }
 
-            IconX {
-                width: 14px;
-                height: 14px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                stroke: root.ink;
-                stroke-width: 2px;
-            }
+        Text {
+            text: root.text;
+            color: Design.muted-foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-sm;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
 
-            TouchArea {
+        if (root.action-text != "") : HorizontalLayout {
+            alignment: center;
+
+            Button {
+                text: root.action-text;
+                variant: ButtonVariant.secondary;
+                size: ButtonSize.md;
                 clicked => {
-                    root.dismissed();
+                    root.action();
                 }
             }
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Loading state
-// ---------------------------------------------------------------------------
+// --- LatencyText ------------------------------------------------------------
 
-export component LoadingState inherits VerticalLayout {
-    in property <string> message: "Loading…";
+// A latency as text: "—" when untested, "timeout" at 0, otherwise "123 ms",
+// coloured green under 200 ms, amber under 500 ms, red from 500 ms.
+export component LatencyText inherits Text {
+    in property <int> ms: -1;
 
-    spacing: Design.space-sm;
-    alignment: center;
+    text: LatencyFormat.latency-text(root.ms);
+    color: LatencyFormat.latency-color(root.ms);
+    font-family: Design.font-family;
+    font-size: Design.font-xs;
+    font-weight: 500;
+    vertical-alignment: center;
+    horizontal-alignment: right;
+    wrap: no-wrap;
+}
 
-    Text {
-        text: root.message;
-        color: Design.muted-foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-sm;
+// --- PageHeader -------------------------------------------------------------
+
+// The title block at the top of a page: a 20px semibold title and an optional
+// 14px muted description 4px below. Children are the page's actions, placed
+// at the right and centred on the title block. The 24px below the header is
+// the only gap before the page's first block, so a page must not add spacing
+// of its own after the header.
+//
+// The header is a layout with no stretch, so it is exactly as tall as its
+// content and never grows to fill the page.
+export component PageHeader inherits VerticalLayout {
+    in property <string> title;
+    in property <string> description;
+
+    vertical-stretch: 0;
+    padding-bottom: 24px;
+
+    HorizontalLayout {
+        vertical-stretch: 0;
+        spacing: 16px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            vertical-stretch: 0;
+            alignment: start;
+            spacing: 4px;
+
+            Text {
+                text: root.title;
+                color: Design.foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-xl;
+                font-weight: 600;
+                height: 26px;
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+
+            if (root.description != "") : Text {
+                text: root.description;
+                color: Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-base;
+                height: 20px;
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+        }
+
+        VerticalLayout {
+            vertical-stretch: 0;
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                @children
+            }
+        }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Labelled row
-//
-// The shape most of the Settings screen is made of: a label, a control, and
-// an optional explanation underneath.
-// ---------------------------------------------------------------------------
+// --- PageFrame --------------------------------------------------------------
 
-export component SettingRow inherits Rectangle {
-    in property <string> label;
-    in property <string> description;
+// The scrolling body of a page: 32px left and right, 28px top, 32px bottom,
+// and a content column at most 920px wide, left-aligned. Put the page's
+// PageHeader and cards in it as its children. The children stack with no gap:
+// PageHeader brings its own 24px, and a page with several blocks wraps them in
+// a VerticalLayout with the 16px spacing.
+export component PageFrame inherits Rectangle {
+    ScrollView {
+        width: parent.width;
+        height: parent.height;
+        // The scrollable area is at least the window and at least the page's
+        // own height. Without this the page was laid out to the window height,
+        // and cards near the bottom were squeezed into each other.
+        content-height: max(self.height, body.preferred-height);
 
-    height: 60px;
+        body := HorizontalLayout {
+            // No vertical stretch: the page is as tall as its content, so it
+            // starts at the top of the scroll area.
+            vertical-stretch: 0;
+            padding-left: 32px;
+            padding-right: 32px;
+            padding-top: 28px;
+            padding-bottom: 32px;
 
-    VerticalLayout {
-        spacing: 2px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                vertical-stretch: 0;
+                alignment: start;
+                max-width: 920px;
+                spacing: 0px;
 
-        Text {
-            text: root.label;
-            color: Design.foreground;
-            font-family: Design.font-family;
-            font-size: Design.font-sm;
-            font-weight: 500;
-            wrap: word-wrap;
-        }
-
-        if (root.description != "") : Text {
-            text: root.description;
-            color: Design.muted-foreground;
-            font-family: Design.font-family;
-            font-size: Design.font-xs;
-            wrap: word-wrap;
+                @children
+            }
         }
     }
 }

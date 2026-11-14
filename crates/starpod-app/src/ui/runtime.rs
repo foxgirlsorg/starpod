@@ -11,20 +11,28 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
+use crate::deeplink::{self, InstallRequest};
+use crate::instance::Forwarded;
+use crate::update::{self, Release};
 use crate::{AppSnapshot, SharedAppService};
 use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
-use starpod_core::{SubscriptionMode, timestamp};
+use starpod_core::config::{DEFAULT_MIXED_PORT, DEFAULT_SOCKS_PORT};
+use starpod_core::{SubscriptionMode, UserPreferences, timestamp};
 use starpod_subscription::RefreshSchedule;
 use starpod_ui::{AppTray, AppWindow, Bridge};
 use tokio::sync::watch;
 use tracing::{info, warn};
 
 use super::callbacks;
-use super::mapping::{
-    Banner, DEFAULT_REFRESH_MINUTES, ViewState, apply_snapshot, log_items, log_text, notice_banner,
-};
+use super::demo;
+use super::emoji::runs_model;
+use super::hotkeys::{self, Action};
+use super::mapping::{Banner, ViewState, apply_snapshot, log_items, log_text, notice_banner};
+use super::tray;
 
 /// How often the engine's state is polled.
 const ENGINE_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -34,6 +42,21 @@ const REASSERT_INTERVAL: Duration = Duration::from_secs(30);
 const AUTO_REFRESH_TICK: Duration = Duration::from_secs(60);
 /// How often the filter controls are read.
 const FILTER_POLL_INTERVAL: Duration = Duration::from_millis(300);
+/// How often the global shortcut presses are read.
+const SHORTCUT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// How often the engine's connections are read while the Connections page is open.
+const CONNECTIONS_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// The Bridge's `active-page` index of the Connections page.
+pub const CONNECTIONS_PAGE: i32 = 6;
+/// Whether the Connections page is the active page. Written on the Slint thread
+/// by the filter timer, read by the poll, so the poll does nothing while the page
+/// is closed.
+static CONNECTIONS_VISIBLE: AtomicBool = AtomicBool::new(false);
+/// Whether the Connections page is paused. Read by the poll the same way.
+static CONNECTIONS_PAUSED: AtomicBool = AtomicBool::new(false);
+/// Whether closing the window hides Starpod to the tray. Written on the Slint
+/// thread from the saved preferences, read by the window's close handler.
+static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 /// How long quitting waits for the engine to stop.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -56,6 +79,23 @@ pub enum Sink {
     Rules,
     /// The settings error line.
     Settings,
+    /// The install dialog's error line.
+    Install,
+}
+
+/// What this launch was given: a deep link from the command line, and the
+/// requests that later launches forward to it.
+pub struct Launch {
+    /// The deep link this launch was started with, if any. It is queued until
+    /// the window exists.
+    pub link: Option<String>,
+    /// Forwarded requests. `None` when this launch runs without the
+    /// single-instance channel.
+    pub forwards: Option<Receiver<Forwarded>>,
+    /// Whether the window stays hidden at start: a login start with silent
+    /// start on. It is ignored when there is no tray, since then the window
+    /// is the only way to reach the app.
+    pub start_hidden: bool,
 }
 
 /// Everything the Slint thread owns: the windows, the view state, and what
@@ -70,6 +110,15 @@ pub struct UiState {
     busy: u32,
     busy_message: String,
     clipboard: Option<arboard::Clipboard>,
+    /// `STARPOD_UI_DEMO=1`: fill the window with the demo data after the first push.
+    demo_requested: bool,
+    /// Set once the demo data is in the Bridge. Later snapshots are not pushed.
+    demo_applied: bool,
+    /// A deep link waiting for the user to confirm it. The address stays here
+    /// and never reaches the Bridge.
+    pending_install: Option<InstallRequest>,
+    /// The global shortcuts registered with the operating system.
+    shortcuts: hotkeys::Shortcuts,
 }
 
 thread_local! {
@@ -104,7 +153,61 @@ impl UiState {
             busy: 0,
             busy_message: String::new(),
             clipboard: None,
+            demo_requested: demo::requested(),
+            demo_applied: false,
+            pending_install: None,
+            shortcuts: hotkeys::Shortcuts::default(),
         }
+    }
+
+    /// A request from a later launch, or the link this launch started with.
+    /// The window is shown first, so the confirmation is seen.
+    pub fn forwarded(&mut self, forward: Forwarded) {
+        if let Err(error) = self.window.show() {
+            warn!(%error, "could not show the window");
+        }
+        match forward {
+            Forwarded::Show => {}
+            Forwarded::Link(text) => match deeplink::parse(&text) {
+                Ok(request) => self.ask_install(request),
+                Err(error) => {
+                    warn!(%error, "a deep link was refused");
+                    self.show_banner(Banner::error(crate::i18n::fmt(
+                        "the link was not used: {}",
+                        &[&error.to_string()],
+                    )));
+                }
+            },
+        }
+    }
+
+    /// Show the confirmation for a deep link. Only the host is shown.
+    fn ask_install(&mut self, request: InstallRequest) {
+        let host = request.host();
+        let name = request.name.clone().unwrap_or_default();
+        self.pending_install = Some(request);
+        self.each_bridge(|bridge| {
+            bridge.set_install_host(host.as_str().into());
+            bridge.set_install_name(name.as_str().into());
+            bridge.set_install_error("".into());
+            bridge.set_install_pending(true);
+        });
+    }
+
+    /// The request waiting for confirmation, if any.
+    pub fn pending_install(&self) -> Option<InstallRequest> {
+        self.pending_install.clone()
+    }
+
+    /// Forget the pending request and close the confirmation.
+    pub fn end_install(&mut self) {
+        self.pending_install = None;
+        self.each_bridge(|bridge| {
+            bridge.set_install_pending(false);
+            bridge.set_install_error("".into());
+            bridge.set_install_host("".into());
+            bridge.set_install_name("".into());
+        });
     }
 
     /// Run `update` on each bridge: the window's, and the tray's when there
@@ -116,20 +219,93 @@ impl UiState {
         }
     }
 
-    /// Read the two filter controls. Returns whether either changed.
+    /// Read the filter and list controls. Returns whether any changed.
     fn sync_filters(&mut self) -> bool {
         let bridge = self.window.global::<Bridge>();
         let node_filter = bridge.get_node_filter().to_string();
         let log_filter = bridge.get_log_level_filter().to_string();
-        self.view.set_filters(&node_filter, &log_filter)
+        let connections_filter = bridge.get_connections_filter().to_string();
+        let connections_sort = bridge.get_connections_sort();
+        let proxies_sort = bridge.get_proxies_sort();
+        let hide_unavailable = bridge.get_hide_unavailable();
+        let lists = self.view.set_list_controls(
+            &connections_filter,
+            connections_sort,
+            proxies_sort,
+            hide_unavailable,
+        );
+        let filters = self.view.set_filters(&node_filter, &log_filter);
+        lists || filters
+    }
+
+    /// Take the Proxies list settings from the saved preferences the first time
+    /// a snapshot arrives, and show them on the page.
+    fn seed_list_prefs(&mut self, snap: &AppSnapshot) {
+        if self.view.load_list_prefs(&snap.preferences) {
+            let sort = self.view.proxies_sort;
+            let hide = self.view.hide_unavailable;
+            self.each_bridge(|bridge| {
+                bridge.set_proxies_sort(sort);
+                bridge.set_hide_unavailable(hide);
+            });
+        }
+    }
+
+    /// The Proxies list settings the page shows that the saved preferences do
+    /// not hold. `None` when they agree, or before the saved settings are read.
+    pub fn list_prefs_to_save(&self) -> Option<(u8, bool)> {
+        if !self.view.list_prefs_loaded {
+            return None;
+        }
+        let saved = &self.last.as_ref()?.preferences;
+        let sort = u8::try_from(self.view.proxies_sort).ok()?;
+        let hide = self.view.hide_unavailable;
+        (sort != saved.proxies_sort || hide != saved.hide_unavailable).then_some((sort, hide))
+    }
+
+    /// Tell the connections poll whether the Connections page is open and
+    /// whether it is paused.
+    pub fn sync_page_flags(&self) {
+        let bridge = self.window.global::<Bridge>();
+        CONNECTIONS_VISIBLE.store(
+            bridge.get_active_page() == CONNECTIONS_PAGE,
+            Ordering::Relaxed,
+        );
+        CONNECTIONS_PAUSED.store(bridge.get_connections_paused(), Ordering::Relaxed);
+    }
+
+    /// Flip one Proxies group between expanded and collapsed.
+    pub fn toggle_group(&mut self, group: &str) {
+        self.view.toggle_group(group);
+        self.reapply_last();
+    }
+
+    /// Expand every Proxies group, or collapse them all.
+    pub fn set_all_groups_expanded(&mut self, expanded: bool) {
+        let names: Vec<String> = self
+            .last
+            .as_ref()
+            .map(|snap| snap.groups.iter().map(|group| group.name.clone()).collect())
+            .unwrap_or_default();
+        self.view.set_all_expanded(expanded, names);
+        self.reapply_last();
     }
 
     /// Apply a new snapshot from the service.
     pub fn apply(&mut self, snap: AppSnapshot) {
+        self.seed_list_prefs(&snap);
         self.sync_filters();
         self.push_snapshot(&snap);
+        if self.demo_requested && !self.demo_applied {
+            // After the first state push, the demo data replaces what the
+            // window shows; the tray's Bridge is left as it is.
+            demo::apply(&self.window.global::<Bridge>());
+            self.demo_applied = true;
+            info!("STARPOD_UI_DEMO: the demo data is in the window");
+        }
         self.view.record(&snap);
         self.sync_notice(&snap);
+        self.push_preferences(&snap.preferences);
         self.last = Some(snap);
     }
 
@@ -141,6 +317,9 @@ impl UiState {
     }
 
     fn push_snapshot(&self, snap: &AppSnapshot) {
+        if self.demo_applied {
+            return;
+        }
         self.each_bridge(|bridge| apply_snapshot(bridge, snap, &self.view));
     }
 
@@ -174,6 +353,7 @@ impl UiState {
             });
         self.each_bridge(|bridge| {
             bridge.set_banner_kind(kind.into());
+            bridge.set_banner_runs(runs_model(&message));
             bridge.set_banner_message(message.as_str().into());
         });
     }
@@ -199,6 +379,7 @@ impl UiState {
         };
         self.each_bridge(|bridge| {
             bridge.set_busy(busy);
+            bridge.set_busy_message_runs(runs_model(&message));
             bridge.set_busy_message(message.as_str().into());
         });
     }
@@ -207,11 +388,18 @@ impl UiState {
     pub fn report(&mut self, sink: Sink, message: String) {
         match sink {
             Sink::Banner => self.show_banner(Banner::error(message)),
-            Sink::Rules => {
-                self.each_bridge(|bridge| bridge.set_rules_error(message.as_str().into()))
-            }
+            Sink::Rules => self.each_bridge(|bridge| {
+                bridge.set_rules_error_runs(runs_model(&message));
+                bridge.set_rules_error(message.as_str().into());
+            }),
             Sink::Settings => {
-                self.each_bridge(|bridge| bridge.set_settings_error(message.as_str().into()));
+                self.each_bridge(|bridge| {
+                    bridge.set_settings_error_runs(runs_model(&message));
+                    bridge.set_settings_error(message.as_str().into());
+                });
+            }
+            Sink::Install => {
+                self.each_bridge(|bridge| bridge.set_install_error(message.as_str().into()));
             }
         }
     }
@@ -221,8 +409,16 @@ impl UiState {
     pub fn clear_error(&mut self, sink: Sink) {
         match sink {
             Sink::Banner => {}
-            Sink::Rules => self.each_bridge(|bridge| bridge.set_rules_error("".into())),
-            Sink::Settings => self.each_bridge(|bridge| bridge.set_settings_error("".into())),
+            Sink::Rules => self.each_bridge(|bridge| {
+                bridge.set_rules_error_runs(runs_model(""));
+                bridge.set_rules_error("".into());
+            }),
+            Sink::Settings => self.each_bridge(|bridge| {
+                bridge.set_settings_error_runs(runs_model(""));
+                bridge.set_settings_error("".into());
+            }),
+            // A confirmed install that succeeded closes its dialog.
+            Sink::Install => self.end_install(),
         }
     }
 
@@ -247,7 +443,10 @@ impl UiState {
             )),
             Err(error) => {
                 warn!(%error, "the clipboard refused the log lines");
-                self.show_banner(Banner::error(format!("could not copy the logs: {error}")));
+                self.show_banner(Banner::error(crate::i18n::fmt(
+                    "could not copy the logs: {}",
+                    &[&error.to_string()],
+                )));
             }
         }
     }
@@ -264,9 +463,180 @@ impl UiState {
         Ok(())
     }
 
+    /// Put the proxy command for the visible ports on the clipboard.
+    pub fn copy_proxy_env(&mut self) {
+        let prefs = self
+            .last
+            .as_ref()
+            .map(|snap| snap.preferences.clone())
+            .unwrap_or_default();
+        let http_port = prefs.mixed_port.unwrap_or(DEFAULT_MIXED_PORT);
+        let socks_port = prefs.socks_port.unwrap_or(DEFAULT_SOCKS_PORT);
+        let text = tray::proxy_env_command(cfg!(windows), http_port, socks_port);
+        match self.copy_text(text) {
+            Ok(()) => self.show_banner(Banner::success("the proxy command is on the clipboard")),
+            Err(error) => {
+                warn!(%error, "the clipboard refused the proxy command");
+                self.show_banner(Banner::error(format!(
+                    "could not copy the proxy command: {error}"
+                )));
+            }
+        }
+    }
+
+    /// Push the preferences the Bridge shows beside the snapshot: the update
+    /// setting, the shortcuts and the system proxy. The shortcuts are
+    /// registered when they changed.
+    fn push_preferences(&mut self, prefs: &UserPreferences) {
+        let check_updates = prefs.check_updates.unwrap_or(true);
+        let shortcuts = hotkeys::model_from(&prefs.hotkeys);
+        CLOSE_TO_TRAY.store(prefs.close_to_tray, Ordering::Relaxed);
+        // The Slint strings follow the same language as the Rust-side ones.
+        // Both the window and the tray hold the translations, so both switch.
+        let language = crate::i18n::effective(&prefs.language);
+        if let Err(error) = slint::select_bundled_translation(language.tag()) {
+            warn!(?error, "the interface language could not be selected");
+        }
+        self.each_bridge(|bridge| {
+            bridge.set_check_updates(check_updates);
+            bridge.set_hotkeys(shortcuts.clone());
+        });
+        if let Some(message) = self.shortcuts.apply(&prefs.hotkeys) {
+            warn!(%message, "the global shortcuts could not all be registered");
+            self.report(Sink::Settings, message);
+        }
+    }
+
+    /// Run the shortcuts pressed since the last poll.
+    pub fn run_pressed_shortcuts(&mut self) {
+        for action in self.shortcuts.drain_presses() {
+            self.run_shortcut(action);
+        }
+    }
+
+    /// Switch the routing mode through the Bridge callback the menu uses.
+    fn set_mode_from_shortcut(&self, mode: &str) {
+        self.window.global::<Bridge>().invoke_set_mode(mode.into());
+    }
+
+    /// Run one shortcut through the Bridge callback its button uses, so the
+    /// shortcut and the button cannot disagree. The callbacks start their work
+    /// in the background, so none of them re-enters this state.
+    fn run_shortcut(&mut self, action: Action) {
+        match action {
+            Action::ShowWindow => {
+                let result = if self.window.window().is_visible() {
+                    self.window.hide()
+                } else {
+                    self.window.show()
+                };
+                if let Err(error) = result {
+                    warn!(%error, "could not show or hide the window");
+                }
+            }
+            Action::ToggleConnect => {
+                let bridge = self.window.global::<Bridge>();
+                match bridge.get_engine_phase().as_str() {
+                    "running" => bridge.invoke_disconnect(),
+                    "stopped" | "failed" => bridge.invoke_connect(),
+                    _ => {}
+                }
+            }
+            Action::ToggleSystemProxy => {
+                let bridge = self.window.global::<Bridge>();
+                bridge.invoke_toggle_system_proxy(!bridge.get_system_proxy_active());
+            }
+            Action::ModeRule => self.set_mode_from_shortcut("rule"),
+            Action::ModeGlobal => self.set_mode_from_shortcut("global"),
+            Action::ModeDirect => self.set_mode_from_shortcut("direct"),
+        }
+    }
+
+    /// Show the outcome of an update check: the update fields on each Bridge,
+    /// and a banner when the user asked for the check. A failed startup check
+    /// says nothing, since the user did not ask for it.
+    fn finish_update_check(&mut self, result: Result<Option<Release>, String>, manual: bool) {
+        match result {
+            Ok(Some(release)) => {
+                let version = release.version.clone();
+                let url = release.url;
+                self.each_bridge(|bridge| {
+                    bridge.set_update_available(true);
+                    bridge.set_update_version(version.as_str().into());
+                    bridge.set_update_url(url.as_str().into());
+                });
+                if manual {
+                    self.show_banner(Banner::info(crate::i18n::fmt(
+                        "Starpod {} is available",
+                        &[&version.to_string()],
+                    )));
+                }
+            }
+            Ok(None) => {
+                self.each_bridge(|bridge| {
+                    bridge.set_update_available(false);
+                    bridge.set_update_version("".into());
+                    bridge.set_update_url("".into());
+                });
+                if manual {
+                    self.show_banner(Banner::success(format!(
+                        "Starpod {} is the latest version",
+                        update::CURRENT_VERSION
+                    )));
+                }
+            }
+            Err(message) => {
+                warn!(%message, "the update check failed");
+                if manual {
+                    self.show_banner(Banner::error(format!(
+                        "could not check for updates: {message}"
+                    )));
+                }
+            }
+        }
+    }
+
     fn show_tray_availability(&self, available: bool) {
         self.each_bridge(|bridge| bridge.set_tray_available(available));
     }
+
+    /// Show the device-identification switch as saved. Called after its
+    /// callback saves, so the switch matches the stored value even when the
+    /// save was refused and nothing else changed.
+    pub fn push_send_device_id(&self, enabled: bool) {
+        self.each_bridge(|bridge| bridge.set_send_device_id(enabled));
+    }
+
+    /// Show the update-check switch as saved. See [`Self::push_send_device_id`].
+    pub fn push_check_updates(&self, enabled: bool) {
+        self.each_bridge(|bridge| bridge.set_check_updates(enabled));
+    }
+}
+
+/// Check GitHub for a newer release. A manual check always runs. The startup
+/// check runs only while the user keeps the setting on.
+pub fn spawn_update_check(ctx: &Ctx, manual: bool) {
+    let service = ctx.service.clone();
+    ctx.runtime.spawn(async move {
+        if !manual {
+            let enabled = service
+                .lock()
+                .await
+                .user_state()
+                .preferences
+                .check_updates
+                .unwrap_or(true);
+            if !enabled {
+                return;
+            }
+        }
+        let result = match update::fetch_latest_release().await {
+            Ok(release) => update::is_newer(&release.version, update::CURRENT_VERSION)
+                .map(|newer| newer.then_some(release)),
+            Err(error) => Err(error),
+        };
+        post(move |ui| ui.finish_update_check(result, manual));
+    });
 }
 
 /// Show the window, if it still exists.
@@ -299,7 +669,14 @@ pub fn request_quit(ctx: &Ctx) {
     let service = ctx.service.clone();
     ctx.runtime.spawn(async move {
         info!("quitting: stopping the engine");
-        let stop = async { service.lock().await.disconnect().await };
+        let stop = async {
+            let mut svc = service.lock().await;
+            let result = svc.disconnect().await;
+            // Restored even when the engine did not stop cleanly, so the user's
+            // system proxy never outlives the app.
+            svc.restore_system_proxy().await;
+            result
+        };
         match tokio::time::timeout(SHUTDOWN_TIMEOUT, stop).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => warn!(%error, "the engine did not stop cleanly"),
@@ -363,6 +740,22 @@ async fn poll_engine(service: SharedAppService) {
     }
 }
 
+/// Read the engine's open connections every [`CONNECTIONS_POLL_INTERVAL`],
+/// but only while the Connections page is open and not paused.
+async fn poll_connections(service: SharedAppService) {
+    let mut tick = tokio::time::interval(CONNECTIONS_POLL_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        if !CONNECTIONS_VISIBLE.load(Ordering::Relaxed)
+            || CONNECTIONS_PAUSED.load(Ordering::Relaxed)
+        {
+            continue;
+        }
+        service.lock().await.refresh_connections().await;
+    }
+}
+
 fn unix_now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
@@ -379,18 +772,21 @@ pub fn due_subscription_ids(
     now: i64,
     last_attempt: &HashMap<String, i64>,
 ) -> Vec<String> {
-    let minutes = snap
-        .preferences
-        .auto_refresh_minutes
-        .unwrap_or(DEFAULT_REFRESH_MINUTES);
-    if minutes == 0 {
+    // The user's own interval wins when they chose one; `0` is manual only.
+    // Otherwise each subscription uses its provider's update interval, or the
+    // default when the provider sent none.
+    let user_minutes = snap.preferences.auto_refresh_minutes;
+    if user_minutes == Some(0) {
         return Vec::new();
     }
-    let interval_secs = u64::from(minutes) * 60;
     snap.subscriptions
         .iter()
         .filter(|subscription| subscription.mode == SubscriptionMode::AppManaged)
         .filter(|subscription| {
+            let interval_secs = match user_minutes {
+                Some(minutes) => u64::from(minutes) * 60,
+                None => subscription.interval_secs,
+            };
             let last_success = subscription
                 .last_updated
                 .as_deref()
@@ -426,6 +822,21 @@ async fn auto_refresh(service: SharedAppService) {
     }
 }
 
+/// Pass each request that a later launch forwards to the Slint thread. The
+/// thread ends when the listener does.
+fn spawn_forwarder(forwards: Receiver<Forwarded>) {
+    let spawned = std::thread::Builder::new()
+        .name("starpod-forwards".to_string())
+        .spawn(move || {
+            for forward in forwards {
+                post(move |ui| ui.forwarded(forward));
+            }
+        });
+    if let Err(error) = spawned {
+        warn!(%error, "could not start the thread for forwarded requests");
+    }
+}
+
 /// Build the window and the tray, wire every callback, start the background
 /// loops, and run the Slint event loop until the app quits.
 ///
@@ -434,17 +845,22 @@ async fn auto_refresh(service: SharedAppService) {
 pub fn run(
     runtime: tokio::runtime::Handle,
     service: SharedAppService,
+    launch: Launch,
 ) -> Result<(), Box<dyn Error>> {
     let window = AppWindow::new()?;
     info!("window created");
-    // Debug hook for tools/ui-shot.sh: STARPOD_UI_PAGE=0..4 opens that page.
+    // Debug hook for tools/ui-shot.sh: STARPOD_UI_PAGE=0..6 opens that page
+    // (6 is Connections).
     if let Some(page) = std::env::var("STARPOD_UI_PAGE")
         .ok()
         .and_then(|value| value.trim().parse::<i32>().ok())
-        .filter(|page| (0..=4).contains(page))
+        .filter(|page| (0..=CONNECTIONS_PAGE).contains(page))
     {
         window.global::<Bridge>().set_active_page(page);
-        info!(page, "STARPOD_UI_PAGE: opened the page given in the environment");
+        info!(
+            page,
+            "STARPOD_UI_PAGE: opened the page given in the environment"
+        );
     }
     let tray = create_tray();
     let tray_available = tray.is_some();
@@ -460,7 +876,9 @@ pub fn run(
     }
     let close_ctx = ctx.clone();
     window.window().on_close_requested(move || {
-        if !tray_available {
+        // Without a tray there is nowhere to hide to, so closing always quits.
+        let hide_to_tray = tray_available && CLOSE_TO_TRAY.load(Ordering::Relaxed);
+        if !hide_to_tray {
             request_quit(&close_ctx);
         }
         CloseRequestResponse::HideWindow
@@ -468,11 +886,24 @@ pub fn run(
 
     // The window is shown before it moves into the UI state: the state is the
     // only owner the Slint thread needs from here on.
-    window.show()?;
-    info!("window shown");
+    if launch.start_hidden && tray_available {
+        info!("started hidden in the tray");
+    } else {
+        window.show()?;
+        info!("window shown");
+    }
     let ui = UiState::new(window, tray);
     ui.show_tray_availability(tray_available);
     UI.with(|cell| *cell.borrow_mut() = Some(ui));
+
+    // The link this launch started with waits until the window exists, which
+    // it now does. Requests from later launches are passed on as they come.
+    if let Some(link) = launch.link {
+        with_ui(|ui| ui.forwarded(Forwarded::Link(link)));
+    }
+    if let Some(forwards) = launch.forwards {
+        spawn_forwarder(forwards);
+    }
 
     runtime.spawn({
         let service = service.clone();
@@ -482,16 +913,28 @@ pub fn run(
         }
     });
     runtime.spawn(poll_engine(service.clone()));
+    runtime.spawn(poll_connections(service.clone()));
     runtime.spawn(watch_engine_subscriptions(service.clone()));
     runtime.spawn(auto_refresh(service));
+    // The startup update check runs only while the setting allows it.
+    spawn_update_check(&ctx, false);
 
     let filters = Timer::default();
-    filters.start(TimerMode::Repeated, FILTER_POLL_INTERVAL, || {
+    let list_ctx = ctx.clone();
+    filters.start(TimerMode::Repeated, FILTER_POLL_INTERVAL, move || {
         with_ui(|ui| {
             if ui.sync_filters() {
                 ui.reapply_last();
             }
+            if let Some((sort, hide)) = ui.list_prefs_to_save() {
+                callbacks::save_list_prefs(&list_ctx, sort, hide);
+            }
+            ui.sync_page_flags();
         });
+    });
+    let shortcuts = Timer::default();
+    shortcuts.start(TimerMode::Repeated, SHORTCUT_POLL_INTERVAL, || {
+        with_ui(|ui| ui.run_pressed_shortcuts());
     });
 
     // Queued before the loop starts, so it runs only once the loop is
@@ -505,6 +948,7 @@ pub fn run(
         Err(error) => warn!(%error, "event loop exited with an error"),
     }
     drop(filters);
+    drop(shortcuts);
     let state = UI.with(|cell| cell.borrow_mut().take());
     drop(state);
     outcome?;
@@ -528,6 +972,17 @@ mod tests {
             group_count: 0,
             quota: None,
             has_auth_header: false,
+            title: id.to_string(),
+            announce: None,
+            support_url: None,
+            web_url: None,
+            web_page_name: None,
+            announce_url: None,
+            logo_path: None,
+            interval_secs: 3600,
+            global_mode_disabled: false,
+            expand_proxy_groups: None,
+            device_limit: false,
         }
     }
 
@@ -538,6 +993,39 @@ mod tests {
         };
         snap.preferences.auto_refresh_minutes = minutes;
         snap
+    }
+
+    #[test]
+    fn a_provider_update_interval_sets_the_schedule_when_the_user_chose_none() {
+        let mut slow = subscription(
+            "slow",
+            SubscriptionMode::AppManaged,
+            Some(&stamp(NOW - 2 * 3600)),
+        );
+        slow.interval_secs = 6 * 3600;
+        let snap = snapshot(None, vec![slow]);
+        assert!(
+            due_subscription_ids(&snap, NOW, &HashMap::new()).is_empty(),
+            "two hours into a six-hour provider interval is not due"
+        );
+    }
+
+    #[test]
+    fn the_user_interval_overrides_the_provider_interval_and_zero_is_manual() {
+        let mut slow = subscription(
+            "slow",
+            SubscriptionMode::AppManaged,
+            Some(&stamp(NOW - 2 * 3600)),
+        );
+        slow.interval_secs = 6 * 3600;
+        let user = snapshot(Some(60), vec![slow.clone()]);
+        assert_eq!(
+            due_subscription_ids(&user, NOW, &HashMap::new()),
+            vec!["slow".to_string()],
+            "the user's hourly setting wins over the provider's six hours"
+        );
+        let manual = snapshot(Some(0), vec![slow]);
+        assert!(due_subscription_ids(&manual, NOW, &HashMap::new()).is_empty());
     }
 
     const NOW: i64 = 1_800_000_000;

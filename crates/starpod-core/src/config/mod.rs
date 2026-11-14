@@ -16,7 +16,7 @@
 //! | P2 | `mode`, `log_level`, `tun`, `dns` | user > subscription > default |
 //! | P3 | nodes | union; the user wins on a name collision |
 //! | P4 | proxy groups | user > subscription, per group name |
-//! | P5 | rules | user rules, then subscription rules, then the `MATCH` tail |
+//! | P5 | rules | user rules, then subscription rules, then the `MATCH` tail; the tail's target is the user's selected group, else the first `MATCH`'s target, else `PROXY` |
 //! | P6 | the selected node | user > subscription default, by node id |
 //!
 //! "Never silently overwrite user settings" is enforced structurally: the
@@ -24,14 +24,16 @@
 //! values, and the merge reads them separately. No code path lets one write
 //! the other.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 
 use crate::domain::{
     BuildInput, BuildOutcome, EngineManagedSubscription, Finding, Node, ProxyGroup, ProxyMode,
     RuleProvider, RuntimeConfig, Severity, StoredRule, SubscriptionPayload, SubscriptionSettings,
     TunSettings, UserPreferences,
 };
-use crate::rules::translate_all;
+use crate::rules::{BuiltinTarget, translate_all};
+
+mod engine_options;
 
 #[cfg(test)]
 mod tests;
@@ -57,7 +59,8 @@ pub fn build(input: &BuildInput) -> BuildOutcome {
     let mut findings = Vec::new();
 
     let normalized = normalize(input, &mut findings);
-    let merged = merge(&normalized, &mut findings);
+    engine_options::validate_preferences(&input.preferences, &mut findings);
+    let (merged, primary_group) = merge(&normalized, &mut findings);
     let validated = validate(&merged, &mut findings);
 
     let has_errors = findings.iter().any(|f| f.severity == Severity::Error);
@@ -65,12 +68,14 @@ pub fn build(input: &BuildInput) -> BuildOutcome {
         return BuildOutcome {
             config: None,
             findings,
+            primary_group: None,
         };
     }
 
     BuildOutcome {
         config: Some(validated),
         findings,
+        primary_group,
     }
 }
 
@@ -248,7 +253,10 @@ impl Named for ProxyGroup {
 }
 
 /// Step ② — merging.
-fn merge(normalized: &Normalized, findings: &mut Vec<Finding>) -> RuntimeConfig {
+///
+/// Returns the merged configuration and its primary group (see
+/// [`BuildOutcome::primary_group`]).
+fn merge(normalized: &Normalized, findings: &mut Vec<Finding>) -> (RuntimeConfig, Option<String>) {
     let prefs = &normalized.preferences;
 
     // P1 and P2: the user's own settings win; a subscription's settings are
@@ -303,31 +311,100 @@ fn merge(normalized: &Normalized, findings: &mut Vec<Finding>) -> RuntimeConfig 
     // user's node wins on a name collision — but normalization has already
     // made every name unique, so a collision here is impossible by
     // construction. The map is kept anyway to make the precedence explicit
-    // and to survive a future change to normalization.
-    let mut proxies: BTreeMap<String, Node> = BTreeMap::new();
+    // and to survive a future change to normalization. The nodes keep the
+    // order they were written in.
+    let mut proxies: OrderedMap<Node> = OrderedMap::new();
     for node in &normalized.nodes {
-        proxies.insert(node.name.clone(), node.clone());
+        proxies.insert_or_replace(node.name.clone(), node.clone());
     }
     for payload in &normalized.subscriptions {
         for node in &payload.nodes {
-            proxies
-                .entry(node.name.clone())
-                .or_insert_with(|| node.clone());
+            proxies.insert_if_absent(node.name.clone(), node.clone());
         }
     }
 
-    // P4: the groups are the user's, then the subscriptions'. A group of
-    // the same name is taken from the user.
-    let mut proxy_groups: BTreeMap<String, ProxyGroup> = BTreeMap::new();
-    for group in &normalized.groups {
-        proxy_groups.insert(group.name.clone(), group.clone());
+    // P5: the user's rules come first, then the subscription's rules, then
+    // the mandatory `MATCH` tail. The rules are built before the groups,
+    // because a subscription's own `MATCH` decides where the groups go. The
+    // tail itself is written after the groups, because its target must name
+    // a group that exists (see `tail_target`).
+    let mut rules: Vec<String> = Vec::new();
+    for rule in &normalized.user_rules {
+        if !rule.enabled {
+            continue;
+        }
+        rules.extend(translate_all(std::slice::from_ref(&rule.spec)));
+    }
+    let mut subscription_has_match = false;
+    for payload in &normalized.subscriptions {
+        let translated = translate_all(&payload.rules);
+        subscription_has_match |= translated.iter().any(|rule| rule.starts_with("MATCH,"));
+        rules.extend(translated);
+    }
+    // Rules after the first `MATCH` are unreachable, so they are removed. The
+    // `MATCH` tail itself is written once the groups are known.
+    let first_match = rules.iter().position(|r| r.starts_with("MATCH,"));
+    let first_match_target = first_match
+        .and_then(|index| rules[index].split(',').nth(1))
+        .map(|target| target.trim().to_string());
+    if let Some(index) = first_match {
+        if index + 1 < rules.len() {
+            findings.push(Finding {
+                severity: Severity::Warning,
+                message: "rules after the MATCH rule can never match and were removed".to_string(),
+                subject: None,
+            });
+        }
+        rules.truncate(index);
+    }
+
+    // P4: the groups are kept in the order they are read in:
+    //
+    //   1. the app's own `PROXY` group, first — or, when a subscription
+    //      supplies its own `MATCH`, after the subscriptions' groups;
+    //   2. each subscription's groups, in the order its YAML lists them;
+    //   3. the user's groups, in the user's order.
+    //
+    // A group of the same name is taken from the user. It replaces the
+    // subscription's group in the position the subscription's group held.
+    let default_missing = !normalized
+        .groups
+        .iter()
+        .any(|group| group.name == DEFAULT_GROUP_NAME)
+        && !normalized
+            .subscriptions
+            .iter()
+            .any(|payload| payload.groups.iter().any(|g| g.name == DEFAULT_GROUP_NAME));
+    let default_group = default_missing.then(|| ProxyGroup {
+        id: "builtin-proxy".to_string(),
+        name: DEFAULT_GROUP_NAME.to_string(),
+        group_type: "select".to_string(),
+        members: proxies.keys().map(str::to_string).collect(),
+        strategy: None,
+        url: None,
+        interval: None,
+        raw: Default::default(),
+    });
+    let (leading_default, trailing_default) = if subscription_has_match {
+        (None, default_group)
+    } else {
+        (default_group, None)
+    };
+
+    let mut proxy_groups: OrderedMap<ProxyGroup> = OrderedMap::new();
+    if let Some(group) = leading_default {
+        proxy_groups.insert_if_absent(group.name.clone(), group);
     }
     for payload in &normalized.subscriptions {
         for group in &payload.groups {
-            proxy_groups
-                .entry(group.name.clone())
-                .or_insert_with(|| group.clone());
+            proxy_groups.insert_if_absent(group.name.clone(), group.clone());
         }
+    }
+    if let Some(group) = trailing_default {
+        proxy_groups.insert_if_absent(group.name.clone(), group);
+    }
+    for group in &normalized.groups {
+        proxy_groups.insert_or_replace(group.name.clone(), group.clone());
     }
 
     // A group whose members were renamed by normalization must follow the
@@ -342,50 +419,42 @@ fn merge(normalized: &Normalized, findings: &mut Vec<Finding>) -> RuntimeConfig 
         }
     }
 
-    // There must always be a group to select a node from.
-    if !proxy_groups.contains_key(DEFAULT_GROUP_NAME) {
-        let members: Vec<String> = proxies.keys().cloned().collect();
-        proxy_groups.insert(
-            DEFAULT_GROUP_NAME.to_string(),
-            ProxyGroup {
-                id: "builtin-proxy".to_string(),
-                name: DEFAULT_GROUP_NAME.to_string(),
-                group_type: "select".to_string(),
-                members,
-                strategy: None,
-                url: None,
-                interval: None,
-                raw: Default::default(),
-            },
-        );
-    }
+    // The `MATCH` tail, now that the groups exist.
+    let tail = tail_target(
+        &normalized.preferences,
+        first_match_target.as_deref(),
+        &proxy_groups,
+    );
+    rules.push(format!("MATCH,{tail}"));
 
-    // P5: the user's rules come first, then the subscription's rules, then
-    // the mandatory `MATCH` tail.
-    let mut rules: Vec<String> = Vec::new();
-    for rule in &normalized.user_rules {
-        if !rule.enabled {
-            continue;
-        }
-        rules.extend(translate_all(std::slice::from_ref(&rule.spec)));
-    }
-    for payload in &normalized.subscriptions {
-        rules.extend(translate_all(&payload.rules));
-    }
-    // The `MATCH` tail is the app's, not the user's. If the user wrote one,
-    // it is dropped and replaced by the app's own — a rule after `MATCH` is
-    // unreachable anyway.
-    if let Some(index) = rules.iter().position(|r| r.starts_with("MATCH,")) {
-        if index + 1 < rules.len() {
-            findings.push(Finding {
-                severity: Severity::Warning,
-                message: "rules after the MATCH rule can never match and were removed".to_string(),
-                subject: None,
-            });
-        }
-        rules.truncate(index);
-    }
-    rules.push(format!("MATCH,{}", default_target(&normalized.preferences)));
+    // The group the Home page offers first is the tail's target whenever that
+    // is a group: the Home page's picker then changes where unmatched traffic
+    // goes. Only when the tail is a builtin (DIRECT, REJECT, …) does it fall
+    // back to the first select group a subscription supplies, then the first
+    // select group, then the first group.
+    let subscription_group_names: BTreeSet<&str> = normalized
+        .subscriptions
+        .iter()
+        .flat_map(|payload| payload.groups.iter().map(|group| group.name.as_str()))
+        .collect();
+    let primary_group = if proxy_groups.contains_key(&tail) {
+        Some(tail.clone())
+    } else {
+        proxy_groups
+            .values()
+            .find(|group| {
+                group.group_type == "select"
+                    && subscription_group_names.contains(group.name.as_str())
+            })
+            .map(|group| group.name.clone())
+            .or_else(|| {
+                proxy_groups
+                    .values()
+                    .find(|group| group.group_type == "select")
+                    .map(|group| group.name.clone())
+            })
+            .or_else(|| proxy_groups.values().next().map(|group| group.name.clone()))
+    };
 
     // P6: the selected node is resolved by id, so a rename in the
     // subscription does not lose the user's selection. The selection itself
@@ -403,7 +472,7 @@ fn merge(normalized: &Normalized, findings: &mut Vec<Finding>) -> RuntimeConfig 
         });
     }
 
-    RuntimeConfig {
+    let config = RuntimeConfig {
         mixed_port,
         socks_port,
         port,
@@ -412,29 +481,109 @@ fn merge(normalized: &Normalized, findings: &mut Vec<Finding>) -> RuntimeConfig 
         mode,
         log_level,
         tun: prefs.tun.clone(),
-        proxies: proxies.into_values().collect(),
-        proxy_groups: proxy_groups.into_values().collect(),
+        proxies: proxies.into_vec(),
+        proxy_groups: proxy_groups.into_vec(),
         rules,
         rule_providers: normalized.rule_providers.clone(),
         subscriptions: normalized.engine_managed.clone(),
+        engine: engine_options::resolve(&normalized.preferences, &normalized.subscriptions),
+    };
+    (config, primary_group)
+}
+
+/// A map that remembers the order its keys were first inserted in.
+///
+/// The configuration lists its nodes and groups in the order the user and the
+/// subscriptions wrote them. A `BTreeMap` would sort them by name instead.
+struct OrderedMap<V> {
+    items: Vec<(String, V)>,
+    positions: HashMap<String, usize>,
+}
+
+impl<V> OrderedMap<V> {
+    fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            positions: HashMap::new(),
+        }
+    }
+
+    /// Insert `value` under `key` unless the key is already present: the
+    /// first insertion wins.
+    fn insert_if_absent(&mut self, key: String, value: V) {
+        if !self.positions.contains_key(&key) {
+            self.push(key, value);
+        }
+    }
+
+    /// Insert `value` under `key`, or replace the value of an existing key
+    /// in the position that key already holds.
+    fn insert_or_replace(&mut self, key: String, value: V) {
+        match self.positions.get(&key) {
+            Some(&index) => self.items[index].1 = value,
+            None => self.push(key, value),
+        }
+    }
+
+    fn push(&mut self, key: String, value: V) {
+        self.positions.insert(key.clone(), self.items.len());
+        self.items.push((key, value));
+    }
+
+    fn contains_key(&self, key: &str) -> bool {
+        self.positions.contains_key(key)
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &str> {
+        self.items.iter().map(|(key, _)| key.as_str())
+    }
+
+    fn values(&self) -> impl Iterator<Item = &V> {
+        self.items.iter().map(|(_, value)| value)
+    }
+
+    fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        self.items.iter_mut().map(|(_, value)| value)
+    }
+
+    fn into_vec(self) -> Vec<V> {
+        self.items.into_iter().map(|(_, value)| value).collect()
     }
 }
 
 /// The rule target the `MATCH` tail sends unmatched traffic to.
 ///
-/// It follows the user's selected group when there is one, and falls back
-/// to `DIRECT` — never to a group that does not exist.
-fn default_target(prefs: &UserPreferences) -> String {
-    match &prefs.selected_group {
-        Some(group) if !group.is_empty() => group.clone(),
-        _ => DEFAULT_GROUP_NAME.to_string(),
+/// In order of precedence:
+///
+/// 1. the user's `selected_group`, when it is set and is an existing group;
+/// 2. the target of the first `MATCH` rule (the subscription's, or the
+///    user's), when it names an existing group or a builtin outbound;
+/// 3. the app's `PROXY` group.
+///
+/// A target that names a group which does not exist is never used.
+fn tail_target(
+    prefs: &UserPreferences,
+    first_match_target: Option<&str>,
+    groups: &OrderedMap<ProxyGroup>,
+) -> String {
+    if let Some(group) = prefs.selected_group.as_deref()
+        && !group.is_empty()
+        && groups.contains_key(group)
+    {
+        return group.to_string();
     }
+    if let Some(target) = first_match_target
+        && (groups.contains_key(target) || BuiltinTarget::from_str_exact(target).is_some())
+    {
+        return target.to_string();
+    }
+    DEFAULT_GROUP_NAME.to_string()
 }
 
 /// The group the engine selects from.
 fn resolve_selected_group(
     normalized: &Normalized,
-    groups: &BTreeMap<String, ProxyGroup>,
+    groups: &OrderedMap<ProxyGroup>,
 ) -> Option<String> {
     let preferred = normalized.preferences.selected_group.as_deref()?;
     if groups.contains_key(preferred) {
@@ -564,7 +713,33 @@ fn validate(config: &RuntimeConfig, findings: &mut Vec<Finding>) -> RuntimeConfi
         });
     }
 
-    // Every `RULE-SET` must name a declared provider.
+    // A provider must be one the app can declare: an `http` one or an `inline`
+    // one. A `file` provider would point the engine at a local file, which no
+    // subscription may do. Each name is declared once.
+    let mut declared: BTreeSet<&str> = BTreeSet::new();
+    for provider in &config.rule_providers {
+        if !matches!(provider.provider_type.as_str(), "http" | "inline") {
+            findings.push(Finding {
+                severity: Severity::Error,
+                message: format!(
+                    "the rule provider “{}” has the type “{}”, which the app does not declare",
+                    provider.name, provider.provider_type
+                ),
+                subject: Some(provider.name.clone()),
+            });
+        }
+        if !declared.insert(provider.name.as_str()) {
+            findings.push(Finding {
+                severity: Severity::Error,
+                message: format!("two rule providers are named “{}”", provider.name),
+                subject: Some(provider.name.clone()),
+            });
+        }
+    }
+
+    // Every `RULE-SET` must name a declared provider. Its target and any
+    // trailing flags (`no-resolve`) come after the name and are not checked
+    // here: the target is checked above like any other rule's.
     let providers: BTreeSet<&str> = config
         .rule_providers
         .iter()

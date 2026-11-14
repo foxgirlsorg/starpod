@@ -8,16 +8,18 @@
 
 use std::future::Future;
 
+use crate::deeplink::InstallRequest;
 use crate::{AppError, AppService, SharedAppService};
-use starpod_core::RuleSpec;
-use starpod_ui::{AppWindow, Bridge, SettingsModel};
+use starpod_core::{RuleSpec, SubscriptionMode};
+use starpod_ui::{AppWindow, Bridge, EngineSettingsModel, HotkeyModel, SettingsModel};
 use tracing::warn;
 
+use super::hotkeys;
 use super::mapping::{
-    SettingsInput, build_preferences, moved_position, parse_proxy_mode, parse_rule_line,
-    parse_subscription_mode, rule_line,
+    SettingsInput, build_preferences, engine_form_from_model, moved_position, parse_proxy_mode,
+    parse_rule_line, parse_subscription_mode, rule_line,
 };
-use super::runtime::{Ctx, Sink, request_quit, with_ui};
+use super::runtime::{Ctx, Sink, request_quit, spawn_update_check, with_ui};
 
 /// Run one service action in the background. `busy` shows while it runs.
 /// Its error, if any, goes to `sink`. A success clears that sink's error.
@@ -47,13 +49,67 @@ pub fn act<T, Fut>(
     });
 }
 
+/// Save the Proxies list settings the page shows (member sort and hiding), in
+/// the background. It is quiet: the page already shows the new order, so no
+/// busy message is raised.
+pub fn save_list_prefs(ctx: &Ctx, sort: u8, hide_unavailable: bool) {
+    let service = ctx.service.clone();
+    ctx.runtime.spawn(async move {
+        let mut svc = service.lock().await;
+        let mut prefs = svc.user_state().preferences.clone();
+        prefs.proxies_sort = sort;
+        prefs.hide_unavailable = hide_unavailable;
+        if let Err(error) = svc.save_preferences(prefs).await {
+            warn!(%error, "could not save the proxy list settings");
+        }
+    });
+}
+
 /// Attach every callback to one `Bridge`.
 pub fn wire(bridge: &Bridge<'_>, ctx: &Ctx, window: slint::Weak<AppWindow>) {
     wire_engine(bridge, ctx);
     wire_servers(bridge, ctx);
     wire_rules(bridge, ctx);
     wire_settings(bridge, ctx);
+    wire_install(bridge, ctx);
+    wire_tray_actions(bridge, ctx);
     wire_shell(bridge, ctx, window);
+}
+
+/// The confirmation for a `starpod://` link. Nothing is added until the user
+/// confirms it.
+fn wire_install(bridge: &Bridge<'_>, ctx: &Ctx) {
+    let c = ctx.clone();
+    bridge.on_confirm_install(move || {
+        let mut pending = None;
+        with_ui(|ui| pending = ui.pending_install());
+        match pending {
+            Some(request) => act(&c, "Adding the subscription…", Sink::Install, move |s| {
+                install_subscription_flow(s, request)
+            }),
+            None => with_ui(|ui| ui.end_install()),
+        }
+    });
+
+    bridge.on_cancel_install(|| with_ui(|ui| ui.end_install()));
+}
+
+/// Add the subscription a link asked for, or refresh the one that already
+/// has its address. The subscription is fetched at once, as in the Profiles
+/// form, so the result is visible when the dialog closes.
+async fn install_subscription_flow(
+    s: SharedAppService,
+    request: InstallRequest,
+) -> Result<(), AppError> {
+    let mut svc = s.lock().await;
+    if let Some(id) = svc.subscription_id_for_url(&request.url) {
+        return svc.refresh_subscription(&id).await;
+    }
+    let label = request.label();
+    let id = svc
+        .add_subscription(label, request.url, None, SubscriptionMode::AppManaged)
+        .await?;
+    svc.refresh_subscription(&id).await
 }
 
 fn wire_engine(bridge: &Bridge<'_>, ctx: &Ctx) {
@@ -97,6 +153,41 @@ fn wire_engine(bridge: &Bridge<'_>, ctx: &Ctx) {
         act(&c, "Installing the engine…", Sink::Banner, |s| async move {
             s.lock().await.install_engine().await
         });
+    });
+
+    let c = ctx.clone();
+    bridge.on_check_engine_update(move || {
+        act(
+            &c,
+            "Checking for an engine update…",
+            Sink::Banner,
+            |s| async move { s.lock().await.check_engine_update().await },
+        );
+    });
+
+    let c = ctx.clone();
+    bridge.on_upgrade_engine(move || {
+        act(&c, "Updating the engine…", Sink::Banner, |s| async move {
+            s.lock().await.upgrade_engine().await
+        });
+    });
+
+    let c = ctx.clone();
+    bridge.on_update_geo_data(move || {
+        act(&c, "Updating the geodata…", Sink::Banner, |s| async move {
+            s.lock().await.update_geo_data().await
+        });
+    });
+
+    let c = ctx.clone();
+    bridge.on_test_group(move |group| {
+        let group = group.to_string();
+        act(
+            &c,
+            "Testing the group…",
+            Sink::Banner,
+            move |s| async move { s.lock().await.test_group(&group).await },
+        );
     });
 }
 
@@ -171,11 +262,89 @@ fn wire_servers(bridge: &Bridge<'_>, ctx: &Ctx) {
     });
 
     let c = ctx.clone();
+    bridge.on_select_member(move |group, member| {
+        let group = group.to_string();
+        let member = member.to_string();
+        act(
+            &c,
+            "Choosing the server…",
+            Sink::Banner,
+            move |s| async move { s.lock().await.select_member(&group, &member).await },
+        );
+    });
+
+    let c = ctx.clone();
     bridge.on_test_latency(move || {
         act(&c, "Testing the nodes…", Sink::Banner, |s| async move {
             s.lock().await.test_latency().await
         });
     });
+
+    bridge.on_toggle_group(|group| with_ui(|ui| ui.toggle_group(group.as_str())));
+    bridge.on_expand_all(|expanded| with_ui(|ui| ui.set_all_groups_expanded(expanded)));
+
+    let c = ctx.clone();
+    bridge.on_close_connection(move |id| {
+        let id = id.to_string();
+        act(
+            &c,
+            "Closing the connection…",
+            Sink::Banner,
+            move |s| async move { s.lock().await.close_connection(&id).await },
+        );
+    });
+
+    let c = ctx.clone();
+    bridge.on_close_all_connections(move || {
+        act(
+            &c,
+            "Closing the connections…",
+            Sink::Banner,
+            |s| async move { s.lock().await.close_all_connections().await },
+        );
+    });
+
+    let c = ctx.clone();
+    bridge.on_clear_closed_connections(move || {
+        let service = c.service.clone();
+        c.runtime.spawn(async move {
+            service.lock().await.clear_closed_connections();
+        });
+    });
+
+    bridge.on_open_url(|link| {
+        if let Err(message) = open_link(&link) {
+            with_ui(|ui| ui.report(Sink::Banner, message));
+        }
+    });
+}
+
+/// Open a web link in the user's browser.
+///
+/// Only `http` and `https` links are opened: a subscription supplies these
+/// addresses, so anything else is refused. The browser is started without a
+/// shell, with the link as a single argument, so no character of the link is
+/// read as a command.
+pub fn open_link(text: &str) -> Result<(), String> {
+    let url =
+        url::Url::parse(text.trim()).map_err(|_| "that link is not a valid address".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("only web links can be opened".to_string());
+    }
+    let program = if cfg!(windows) {
+        "explorer.exe"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program)
+        .arg(url.as_str())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| {
+            crate::i18n::fmt("the link could not be opened: {}", &[&error.to_string()])
+        })
 }
 
 /// Add the subscription, then fetch it at once if the app fetches it. The
@@ -282,6 +451,16 @@ fn stored_rule_spec(svc: &AppService, index: i32) -> Result<(String, RuleSpec), 
 
 fn wire_settings(bridge: &Bridge<'_>, ctx: &Ctx) {
     let c = ctx.clone();
+    bridge.on_toggle_system_proxy(move |enabled: bool| {
+        act(
+            &c,
+            "Changing the system proxy…",
+            Sink::Settings,
+            move |s| async move { s.lock().await.set_system_proxy(enabled).await },
+        );
+    });
+
+    let c = ctx.clone();
     bridge.on_save_settings(move |model: SettingsModel| {
         let input = SettingsInput::from_model(&model);
         act(
@@ -297,6 +476,23 @@ fn wire_settings(bridge: &Bridge<'_>, ctx: &Ctx) {
     });
 
     let c = ctx.clone();
+    bridge.on_save_engine_settings(move |model: EngineSettingsModel| {
+        let form = engine_form_from_model(&model);
+        act(
+            &c,
+            "Saving the engine settings…",
+            Sink::Settings,
+            move |s| async move {
+                let mut svc = s.lock().await;
+                let prefs = form
+                    .apply(&svc.user_state().preferences)
+                    .map_err(AppError::Invalid)?;
+                svc.save_preferences(prefs).await
+            },
+        );
+    });
+
+    let c = ctx.clone();
     bridge.on_clear_cache(move || {
         act(&c, "Clearing the cache…", Sink::Banner, |s| async move {
             s.lock().await.clear_cache().await
@@ -304,8 +500,85 @@ fn wire_settings(bridge: &Bridge<'_>, ctx: &Ctx) {
     });
 }
 
+/// The callbacks the tray menu and the settings for shortcuts and updates use.
+fn wire_tray_actions(bridge: &Bridge<'_>, ctx: &Ctx) {
+    let c = ctx.clone();
+    bridge.on_toggle_tun(move |enabled| {
+        act(
+            &c,
+            "Changing the TUN mode…",
+            Sink::Banner,
+            move |s| async move {
+                let mut svc = s.lock().await;
+                let mut prefs = svc.user_state().preferences.clone();
+                prefs.tun.enabled = enabled;
+                svc.save_preferences(prefs).await
+            },
+        );
+    });
+
+    let c = ctx.clone();
+    bridge.on_set_send_device_id(move |enabled| {
+        act(
+            &c,
+            "Saving the setting…",
+            Sink::Settings,
+            move |s| async move {
+                let mut svc = s.lock().await;
+                let mut prefs = svc.user_state().preferences.clone();
+                prefs.send_device_id = enabled;
+                let saved = svc.save_preferences(prefs).await;
+                // Push back what is stored, saved or not, so the switch shows it.
+                let shown = svc.user_state().preferences.send_device_id;
+                super::runtime::post(move |ui| ui.push_send_device_id(shown));
+                saved
+            },
+        );
+    });
+
+    let c = ctx.clone();
+    bridge.on_save_hotkeys(move |model: HotkeyModel| {
+        let input = hotkeys::bindings_from_model(&model);
+        act(
+            &c,
+            "Saving the shortcuts…",
+            Sink::Settings,
+            move |s| async move {
+                let bindings = hotkeys::validate(&input)?;
+                let mut svc = s.lock().await;
+                let mut prefs = svc.user_state().preferences.clone();
+                prefs.hotkeys = bindings;
+                svc.save_preferences(prefs).await
+            },
+        );
+    });
+
+    let c = ctx.clone();
+    bridge.on_set_check_updates(move |enabled| {
+        act(
+            &c,
+            "Saving the setting…",
+            Sink::Settings,
+            move |s| async move {
+                let mut svc = s.lock().await;
+                let mut prefs = svc.user_state().preferences.clone();
+                prefs.check_updates = Some(enabled);
+                let saved = svc.save_preferences(prefs).await;
+                // Push back what is stored, saved or not, so the switch shows it.
+                let shown = svc.user_state().preferences.check_updates.unwrap_or(true);
+                super::runtime::post(move |ui| ui.push_check_updates(shown));
+                saved
+            },
+        );
+    });
+
+    let c = ctx.clone();
+    bridge.on_check_for_updates(move || spawn_update_check(&c, true));
+}
+
 fn wire_shell(bridge: &Bridge<'_>, ctx: &Ctx, window: slint::Weak<AppWindow>) {
     bridge.on_copy_logs(|| with_ui(|ui| ui.copy_logs()));
+    bridge.on_copy_proxy_env(|| with_ui(|ui| ui.copy_proxy_env()));
     bridge.on_clear_logs(|| with_ui(|ui| ui.clear_logs()));
     bridge.on_dismiss_banner(|| with_ui(|ui| ui.dismiss_banner()));
 
@@ -316,4 +589,22 @@ fn wire_shell(bridge: &Bridge<'_>, ctx: &Ctx, window: slint::Weak<AppWindow>) {
 
     let c = ctx.clone();
     bridge.on_quit(move || request_quit(&c));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::open_link;
+
+    #[test]
+    fn only_web_links_are_refused_or_accepted_before_anything_starts() {
+        for refused in [
+            "file:///C:/Windows/system32/calc.exe",
+            "javascript:alert(1)",
+            "ms-settings:network",
+            "not a link",
+            "",
+        ] {
+            assert!(open_link(refused).is_err(), "{refused} must be refused");
+        }
+    }
 }

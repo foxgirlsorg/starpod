@@ -1,187 +1,71 @@
-// The Settings screen (ARCHITECTURE §6.2, §4.5).
+// The Settings page (ui-spec.md section 5.6).
 //
-// The page edits a private copy of Bridge.settings. Nothing reaches Rust
-// until "Save", which hands the whole copy to Bridge.save-settings. "Discard"
-// throws the copy away and reads Bridge.settings again. The checks here only
-// keep bad input out of the copy and disable Save; the authoritative
-// validation stays in Rust.
+// A left list picks the section; each section is a set of cards. The page edits
+// two private copies: the draft of Bridge.settings, and the draft of
+// Bridge.engine-settings. One bar saves whichever copy changed. Discard rereads
+// both. Hotkeys have their own draft and Save, in their section. Privacy and
+// the update check save at once, through their own callbacks.
+//
+// The checks here keep bad input out of the drafts and block Save. Rust still
+// validates the final values and reports a refusal through settings-error.
 
-import { ScrollView } from "std-widgets.slint";
 import { Design } from "../design.slint";
-import { Bridge, SettingsModel } from "../bridge.slint";
-import { AppButton, ButtonVariant, ButtonSize, Card, Badge, BadgeVariant, Field, FieldKind, AppSelect, SectionHeading, SettingRow, LoadingState, EmptyState } from "../primitives.slint";
-import { IconTriangleAlert } from "../icons.slint";
+import { Bridge, EngineSettingsModel, HotkeyModel, SettingsModel } from "../bridge.slint";
+import { Button, ButtonVariant, Card, CardHeader, ConfirmDialog, EmptyState, PageHeader, Separator, SelectItem } from "../primitives.slint";
+import { ScrollView } from "std-widgets.slint";
+import { DraftChoice, DraftList, DraftNumber, DraftSegmented, DraftSwitch, DraftTri, DraftText, DraftSelect, ListRow, SettingRow, SubNavItem } from "settings/controls.slint";
+import { EmojiText } from "../emoji-text.slint";
 
-// ---------------------------------------------------------------------------
-// Local building blocks
-// ---------------------------------------------------------------------------
+export component SettingsPage inherits Rectangle {
+    // --- navigation -----------------------------------------------------------
 
-// A label and an optional explanation on the left, a control on the right.
-// The control column has a fixed width, and both columns are centred
-// vertically on the row. SettingRow has no slot for a control, so the
-// editable rows use this.
-component ControlRow inherits HorizontalLayout {
-    in property <string> label;
-    in property <string> description;
-    in property <length> control-width: 220px;
-    spacing: Design.space-lg;
+    private property <int> section: 0;
+    private property <[string]> section-names: [
+        @tr("General"), @tr("Network"), @tr("TUN"), @tr("DNS"), @tr("Sniffer"), @tr("Geo data"),
+        @tr("Engine"), @tr("Proxies"), @tr("Privacy"), @tr("Hotkeys"), @tr("Storage"),
+    ];
+    private property <[string]> section-texts: [
+        @tr("Startup, routing, subscriptions and updates"),
+        @tr("Ports, LAN access, IPv6 and the system proxy"),
+        @tr("The virtual adapter that routes all system traffic"),
+        @tr("How the engine resolves names"),
+        @tr("Reads domain names from the traffic"),
+        @tr("The GeoIP and GeoSite databases"),
+        @tr("The proxy engine: version, logs, tests and connections"),
+        @tr("How proxy groups behave"),
+        @tr("What is sent to subscription providers"),
+        @tr("Global keyboard shortcuts"),
+        @tr("Where secrets and data are kept"),
+    ];
 
-    VerticalLayout {
-        horizontal-stretch: 1;
-        alignment: center;
-        spacing: 2px;
+    // --- drafts and checks ----------------------------------------------------
 
-        Text {
-            text: root.label;
-            color: Design.foreground;
-            font-family: Design.font-family;
-            font-size: Design.font-sm;
-            font-weight: 500;
-            wrap: word-wrap;
-        }
-
-        if (root.description != "") : Text {
-            text: root.description;
-            color: Design.muted-foreground;
-            font-family: Design.font-family;
-            font-size: Design.font-xs;
-            wrap: word-wrap;
-        }
-    }
-
-    VerticalLayout {
-        width: root.control-width;
-        horizontal-stretch: 0;
-        vertical-stretch: 0;
-        alignment: center;
-
-        @children
-    }
-}
-
-// An on/off switch. The caller binds `checked` and handles `toggled`.
-component ToggleSwitch inherits Rectangle {
-    in property <bool> checked;
-    in property <bool> enabled: true;
-    callback toggled(bool);
-
-    width: 40px;
-    height: 22px;
-    border-radius: 11px;
-    background: root.checked ? Design.primary : Design.secondary;
-    border-width: 1px;
-    border-color: Design.input;
-    opacity: root.enabled ? 1 : 0.5;
-
-    Rectangle {
-        width: 16px;
-        height: 16px;
-        border-radius: 8px;
-        y: (parent.height - self.height) / 2;
-        x: root.checked ? parent.width - self.width - 3px : 3px;
-        background: Design.foreground;
-        animate x { duration: 120ms; }
-    }
-
-    focus-scope := FocusScope {
-        enabled: root.enabled;
-        focus-on-click: true;
-
-        key-pressed(event) => {
-            if (event.text == " " || event.text == "\n") {
-                root.toggled(!root.checked);
-                return accept;
-            }
-            return reject;
-        }
-
-        touch := TouchArea {
-            enabled: root.enabled;
-            clicked => {
-                root.toggled(!root.checked);
-            }
-        }
-    }
-
-    // The focus ring, the same halo the buttons use.
-    Rectangle {
-        x: -3px;
-        y: -3px;
-        width: parent.width + 6px;
-        height: parent.height + 6px;
-        border-radius: 14px;
-        border-width: 3px;
-        border-color: Design.ring;
-        opacity: 0.5;
-        visible: focus-scope.has-focus;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The page
-// ---------------------------------------------------------------------------
-
-export component SettingsPage inherits VerticalLayout {
-    padding: Design.space-xl;
-    spacing: Design.space-lg;
-    horizontal-stretch: 1;
-    vertical-stretch: 1;
-
-    // The editable copy. It starts as a binding to Bridge.settings. The first
-    // edit breaks that binding, and "Discard" or a fresh push from Rust
-    // re-syncs it.
     private property <SettingsModel> draft: Bridge.settings;
+    private property <EngineSettingsModel> edraft: Bridge.engine-settings;
+    private property <HotkeyModel> hk: Bridge.hotkeys;
+    // Bumped whenever the drafts are read again from Bridge. Every control
+    // then shows its draft value again.
+    private property <int> rev: 0;
 
-    // The text in the number fields. Text is kept separately so that a value
-    // which is not a number can be shown and flagged without being stored.
-    // A number that is not set (-1 in the model) is shown as an empty field.
-    private property <string> t-mixed: root.num-text(Bridge.settings.mixed-port);
-    private property <string> t-socks: root.num-text(Bridge.settings.socks-port);
-    private property <string> t-http: root.num-text(Bridge.settings.http-port);
-    private property <string> t-mtu: root.num-text(Bridge.settings.tun-mtu);
-    private property <string> t-refresh: root.num-text(Bridge.settings.auto-refresh-minutes);
-    // The two text fields that edit the draft directly. Their own text is
-    // kept here too, so a Field that has been typed in still follows a resync.
-    private property <string> t-bind: Bridge.settings.bind-address;
-    private property <string> t-device: Bridge.settings.tun-device;
-
-    // A private mirror of Bridge.settings. Its `changed` handler fires when
-    // Rust pushes new settings, for example after a successful save.
+    // Mirrors of Bridge, for change handlers: a push from Rust resets the draft.
     private property <SettingsModel> pushed: Bridge.settings;
+    private property <EngineSettingsModel> engine-pushed: Bridge.engine-settings;
+    private property <HotkeyModel> hotkeys-pushed: Bridge.hotkeys;
 
-    private property <bool> confirm-clear: false;
+    private property <bool> core-dirty: root.draft != Bridge.settings;
+    private property <bool> engine-dirty: root.edraft != Bridge.engine-settings;
+    private property <bool> hk-dirty: root.hk != Bridge.hotkeys;
+    private property <bool> dirty: root.core-dirty || root.engine-dirty;
 
-    private property <[string]> mode-choices: ["rule", "global", "direct"];
-    private property <[string]> log-choices: ["silent", "error", "warning", "info", "debug"];
-
-    // --- checks ---------------------------------------------------------------
-
-    function valid-int(s: string, lo: int, hi: int) -> bool {
-        return s != "" && s.is-float() && s.to-float() == round(s.to-float())
-            && s.to-float() >= lo && s.to-float() <= hi;
-    }
-
-    // Empty is valid for an optional number: it means "not set".
-    function valid-optional(s: string, lo: int, hi: int) -> bool {
-        return s == "" || root.valid-int(s, lo, hi);
-    }
-
-    // -1 is "not set" in the model and shows as an empty field.
-    function num-text(v: int) -> string {
-        return v < 0 ? "" : "\{v}";
-    }
-
-    // A port is 1 to 65535. Empty uses the default (HTTP: off). 0 is refused:
-    // it is not a way to turn a listener off.
-    private property <bool> ok-mixed: root.valid-optional(root.t-mixed, 1, 65535);
-    private property <bool> ok-socks: root.valid-optional(root.t-socks, 1, 65535);
-    private property <bool> ok-http: root.valid-optional(root.t-http, 1, 65535);
-    // 1280 is the IPv6 minimum. TUN carries IPv6, and a smaller MTU breaks it.
-    // The app refuses anything outside 1280-9000 (MIN_TUN_MTU and MAX_TUN_MTU in
-    // ui/mapping.rs); keep both in step. Empty means the engine default.
-    private property <bool> ok-mtu: root.valid-optional(root.t-mtu, 1280, 9000);
-    // 0 is manual refresh only; empty means the app default.
-    private property <bool> ok-refresh: root.valid-optional(root.t-refresh, 0, 10080);
+    // false while a number field holds text the range does not accept
+    private property <bool> ok-mixed: true;
+    private property <bool> ok-socks: true;
+    private property <bool> ok-http: true;
+    private property <bool> ok-mtu: true;
+    private property <bool> ok-keep-alive: true;
+    private property <bool> ok-retention: true;
+    private property <bool> ok-interval: true;
+    private property <bool> ok-timeout: true;
 
     // An unset port (-1) is not a listener, so it cannot clash.
     private property <bool> mixed-clash: root.draft.mixed-port > 0
@@ -191,457 +75,1916 @@ export component SettingsPage inherits VerticalLayout {
     private property <bool> http-clash: root.draft.http-port > 0
         && (root.draft.http-port == root.draft.mixed-port || root.draft.http-port == root.draft.socks-port);
 
-    // An empty bind address is the default (loopback). Any other text is
-    // passed to the engine as it is, as it was before.
-    // The TUN fields block Save only while TUN is on. A bad MTU with TUN off
-    // is still flagged, but the last valid value is kept and saved.
-    private property <bool> tun-name-ok: !root.draft.tun-enabled || root.draft.tun-device != "";
+    // The MTU blocks Save only while TUN is on. A bad MTU with TUN off is still
+    // flagged, but the last valid value is kept and saved.
     private property <bool> tun-mtu-ok: !root.draft.tun-enabled || root.ok-mtu;
 
     private property <bool> inputs-ok: root.ok-mixed && root.ok-socks && root.ok-http
-        && root.ok-refresh
         && !root.mixed-clash && !root.socks-clash && !root.http-clash
-        && root.tun-mtu-ok && root.tun-name-ok;
+        && root.tun-mtu-ok
+        && root.ok-keep-alive && root.ok-retention && root.ok-interval && root.ok-timeout;
 
-    private property <bool> dirty: root.draft != Bridge.settings;
     private property <bool> can-save: root.dirty && root.inputs-ok && !Bridge.busy;
-    private property <string> save-blocker: !root.dirty ? "There are no changes to save."
-        : Bridge.busy ? "Another operation is running. Wait for it to finish."
-        : !root.inputs-ok ? "Fix the highlighted fields first."
+    private property <string> save-blocker: !root.inputs-ok ? @tr("Fix the highlighted fields first.")
+        : Bridge.busy ? @tr("Another operation is running.")
         : "";
+
+    private property <bool> hk-can-save: root.hk-dirty && !Bridge.busy;
+
+    // --- choices --------------------------------------------------------------
+
+    private property <[SelectItem]> routing-items: Bridge.global-mode-allowed ? [
+        { text: @tr("Rule-based"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Global"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Direct"), detail: "", detail-color: Design.muted-foreground },
+    ] : [
+        { text: @tr("Rule-based"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Direct"), detail: "", detail-color: Design.muted-foreground },
+    ];
+    private property <[string]> routing-values: Bridge.global-mode-allowed
+        ? ["rule", "global", "direct"] : ["rule", "direct"];
+
+    private property <[SelectItem]> log-items: [
+        { text: @tr("Silent"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Error"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Warning"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Info"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Debug"), detail: "", detail-color: Design.muted-foreground },
+    ];
+    private property <[string]> log-values: ["silent", "error", "warning", "info", "debug"];
+
+    // Minutes. 0 is manual only. -1 (unset) shows as the default, one hour.
+    private property <[SelectItem]> refresh-items: [
+        { text: @tr("Never"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("30 min"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("1 hour (default)"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("6 hours"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("12 hours"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("24 hours"), detail: "", detail-color: Design.muted-foreground },
+    ];
+    private property <[int]> refresh-values: [0, 30, 60, 360, 720, 1440];
+
+    private property <[string]> sysproxy-options: [@tr("Manual"), @tr("PAC script")];
+
+    private property <[SelectItem]> stack-items: [
+        { text: @tr("Default"), detail: "", detail-color: Design.muted-foreground },
+        { text: "gVisor", detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Mixed"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("System"), detail: "", detail-color: Design.muted-foreground },
+    ];
+    private property <[string]> stack-values: ["", "gvisor", "mixed", "system"];
+
+    private property <[SelectItem]> dns-mode-items: [
+        { text: @tr("Default"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Fake IP"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Redir host"), detail: "", detail-color: Design.muted-foreground },
+    ];
+    private property <[string]> dns-mode-values: ["", "fake-ip", "redir-host"];
+
+    private property <[SelectItem]> find-items: [
+        { text: @tr("Default"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Off"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Strict"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Always"), detail: "", detail-color: Design.muted-foreground },
+    ];
+    private property <[string]> find-values: ["", "off", "strict", "always"];
+
+    private property <[SelectItem]> geo-mode-items: [
+        { text: @tr("Default"), detail: "", detail-color: Design.muted-foreground },
+        { text: "DAT", detail: "", detail-color: Design.muted-foreground },
+        { text: "MMDB", detail: "", detail-color: Design.muted-foreground },
+    ];
+    private property <[string]> geo-mode-values: ["", "dat", "mmdb"];
+
+    private property <[SelectItem]> channel-items: [
+        { text: @tr("Stable"), detail: "", detail-color: Design.muted-foreground },
+        { text: @tr("Alpha"), detail: "", detail-color: Design.muted-foreground },
+    ];
+    private property <[string]> channel-values: ["stable", "alpha"];
+
+    private property <[SelectItem]> language-items: [
+        { text: @tr("System"), detail: "", detail-color: Design.muted-foreground },
+        { text: "English", detail: "", detail-color: Design.muted-foreground },
+        { text: "Русский", detail: "", detail-color: Design.muted-foreground },
+    ];
+    private property <[string]> language-values: ["", "en", "ru"];
+
+    // Hotkey placeholders show the format; the row's description says how to clear one.
+    private property <string> hotkey-example: "Ctrl+Alt+KeyS";
 
     // --- actions --------------------------------------------------------------
 
-    function resync() {
+    // An unset value (-1) is the app default, which is one hour: index 2.
+    function refresh-index-of(v: int) -> int {
+        if (v < 0) { return 2; }
+        if (v == 0) { return 0; }
+        if (v == 30) { return 1; }
+        if (v == 60) { return 2; }
+        if (v == 360) { return 3; }
+        if (v == 720) { return 4; }
+        if (v == 1440) { return 5; }
+        return -1;
+    }
+
+    // The date of a Unix time in UTC, as YYYY-MM-DD (civil-from-days, H. Hinnant's
+    // algorithm), worked out in floats because Slint has no date functions.
+    private property <float> geo-days: floor((Bridge.geo-updated-at * 1.0) / 86400.0) + 719468;
+    private property <float> geo-era: floor(root.geo-days / 146097);
+    private property <float> geo-doe: root.geo-days - root.geo-era * 146097;
+    private property <float> geo-yoe: floor((root.geo-doe - floor(root.geo-doe / 1460)
+        + floor(root.geo-doe / 36524) - floor(root.geo-doe / 146096)) / 365);
+    private property <float> geo-doy: root.geo-doe - (365 * root.geo-yoe + floor(root.geo-yoe / 4)
+        - floor(root.geo-yoe / 100));
+    private property <float> geo-mp: floor((5 * root.geo-doy + 2) / 153);
+    private property <float> geo-day: root.geo-doy - floor((153 * root.geo-mp + 2) / 5) + 1;
+    private property <float> geo-month: root.geo-mp < 10 ? root.geo-mp + 3 : root.geo-mp - 9;
+    private property <float> geo-year: root.geo-yoe + root.geo-era * 400
+        + (root.geo-month <= 2 ? 1 : 0);
+
+    function two-digits(n: float) -> string {
+        if (n < 10) { return "0\{n}"; }
+        return "\{n}";
+    }
+
+    private property <string> geo-text: Bridge.geo-updated-at <= 0 ? @tr("Never")
+        : @tr("Last updated {} (UTC)", "\{root.geo-year}-\{root.two-digits(root.geo-month)}-\{root.two-digits(root.geo-day)}");
+
+    // Rereads Bridge into the drafts. Discard calls this; a push from Rust
+    // calls the change handlers below.
+    function discard() {
         root.draft = Bridge.settings;
-        root.t-mixed = root.num-text(Bridge.settings.mixed-port);
-        root.t-socks = root.num-text(Bridge.settings.socks-port);
-        root.t-http = root.num-text(Bridge.settings.http-port);
-        root.t-mtu = root.num-text(Bridge.settings.tun-mtu);
-        root.t-refresh = root.num-text(Bridge.settings.auto-refresh-minutes);
-        root.t-bind = Bridge.settings.bind-address;
-        root.t-device = Bridge.settings.tun-device;
+        root.edraft = Bridge.engine-settings;
+        root.rev += 1;
     }
 
-    // Empty stores "not set" (-1). A valid number is stored. Anything else
-    // leaves the draft as it was, and the field shows the error.
-    function edit-mixed(text: string) {
-        root.t-mixed = text;
-        if (text == "") { root.draft.mixed-port = -1; }
-        else if (root.valid-int(text, 1, 65535)) { root.draft.mixed-port = round(text.to-float()); }
+    function discard-hotkeys() {
+        root.hk = Bridge.hotkeys;
+        root.rev += 1;
     }
 
-    function edit-socks(text: string) {
-        root.t-socks = text;
-        if (text == "") { root.draft.socks-port = -1; }
-        else if (root.valid-int(text, 1, 65535)) { root.draft.socks-port = round(text.to-float()); }
-    }
-
-    function edit-http(text: string) {
-        root.t-http = text;
-        if (text == "") { root.draft.http-port = -1; }
-        else if (root.valid-int(text, 1, 65535)) { root.draft.http-port = round(text.to-float()); }
-    }
-
-    function edit-mtu(text: string) {
-        root.t-mtu = text;
-        if (text == "") { root.draft.tun-mtu = -1; }
-        else if (root.valid-int(text, 1280, 9000)) { root.draft.tun-mtu = round(text.to-float()); }
-    }
-
-    function edit-refresh(text: string) {
-        root.t-refresh = text;
-        if (text == "") { root.draft.auto-refresh-minutes = -1; }
-        else if (root.valid-int(text, 0, 10080)) { root.draft.auto-refresh-minutes = round(text.to-float()); }
+    function save-all() {
+        if (root.core-dirty) {
+            Bridge.save-settings(root.draft);
+        }
+        if (root.engine-dirty) {
+            Bridge.save-engine-settings(root.edraft);
+        }
     }
 
     changed pushed => {
-        root.resync();
+        root.draft = Bridge.settings;
+        root.rev += 1;
+    }
+
+    changed engine-pushed => {
+        root.edraft = Bridge.engine-settings;
+        root.rev += 1;
+    }
+
+    changed hotkeys-pushed => {
+        root.hk = Bridge.hotkeys;
+        root.rev += 1;
     }
 
     // --- layout ---------------------------------------------------------------
 
-    SectionHeading {
-        eyebrow: "Configuration";
-        title: "Settings";
-        description: "Ports, network exposure, logging, TUN and the engine.";
-        vertical-stretch: 0;
+    // The section list on the left, and the section on the right. The save bar
+    // sits along the bottom while anything is unsaved.
+    nav := VerticalLayout {
+        x: 0px;
+        y: 0px;
+        width: 184px;
+        height: parent.height - (root.dirty ? 57px : 0px);
+        padding-top: 28px;
+        padding-left: 16px;
+        padding-right: 12px;
+        spacing: 2px;
+        alignment: start;
+
+        for name[i] in root.section-names : SubNavItem {
+            text: name;
+            selected: root.section == i;
+            clicked => {
+                root.section = i;
+            }
+        }
     }
 
-    if (!Bridge.loaded) : LoadingState {
-        vertical-stretch: 1;
-        message: "Waiting for the proxy engine to report its settings…";
+    Rectangle {
+        x: 184px;
+        y: 0px;
+        width: 1px;
+        height: parent.height - (root.dirty ? 57px : 0px);
+        background: Design.border;
     }
 
-    // The scroll area sits between the heading and the footer. The std
-    // ScrollView asks for 100% of its parent as its preferred height, and the
-    // parent here is this page, whose own height is built from its children.
-    // That request feeds back on itself, so the scroll area collapsed and the
-    // footer fell out of view. Ask for no preferred height and let the stretch
-    // give the scroll area the room the heading and footer leave.
-    if (Bridge.loaded) : ScrollView {
-        preferred-height: 0px;
-        vertical-stretch: 1;
+    scroll := ScrollView {
+        x: 185px;
+        y: 0px;
+        width: parent.width - 185px;
+        height: parent.height - (root.dirty ? 57px : 0px);
+        content-height: max(self.height, body.preferred-height);
 
-        VerticalLayout {
+        body := HorizontalLayout {
+            vertical-stretch: 0;
+            padding-left: 32px;
+            padding-right: 32px;
+            padding-top: 28px;
+            padding-bottom: 32px;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                vertical-stretch: 0;
+                alignment: start;
+                max-width: 920px;
+                spacing: 0px;
+
+                PageHeader {
+                    title: root.section-names[root.section];
+                    description: root.section-texts[root.section];
+                }
+
+                if (!Bridge.loaded) : Card {
+                    EmptyState {
+                        icon: @image-url("../assets/icons/loader-circle.svg");
+                        title: @tr("Loading settings");
+                        text: @tr("Waiting for the proxy engine to report its settings.");
+                    }
+                }
+
+                // Errors from Save and from the switches are shown here when no
+                // save bar is up. With a bar up, the bar shows the same message.
+                if (Bridge.loaded && Bridge.settings-error != "" && !root.dirty) : VerticalLayout {
+                    padding-bottom: 16px;
+
+                    EmojiText {
+                        runs: Bridge.settings-error-runs;
+                        fallback: Bridge.settings-error;
+                        font-size: Design.font-sm;
+                        color: Design.destructive;
+                        wrap: true;
+                    }
+                }
+
+                // ============================================================
+                // General
+                // ============================================================
+                if (Bridge.loaded && root.section == 0) : VerticalLayout {
+                    spacing: 16px;
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Interface");
+                        }
+
+                        SettingRow {
+                            label: @tr("Language");
+                            description: @tr("Applies to the whole app, including the tray.");
+
+                            DraftChoice {
+                                items: root.language-items;
+                                values: root.language-values;
+                                value: root.draft.language;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.language = v;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Startup");
+                        }
+
+                        SettingRow {
+                            label: @tr("Start at login");
+                            description: @tr("Starts Starpod when you log in.");
+
+                            DraftSwitch {
+                                value: root.draft.autostart;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.autostart = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Start in the tray");
+                            description: @tr("A start at login stays in the tray instead of showing the window.");
+
+                            DraftSwitch {
+                                value: root.draft.silent-start;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.silent-start = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Close to tray");
+                            description: @tr("Closing the window hides Starpod to the tray and the proxy keeps running. Off quits Starpod and stops the engine.");
+                            warning: Bridge.tray-available ? "" : @tr("This desktop has no tray, so closing always quits.");
+
+                            DraftSwitch {
+                                value: root.draft.close-to-tray;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.close-to-tray = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Connect on start");
+                            description: @tr("Connects once the saved state has loaded, when a subscription has servers.");
+
+                            DraftSwitch {
+                                value: root.draft.auto-connect;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.auto-connect = v;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Routing and subscriptions");
+                        }
+
+                        SettingRow {
+                            label: @tr("Routing mode");
+                            description: Bridge.global-mode-allowed
+                                ? @tr("Rule-based follows your rules. Global sends everything through the selected server. Direct uses no proxy.")
+                                : @tr("The active subscription does not allow Global. Rule-based follows your rules.");
+
+                            DraftChoice {
+                                items: root.routing-items;
+                                values: root.routing-values;
+                                value: root.draft.mode;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.mode = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Auto-update every");
+                            description: @tr("How often subscriptions are refreshed in the background.");
+
+                            DraftSelect {
+                                items: root.refresh-items;
+                                value: root.refresh-index-of(root.draft.auto-refresh-minutes);
+                                revision: root.rev;
+                                placeholder: @tr("Custom");
+                                committed(i) => {
+                                    root.draft.auto-refresh-minutes = root.refresh-values[i];
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Updates");
+                        }
+
+                        SettingRow {
+                            label: @tr("Check for updates at startup");
+                            description: @tr("Asks GitHub for a newer release when Starpod starts. Nothing is downloaded.");
+
+                            DraftSwitch {
+                                value: Bridge.check-updates;
+                                revision: 0;
+                                committed(v) => {
+                                    // Set at once, and Rust pushes the stored value back after the save.
+                                    Bridge.check-updates = v;
+                                    Bridge.set-check-updates(v);
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Check now");
+                            description: @tr("Looks for a newer release on GitHub.");
+
+                            HorizontalLayout {
+                                alignment: end;
+
+                                Button {
+                                    text: @tr("Check for updates");
+                                    variant: ButtonVariant.outline;
+                                    enabled: !Bridge.busy;
+                                    clicked => {
+                                        Bridge.check-for-updates();
+                                    }
+                                }
+                            }
+                        }
+
+                        if (Bridge.update-available) : VerticalLayout {
+                            Separator {}
+
+                            SettingRow {
+                                label: @tr("Update available");
+                                description: @tr("Version {} is on GitHub. It is not installed for you.", Bridge.update-version);
+
+                                HorizontalLayout {
+                                    alignment: end;
+
+                                    Button {
+                                        text: @tr("Open release page");
+                                        variant: ButtonVariant.primary;
+                                        clicked => {
+                                            Bridge.open-url(Bridge.update-url);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
+                // Network
+                // ============================================================
+                if (Bridge.loaded && root.section == 1) : VerticalLayout {
+                    spacing: 16px;
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Ports");
+                        }
+
+                        SettingRow {
+                            label: @tr("Mixed port");
+                            description: @tr("HTTP and SOCKS5 on one port. Empty uses the default.");
+
+                            DraftNumber {
+                                value: root.draft.mixed-port;
+                                revision: root.rev;
+                                placeholder: "7890";
+                                problem: root.mixed-clash ? @tr("Another listener already uses this port.") : "";
+                                ok <=> root.ok-mixed;
+                                committed(v) => {
+                                    root.draft.mixed-port = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("SOCKS5 port");
+                            description: @tr("SOCKS5 only. Empty uses the default.");
+
+                            DraftNumber {
+                                value: root.draft.socks-port;
+                                revision: root.rev;
+                                placeholder: @tr("Off");
+                                problem: root.socks-clash ? @tr("Another listener already uses this port.") : "";
+                                ok <=> root.ok-socks;
+                                committed(v) => {
+                                    root.draft.socks-port = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("HTTP port");
+                            description: @tr("HTTP only. Empty turns it off.");
+
+                            DraftNumber {
+                                value: root.draft.http-port;
+                                revision: root.rev;
+                                placeholder: @tr("Off");
+                                problem: root.http-clash ? @tr("Another listener already uses this port.") : "";
+                                ok <=> root.ok-http;
+                                committed(v) => {
+                                    root.draft.http-port = v;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Access");
+                        }
+
+                        SettingRow {
+                            label: @tr("Allow LAN");
+                            description: @tr("Lets other devices on your network use the proxy.");
+                            warning: root.draft.allow-lan ? @tr("Exposed: any device on your network can use it.") : "";
+
+                            DraftSwitch {
+                                value: root.draft.allow-lan;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.allow-lan = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Bind address");
+                            description: root.draft.allow-lan
+                                ? @tr("The address the listeners bind to. Empty uses 127.0.0.1.")
+                                : @tr("Turn on Allow LAN to change the bind address.");
+
+                            DraftText {
+                                value: root.draft.bind-address;
+                                revision: root.rev;
+                                placeholder: "127.0.0.1";
+                                enabled: root.draft.allow-lan;
+                                committed(v) => {
+                                    root.draft.bind-address = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("IPv6");
+                            description: @tr("Default leaves the engine's choice.");
+
+                            DraftTri {
+                                value: root.edraft.ipv6;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.ipv6 = v;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("System proxy");
+                        }
+
+                        SettingRow {
+                            label: @tr("Set the system proxy");
+                            description: Bridge.system-proxy-active
+                                ? @tr("Active. The system proxy points at Starpod.")
+                                : @tr("Not active. The system proxy follows the engine while this is on.");
+
+                            DraftSwitch {
+                                value: root.draft.system-proxy;
+                                revision: root.rev;
+                                committed(v) => {
+                                    // The draft is written too, so a later Save does not undo the change.
+                                    root.draft.system-proxy = v;
+                                    Bridge.toggle-system-proxy(v);
+                                }
+                            }
+                        }
+
+                        if (Bridge.system-proxy-error != "") : VerticalLayout {
+                            padding-bottom: 12px;
+
+                            Text {
+                                text: Bridge.system-proxy-error;
+                                color: Design.destructive;
+                                font-family: Design.font-family;
+                                font-size: Design.font-sm;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Proxy mode");
+                            description: @tr("Manual points the system at one server. PAC uses a script that Starpod serves.");
+
+                            DraftSegmented {
+                                options: root.sysproxy-options;
+                                value: root.draft.sysproxy-mode == "pac" ? 1 : 0;
+                                revision: root.rev;
+                                committed(i) => {
+                                    root.draft.sysproxy-mode = i == 1 ? "pac" : "manual";
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Bypass list");
+                            description: @tr("Hosts the proxy is skipped for, in the operating system's syntax. Used in manual mode.");
+
+                            DraftList {
+                                value: root.draft.sysproxy-bypass;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.sysproxy-bypass = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("PAC script");
+                            description: @tr("The script for PAC mode. %mixed-port% stands for the engine's mixed port.");
+
+                            DraftList {
+                                value: root.draft.pac-script;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.pac-script = v;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Terminal");
+                        }
+
+                        SettingRow {
+                            label: @tr("Proxy command");
+                            description: @tr("Copies the command that points a terminal at Starpod's ports.");
+
+                            HorizontalLayout {
+                                alignment: end;
+
+                                Button {
+                                    text: @tr("Copy proxy command");
+                                    variant: ButtonVariant.outline;
+                                    clicked => {
+                                        Bridge.copy-proxy-env();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
+                // TUN
+                // ============================================================
+                if (Bridge.loaded && root.section == 2) : VerticalLayout {
+                    spacing: 16px;
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Adapter");
+                        }
+
+                        SettingRow {
+                            label: @tr("Enable TUN");
+                            description: @tr("Routes all system traffic. Needs administrator rights.");
+
+                            DraftSwitch {
+                                value: root.draft.tun-enabled;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.tun-enabled = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Device name");
+                            description: @tr("The name of the virtual adapter. Empty uses the engine default.");
+
+                            DraftText {
+                                value: root.draft.tun-device;
+                                revision: root.rev;
+                                placeholder: @tr("Automatic");
+                                committed(v) => {
+                                    root.draft.tun-device = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("MTU");
+                            description: @tr("Largest packet size in bytes. Empty uses the engine default.");
+
+                            DraftNumber {
+                                value: root.draft.tun-mtu;
+                                revision: root.rev;
+                                low: 1280;
+                                high: 9000;
+                                placeholder: "9000";
+                                hint: "1280–9000";
+                                ok <=> root.ok-mtu;
+                                committed(v) => {
+                                    root.draft.tun-mtu = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Stack");
+                            description: @tr("How the engine handles the packets that TUN captures.");
+
+                            DraftChoice {
+                                items: root.stack-items;
+                                values: root.stack-values;
+                                value: root.edraft.tun-stack;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.tun-stack = v;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Routes");
+                        }
+
+                        SettingRow {
+                            label: @tr("Auto route");
+                            description: @tr("Installs the routes when TUN starts. Off leaves the routes to you.");
+
+                            DraftSwitch {
+                                value: root.draft.tun-auto-route;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.tun-auto-route = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("DNS hijack");
+                            description: @tr("DNS queries to these targets go to the engine, one host:port per line, such as any:53. Empty uses the engine default.");
+
+                            DraftList {
+                                value: root.draft.tun-dns-hijack;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.tun-dns-hijack = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Strict route");
+                            description: @tr("Keeps traffic that is outside the TUN routes from leaving the adapter.");
+
+                            DraftTri {
+                                value: root.edraft.tun-strict-route;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.tun-strict-route = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Auto redirect");
+                            description: @tr("Forwards traffic through an automatic redirect where the platform supports one.");
+
+                            DraftTri {
+                                value: root.edraft.tun-auto-redirect;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.tun-auto-redirect = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Auto-detect interface");
+                            description: @tr("Finds the network interface that carries outbound traffic by itself.");
+
+                            DraftTri {
+                                value: root.edraft.tun-auto-detect-interface;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.tun-auto-detect-interface = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Endpoint-independent NAT");
+                            description: @tr("Keeps one UDP mapping per source port, whatever the destination.");
+
+                            DraftTri {
+                                value: root.edraft.tun-endpoint-independent-nat;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.tun-endpoint-independent-nat = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Included routes");
+                            description: @tr("CIDR ranges sent through TUN, one per line. Empty uses the engine's routes.");
+
+                            DraftList {
+                                value: root.edraft.tun-route-address;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.tun-route-address = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Excluded routes");
+                            description: @tr("CIDR ranges that stay off TUN, one per line.");
+
+                            DraftList {
+                                value: root.edraft.tun-route-exclude-address;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.tun-route-exclude-address = v;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
+                // DNS
+                // ============================================================
+                if (Bridge.loaded && root.section == 3) : VerticalLayout {
+                    spacing: 16px;
+
+                    Card {
+                        CardHeader {
+                            title: @tr("DNS server");
+                        }
+
+                        SettingRow {
+                            label: @tr("Replace the subscription's DNS");
+                            description: @tr("Uses the DNS settings below instead of the ones the subscription sends.");
+
+                            DraftSwitch {
+                                value: root.edraft.override-dns;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.override-dns = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Enable DNS server");
+                            description: @tr("Runs the engine's own DNS server.");
+
+                            DraftTri {
+                                value: root.edraft.dns-enable;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.dns-enable = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Enhanced mode");
+                            description: @tr("Fake IP answers with addresses from a private range. Redir host answers with real ones.");
+
+                            DraftChoice {
+                                items: root.dns-mode-items;
+                                values: root.dns-mode-values;
+                                value: root.edraft.dns-enhanced-mode;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.dns-enhanced-mode = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Fake IP range");
+                            description: @tr("The CIDR range that fake addresses come from. Empty uses the engine default.");
+
+                            DraftText {
+                                value: root.edraft.dns-fake-ip-range;
+                                revision: root.rev;
+                                placeholder: "198.18.0.1/16";
+                                committed(v) => {
+                                    root.edraft.dns-fake-ip-range = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Fake IP filter");
+                            description: @tr("Domains that always get a real address, one per line.");
+
+                            DraftList {
+                                value: root.edraft.dns-fake-ip-filter;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.dns-fake-ip-filter = v;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Upstream servers");
+                        }
+
+                        ListRow {
+                            label: @tr("Nameservers");
+                            description: @tr("The servers the DNS server asks, one per line.");
+
+                            DraftList {
+                                value: root.edraft.dns-nameserver;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.dns-nameserver = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Fallback servers");
+                            description: @tr("Servers asked when the nameservers fail, one per line.");
+
+                            DraftList {
+                                value: root.edraft.dns-fallback;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.dns-fallback = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Default nameservers");
+                            description: @tr("Plain IP servers that resolve the names of the other servers, one per line.");
+
+                            DraftList {
+                                value: root.edraft.dns-default-nameserver;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.dns-default-nameserver = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Proxy server nameservers");
+                            description: @tr("Servers used to resolve the names of proxy servers, one per line.");
+
+                            DraftList {
+                                value: root.edraft.dns-proxy-server-nameserver;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.dns-proxy-server-nameserver = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Nameserver policy");
+                            description: @tr("Which servers answer for which domains, one per line: domain: server, server.");
+
+                            DraftList {
+                                value: root.edraft.dns-nameserver-policy;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.dns-nameserver-policy = v;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Hosts");
+                        }
+
+                        SettingRow {
+                            label: @tr("Use hosts");
+                            description: @tr("Answers names from the hosts list below.");
+
+                            DraftTri {
+                                value: root.edraft.dns-use-hosts;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.dns-use-hosts = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Hosts");
+                            description: @tr("One entry per line: domain ip.");
+
+                            DraftList {
+                                value: root.edraft.hosts;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.hosts = v;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
+                // Sniffer
+                // ============================================================
+                if (Bridge.loaded && root.section == 4) : VerticalLayout {
+                    spacing: 16px;
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Sniffer");
+                        }
+
+                        SettingRow {
+                            label: @tr("Enable sniffer");
+                            description: @tr("Reads the domain name from the first bytes of TLS and HTTP traffic.");
+
+                            DraftTri {
+                                value: root.edraft.sniffer-enable;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.sniffer-enable = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Force DNS mapping");
+                            description: @tr("Uses the DNS mapping to name connections that have only an address.");
+
+                            DraftTri {
+                                value: root.edraft.sniffer-force-dns-mapping;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.sniffer-force-dns-mapping = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Parse pure IP");
+                            description: @tr("Sniffs connections that were opened to a bare IP address.");
+
+                            DraftTri {
+                                value: root.edraft.sniffer-parse-pure-ip;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.sniffer-parse-pure-ip = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Override destination");
+                            description: @tr("Replaces the address with the sniffed domain name.");
+
+                            DraftTri {
+                                value: root.edraft.sniffer-override-destination;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.sniffer-override-destination = v;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Protocols and domains");
+                        }
+
+                        ListRow {
+                            label: @tr("Sniff protocols");
+                            description: @tr("One per line: a protocol and its ports, for example HTTP: 80, 8080-8880.");
+
+                            DraftList {
+                                value: root.edraft.sniffer-sniff;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.sniffer-sniff = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Force domains");
+                            description: @tr("Domains to sniff even when the sniffer would skip them, one per line.");
+
+                            DraftList {
+                                value: root.edraft.sniffer-force-domain;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.sniffer-force-domain = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Skip domains");
+                            description: @tr("Domains the sniffer leaves alone, one per line.");
+
+                            DraftList {
+                                value: root.edraft.sniffer-skip-domain;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.sniffer-skip-domain = v;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
+                // Geo data
+                // ============================================================
+                if (Bridge.loaded && root.section == 5) : VerticalLayout {
+                    spacing: 16px;
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Databases");
+                        }
+
+                        SettingRow {
+                            label: @tr("Format");
+                            description: @tr("The database format the engine reads.");
+
+                            DraftChoice {
+                                items: root.geo-mode-items;
+                                values: root.geo-mode-values;
+                                value: root.edraft.geodata-mode;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.geodata-mode = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("GeoIP source");
+                            description: @tr("A URL. Empty uses the default source.");
+
+                            DraftText {
+                                value: root.edraft.geox-geoip;
+                                revision: root.rev;
+                                placeholder: @tr("Default source");
+                                committed(v) => {
+                                    root.edraft.geox-geoip = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("GeoSite source");
+                            description: @tr("A URL. Empty uses the default source.");
+
+                            DraftText {
+                                value: root.edraft.geox-geosite;
+                                revision: root.rev;
+                                placeholder: @tr("Default source");
+                                committed(v) => {
+                                    root.edraft.geox-geosite = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("MMDB source");
+                            description: @tr("A URL. Empty uses the default source.");
+
+                            DraftText {
+                                value: root.edraft.geox-mmdb;
+                                revision: root.rev;
+                                placeholder: @tr("Default source");
+                                committed(v) => {
+                                    root.edraft.geox-mmdb = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("ASN source");
+                            description: @tr("A URL. Empty uses the default source.");
+
+                            DraftText {
+                                value: root.edraft.geox-asn;
+                                revision: root.rev;
+                                placeholder: @tr("Default source");
+                                committed(v) => {
+                                    root.edraft.geox-asn = v;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Updates");
+                        }
+
+                        SettingRow {
+                            label: @tr("Update automatically");
+                            description: @tr("Refreshes the databases in the background.");
+
+                            DraftTri {
+                                value: root.edraft.geodata-auto-update;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.geodata-auto-update = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Update every");
+                            description: @tr("Hours between automatic refreshes. Empty uses the app default.");
+
+                            DraftNumber {
+                                value: root.edraft.geodata-update-interval-hours;
+                                revision: root.rev;
+                                low: 1;
+                                high: 8760;
+                                placeholder: "24";
+                                hint: @tr("Hours");
+                                ok <=> root.ok-interval;
+                                committed(v) => {
+                                    root.edraft.geodata-update-interval-hours = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Refresh now");
+                            description: root.geo-text;
+
+                            HorizontalLayout {
+                                alignment: end;
+
+                                Button {
+                                    text: @tr("Update now");
+                                    variant: ButtonVariant.outline;
+                                    enabled: !Bridge.busy;
+                                    clicked => {
+                                        Bridge.update-geo-data();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
+                // Engine
+                // ============================================================
+                if (Bridge.loaded && root.section == 6) : VerticalLayout {
+                    spacing: 16px;
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Version");
+                        }
+
+                        SettingRow {
+                            label: @tr("Installed");
+                            description: !Bridge.engine-installed ? @tr("Not installed")
+                                : Bridge.engine-installed-version != "" ? Bridge.engine-installed-version
+                                : Bridge.engine-version != "" ? Bridge.engine-version
+                                : @tr("Installed");
+
+                            HorizontalLayout {
+                                alignment: end;
+
+                                Button {
+                                    text: Bridge.engine-installed ? @tr("Reinstall") : @tr("Install");
+                                    variant: ButtonVariant.outline;
+                                    busy: Bridge.busy;
+                                    enabled: !Bridge.busy;
+                                    clicked => {
+                                        Bridge.install-engine();
+                                    }
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Channel");
+                            description: @tr("Alpha releases come first and may be less stable.");
+
+                            DraftChoice {
+                                items: root.channel-items;
+                                values: root.channel-values;
+                                value: root.edraft.engine-channel;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.engine-channel = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Latest");
+                            description: Bridge.engine-latest-version == "" ? @tr("Not checked yet")
+                                : Bridge.engine-update-available ? @tr("Version {} is available on this channel", Bridge.engine-latest-version)
+                                : @tr("Up to date on this channel");
+
+                            HorizontalLayout {
+                                alignment: end;
+                                spacing: 8px;
+
+                                Button {
+                                    text: @tr("Check");
+                                    variant: ButtonVariant.outline;
+                                    enabled: !Bridge.busy;
+                                    clicked => {
+                                        Bridge.check-engine-update();
+                                    }
+                                }
+
+                                if (Bridge.engine-update-available) : Button {
+                                    text: @tr("Upgrade");
+                                    variant: ButtonVariant.primary;
+                                    enabled: !Bridge.busy;
+                                    clicked => {
+                                        Bridge.upgrade-engine();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Logs and tests");
+                        }
+
+                        SettingRow {
+                            label: @tr("Log level");
+                            description: @tr("How much the engine writes to the Logs screen.");
+
+                            DraftChoice {
+                                items: root.log-items;
+                                values: root.log-values;
+                                value: root.draft.log-level;
+                                revision: root.rev;
+                                placeholder: @tr("Choose");
+                                committed(v) => {
+                                    root.draft.log-level = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Log retention");
+                            description: @tr("Lines kept on the Logs screen. Empty uses the app default.");
+
+                            DraftNumber {
+                                value: root.edraft.log-retention-lines;
+                                revision: root.rev;
+                                low: 100;
+                                high: 2000;
+                                placeholder: "1000";
+                                hint: @tr("Lines");
+                                ok <=> root.ok-retention;
+                                committed(v) => {
+                                    root.edraft.log-retention-lines = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Delay test URL");
+                            description: @tr("The address latency tests request. Empty uses the app default.");
+
+                            DraftText {
+                                value: root.edraft.delay-test-url;
+                                revision: root.rev;
+                                placeholder: "https://www.gstatic.com/generate_204";
+                                committed(v) => {
+                                    root.edraft.delay-test-url = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Delay test timeout");
+                            description: @tr("How long a latency test waits for an answer. Empty uses the app default.");
+
+                            DraftNumber {
+                                value: root.edraft.delay-test-timeout-ms;
+                                revision: root.rev;
+                                low: 1;
+                                high: 600000;
+                                placeholder: "5000";
+                                hint: @tr("ms");
+                                ok <=> root.ok-timeout;
+                                committed(v) => {
+                                    root.edraft.delay-test-timeout-ms = v;
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Connections");
+                        }
+
+                        SettingRow {
+                            label: @tr("Find process");
+                            description: @tr("When the engine names the program behind a connection.");
+
+                            DraftChoice {
+                                items: root.find-items;
+                                values: root.find-values;
+                                value: root.edraft.find-process-mode;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.find-process-mode = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Unified delay");
+                            description: @tr("Measures latency after the first handshake, so the results compare fairly.");
+
+                            DraftTri {
+                                value: root.edraft.unified-delay;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.unified-delay = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("TCP concurrent");
+                            description: @tr("Tries several addresses at once to connect faster.");
+
+                            DraftTri {
+                                value: root.edraft.tcp-concurrent;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.edraft.tcp-concurrent = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Keep-alive interval");
+                            description: @tr("How often idle connections are probed, in seconds. Empty uses the engine default.");
+
+                            DraftNumber {
+                                value: root.edraft.keep-alive-interval;
+                                revision: root.rev;
+                                low: 1;
+                                high: 86400;
+                                placeholder: @tr("Default");
+                                hint: @tr("Seconds");
+                                ok <=> root.ok-keep-alive;
+                                committed(v) => {
+                                    root.edraft.keep-alive-interval = v;
+                                }
+                            }
+                        }
+
+                    }
+                }
+
+                // ============================================================
+                // Proxies
+                // ============================================================
+                if (Bridge.loaded && root.section == 7) : VerticalLayout {
+                    spacing: 16px;
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Proxy groups");
+                        }
+
+                        SettingRow {
+                            label: @tr("Close connections on switch");
+                            description: @tr("When you pick a server in a group, closes the connections that went through the old one.");
+
+                            DraftSwitch {
+                                value: root.draft.auto-close-connections-on-switch;
+                                revision: root.rev;
+                                committed(v) => {
+                                    root.draft.auto-close-connections-on-switch = v;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
+                // Privacy
+                // ============================================================
+                if (Bridge.loaded && root.section == 8) : VerticalLayout {
+                    spacing: 16px;
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Device identification");
+                        }
+
+                        SettingRow {
+                            label: @tr("Send device identification");
+                            description: @tr("With each subscription request, sends a device ID, the operating system, its version and the device model, so the provider can count your devices. Off sends none of them.");
+
+                            DraftSwitch {
+                                value: Bridge.send-device-id;
+                                revision: 0;
+                                committed(v) => {
+                                    // Set at once, and Rust pushes the stored value back after the save.
+                                    Bridge.send-device-id = v;
+                                    Bridge.set-send-device-id(v);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
+                // Hotkeys
+                // ============================================================
+                if (Bridge.loaded && root.section == 9) : VerticalLayout {
+                    spacing: 16px;
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Global shortcuts");
+                            description: @tr("They work from any app. Write them as Ctrl+Alt+KeyS. Empty turns a shortcut off.");
+                        }
+
+                        SettingRow {
+                            label: @tr("Show the window");
+                            description: @tr("Brings the Starpod window to the front.");
+
+                            DraftText {
+                                value: root.hk.show-window;
+                                revision: root.rev;
+                                placeholder: root.hotkey-example;
+                                committed(v) => {
+                                    root.hk.show-window = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Connect or disconnect");
+                            description: @tr("Starts or stops the engine.");
+
+                            DraftText {
+                                value: root.hk.toggle-connect;
+                                revision: root.rev;
+                                placeholder: root.hotkey-example;
+                                committed(v) => {
+                                    root.hk.toggle-connect = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Turn the system proxy on or off");
+                            description: @tr("Changes the system proxy setting.");
+
+                            DraftText {
+                                value: root.hk.toggle-system-proxy;
+                                revision: root.rev;
+                                placeholder: root.hotkey-example;
+                                committed(v) => {
+                                    root.hk.toggle-system-proxy = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Rule-based mode");
+                            description: @tr("Switches the routing mode.");
+
+                            DraftText {
+                                value: root.hk.mode-rule;
+                                revision: root.rev;
+                                placeholder: root.hotkey-example;
+                                committed(v) => {
+                                    root.hk.mode-rule = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Global mode");
+                            description: @tr("Switches the routing mode.");
+
+                            DraftText {
+                                value: root.hk.mode-global;
+                                revision: root.rev;
+                                placeholder: root.hotkey-example;
+                                committed(v) => {
+                                    root.hk.mode-global = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Direct mode");
+                            description: @tr("Switches the routing mode.");
+
+                            DraftText {
+                                value: root.hk.mode-direct;
+                                revision: root.rev;
+                                placeholder: root.hotkey-example;
+                                committed(v) => {
+                                    root.hk.mode-direct = v;
+                                }
+                            }
+                        }
+
+                        if (Bridge.settings-error != "") : VerticalLayout {
+                            padding-top: 12px;
+
+                            EmojiText {
+                                runs: Bridge.settings-error-runs;
+                                fallback: Bridge.settings-error;
+                                font-size: Design.font-sm;
+                                color: Design.destructive;
+                                wrap: true;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            alignment: end;
+                            spacing: 8px;
+                            padding-top: 12px;
+
+                            Button {
+                                text: @tr("Discard");
+                                variant: ButtonVariant.ghost;
+                                enabled: root.hk-dirty && !Bridge.busy;
+                                clicked => {
+                                    root.discard-hotkeys();
+                                }
+                            }
+
+                            Button {
+                                text: @tr("Save shortcuts");
+                                variant: ButtonVariant.primary;
+                                enabled: root.hk-can-save;
+                                busy: Bridge.busy;
+                                clicked => {
+                                    Bridge.save-hotkeys(root.hk);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
+                // Storage
+                // ============================================================
+                if (Bridge.loaded && root.section == 10) : VerticalLayout {
+                    spacing: 16px;
+
+                    Card {
+                        CardHeader {
+                            title: @tr("Storage");
+                        }
+
+                        SettingRow {
+                            label: @tr("Secrets stored in");
+                            description: Bridge.secrets-encrypted ? "" : Bridge.secret-fallback-reason;
+                            warning: Bridge.secrets-encrypted ? "" : @tr("Not encrypted. Anyone with access to your user profile can read them.");
+
+                            Text {
+                                horizontal-stretch: 1;
+                                vertical-stretch: 0;
+                                text: Bridge.secret-backend != "" ? Bridge.secret-backend : @tr("Not reported yet");
+                                color: Design.foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-sm;
+                                horizontal-alignment: right;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Data folder");
+                            description: Bridge.data-dir != "" ? Bridge.data-dir : @tr("Not reported yet");
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Cached profiles");
+                            description: @tr("Removes downloaded subscription content. It is fetched again on the next refresh.");
+
+                            HorizontalLayout {
+                                alignment: end;
+
+                                Button {
+                                    text: @tr("Clear");
+                                    variant: ButtonVariant.destructive-outline;
+                                    enabled: !Bridge.busy;
+                                    clicked => {
+                                        clear-dialog.show();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- save bar: only while a draft differs from Bridge ----------------------
+    // 56px plus a 1px top border. A long error wraps to two lines inside it.
+    if (root.dirty) : Rectangle {
+        x: 0px;
+        y: parent.height - 57px;
+        width: parent.width;
+        height: 57px;
+        background: Design.card;
+
+        Rectangle {
+            x: 0px;
+            y: 0px;
             width: parent.width;
-            spacing: Design.space-lg;
-            padding-right: Design.space-md;
+            height: 1px;
+            background: Design.border;
+        }
 
-            // --- Proxy ----------------------------------------------------------
-            Card {
-                title: "Proxy";
-                description: "Local listeners. An empty port uses its default. HTTP is off when empty.";
+        bar := HorizontalLayout {
+            x: 0px;
+            y: 1px;
+            width: parent.width;
+            height: parent.height - 1px;
+            padding-left: 32px;
+            padding-right: 32px;
+            spacing: 16px;
 
-                ControlRow {
-                    label: "Mixed port";
-                    description: "HTTP and SOCKS5 on one port. Empty uses the default.";
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
 
-                    Field {
-                        kind: FieldKind.number;
-                        placeholder: "7890";
-                        value <=> root.t-mixed;
-                        error: !root.ok-mixed ? "Enter a port from 1 to 65535, or leave it empty."
-                            : root.mixed-clash ? "Another listener already uses this port." : "";
-                        edited(text) => {
-                            root.edit-mixed(text);
-                        }
-                    }
+                if (Bridge.settings-error != "") : EmojiText {
+                    runs: Bridge.settings-error-runs;
+                    fallback: Bridge.settings-error;
+                    font-size: Design.font-sm;
+                    font-weight: 500;
+                    color: Design.destructive;
+                    wrap: true;
                 }
 
-                ControlRow {
-                    label: "SOCKS5 port";
-                    description: "SOCKS5 only. Empty uses the default.";
-
-                    Field {
-                        kind: FieldKind.number;
-                        placeholder: "7891";
-                        value <=> root.t-socks;
-                        error: !root.ok-socks ? "Enter a port from 1 to 65535, or leave it empty."
-                            : root.socks-clash ? "Another listener already uses this port." : "";
-                        edited(text) => {
-                            root.edit-socks(text);
-                        }
-                    }
-                }
-
-                ControlRow {
-                    label: "HTTP port";
-                    description: "HTTP only. Empty turns it off.";
-
-                    Field {
-                        kind: FieldKind.number;
-                        placeholder: "off";
-                        value <=> root.t-http;
-                        error: !root.ok-http ? "Enter a port from 1 to 65535, or leave it empty."
-                            : root.http-clash ? "Another listener already uses this port." : "";
-                        edited(text) => {
-                            root.edit-http(text);
-                        }
-                    }
-                }
-
-                ControlRow {
-                    label: "Bind address";
-                    description: "The address the listeners bind to. Empty uses the default, loopback.";
-
-                    Field {
-                        kind: FieldKind.text;
-                        placeholder: "127.0.0.1";
-                        value <=> root.t-bind;
-                        edited(text) => {
-                            root.draft.bind-address = text;
-                        }
-                    }
-                }
-
-                ControlRow {
-                    label: "Allow LAN";
-                    description: root.draft.allow-lan
-                        ? "Exposes the proxy to your local network. Any device on that network can use it."
-                        : "Only this computer can use the proxy.";
-
-                    HorizontalLayout {
-                        vertical-stretch: 0;
-                        spacing: Design.space-sm;
-                        alignment: end;
-
-                        if (root.draft.allow-lan) : Badge {
-                            text: "Exposed";
-                            variant: BadgeVariant.warning;
-                            width: 72px;
-                        }
-
-                        ToggleSwitch {
-                            checked: root.draft.allow-lan;
-                            toggled(v) => {
-                                root.draft.allow-lan = v;
-                            }
-                        }
-                    }
-                }
-
-                ControlRow {
-                    label: "Routing mode";
-                    description: "Rule follows your rules, Global sends everything through the proxy, Direct bypasses it.";
-
-                    AppSelect {
-                        options: root.mode-choices;
-                        value: root.draft.mode;
-                        selected(v) => {
-                            root.draft.mode = v;
-                        }
-                    }
-                }
-
-                ControlRow {
-                    label: "Log level";
-                    description: "How much the engine writes to the Logs screen.";
-
-                    AppSelect {
-                        options: root.log-choices;
-                        value: root.draft.log-level;
-                        selected(v) => {
-                            root.draft.log-level = v;
-                        }
-                    }
-                }
-            }
-
-            // --- TUN ------------------------------------------------------------
-            Card {
-                title: "TUN";
-                description: "A virtual network adapter that sends all device traffic through the proxy.";
-
-                HorizontalLayout {
-                    spacing: Design.space-sm;
-
-                    IconTriangleAlert {
-                        width: 16px;
-                        height: 16px;
-                        y: 2px;
-                        stroke: Design.warning;
-                        stroke-width: 2px;
-                    }
-
-                    Text {
-                        horizontal-stretch: 1;
-                        text: "TUN needs administrator rights on Windows, or root on Linux and macOS. Starpod asks for elevation when TUN starts.";
-                        color: Design.warning;
-                        font-family: Design.font-family;
-                        font-size: Design.font-xs;
-                        wrap: word-wrap;
-                    }
-                }
-
-                ControlRow {
-                    label: "Enable TUN";
-                    description: "Off by default. Turning it on triggers the elevation prompt.";
-
-                    HorizontalLayout {
-                        vertical-stretch: 0;
-                        alignment: end;
-
-                        ToggleSwitch {
-                            checked: root.draft.tun-enabled;
-                            toggled(v) => {
-                                root.draft.tun-enabled = v;
-                            }
-                        }
-                    }
-                }
-
-                ControlRow {
-                    label: "Device name";
-                    description: "The name of the adapter. Required while TUN is enabled.";
-
-                    Field {
-                        kind: FieldKind.text;
-                        placeholder: "starpod-tun";
-                        value <=> root.t-device;
-                        error: root.tun-name-ok ? "" : "Enter a device name, or turn TUN off.";
-                        edited(text) => {
-                            root.draft.tun-device = text;
-                        }
-                    }
-                }
-
-                ControlRow {
-                    label: "MTU";
-                    description: "Maximum packet size in bytes, from 1280 to 9000. Empty uses the engine default. 1280 is the smallest size IPv6 allows.";
-
-                    Field {
-                        kind: FieldKind.number;
-                        placeholder: "default";
-                        value <=> root.t-mtu;
-                        error: root.ok-mtu ? "" : "Enter a whole number from 1280 to 9000, or leave it empty.";
-                        edited(text) => {
-                            root.edit-mtu(text);
-                        }
-                    }
-                }
-            }
-
-            // --- Subscriptions --------------------------------------------------
-            Card {
-                title: "Subscriptions";
-                description: "How subscriptions are kept up to date.";
-
-                ControlRow {
-                    label: "Auto refresh (minutes)";
-                    description: "0 means manual refresh only. Empty uses the default of 60. The maximum is one week.";
-
-                    Field {
-                        kind: FieldKind.number;
-                        placeholder: "60";
-                        value <=> root.t-refresh;
-                        error: root.ok-refresh ? "" : "Enter a whole number from 0 to 10080, or leave it empty.";
-                        edited(text) => {
-                            root.edit-refresh(text);
-                        }
-                    }
-                }
-            }
-
-            // --- Storage and security (read-only) -------------------------------
-            Card {
-                title: "Storage and security";
-                description: "Read-only. These come from the running app.";
-
-                if (!Bridge.secrets-encrypted) : Rectangle {
-                    border-radius: Design.radius-md;
-                    border-width: 1px;
-                    border-color: Design.warning;
-
-                    HorizontalLayout {
-                        padding: Design.space-md;
-                        spacing: Design.space-sm;
-
-                        IconTriangleAlert {
-                            width: 16px;
-                            height: 16px;
-                            y: 2px;
-                            stroke: Design.warning;
-                            stroke-width: 2px;
-                        }
-
-                        Text {
-                            horizontal-stretch: 1;
-                            text: "Secrets are stored in a plain file because no OS keyring is available. Anyone who can read your user profile can read them.";
-                            color: Design.foreground;
-                            font-family: Design.font-family;
-                            font-size: Design.font-sm;
-                            wrap: word-wrap;
-                        }
-                    }
-                }
-
-                SettingRow {
-                    label: "Secret storage";
-                    description: Bridge.secret-backend != "" ? Bridge.secret-backend : "Not reported yet";
-                }
-
-                if (Bridge.secret-fallback-reason != "") : Text {
-                    text: "Why the OS keyring was not used: " + Bridge.secret-fallback-reason;
-                    color: Design.muted-foreground;
+                if (Bridge.settings-error == "") : Text {
+                    text: root.save-blocker != "" ? root.save-blocker : @tr("You have unsaved changes.");
+                    color: root.save-blocker != "" ? Design.warning : Design.foreground;
                     font-family: Design.font-family;
-                    font-size: Design.font-xs;
+                    font-size: Design.font-sm;
+                    font-weight: 500;
                     wrap: word-wrap;
                 }
+            }
 
-                VerticalLayout {
-                    spacing: 2px;
+            VerticalLayout {
+                alignment: center;
 
-                    Text {
-                        text: "Data directory";
-                        color: Design.foreground;
-                        font-family: Design.font-family;
-                        font-size: Design.font-sm;
-                        font-weight: 500;
-                    }
+                HorizontalLayout {
+                    spacing: 8px;
 
-                    Text {
-                        text: Bridge.data-dir != "" ? Bridge.data-dir : "Not reported yet";
-                        color: Design.muted-foreground;
-                        font-family: Design.font-family;
-                        font-size: Design.font-xs;
-                        wrap: word-wrap;
-                    }
-                }
-
-                if (Bridge.secret-backend == "" && Bridge.data-dir == "") : EmptyState {
-                    title: "Storage details not reported yet";
-                    description: "The secret backend and data directory appear once the app has finished starting.";
-                }
-
-                ControlRow {
-                    label: "Proxy engine";
-                    description: Bridge.engine-installed
-                        ? (Bridge.engine-version != "" ? "Installed, version " + Bridge.engine-version : "Installed")
-                        : "Not installed yet.";
-
-                    HorizontalLayout {
-                        vertical-stretch: 0;
-                        alignment: end;
-
-                        AppButton {
-                            text: Bridge.engine-installed ? "Update engine" : "Install engine";
-                            size: ButtonSize.lg;
-                            busy: Bridge.busy;
-                            busy-text: Bridge.busy-message;
-                            enabled: !Bridge.busy;
-                            disabled-reason: "Another operation is running. Wait for it to finish.";
-                            clicked => {
-                                Bridge.install-engine();
-                            }
+                    Button {
+                        text: @tr("Discard");
+                        variant: ButtonVariant.ghost;
+                        enabled: !Bridge.busy;
+                        clicked => {
+                            root.discard();
                         }
                     }
-                }
 
-                // Two-step clear: the first press asks, the second deletes.
-                // Three buttons sit in this row when confirming, so its
-                // control column is wider than the others.
-                ControlRow {
-                    label: "Cached subscription data";
-                    control-width: 340px;
-                    description: root.confirm-clear
-                        ? "This deletes the downloaded subscription content. Your subscriptions stay configured."
-                        : "Removes downloaded subscription content. It is fetched again on the next refresh.";
-
-                    HorizontalLayout {
-                        vertical-stretch: 0;
-                        spacing: Design.space-sm;
-                        alignment: end;
-
-                        if (!root.confirm-clear) : AppButton {
-                            text: "Clear cache";
-                            variant: ButtonVariant.outline;
-                            size: ButtonSize.lg;
-                            enabled: !Bridge.busy;
-                            disabled-reason: "Another operation is running. Wait for it to finish.";
-                            clicked => {
-                                root.confirm-clear = true;
-                            }
-                        }
-
-                        if (root.confirm-clear) : AppButton {
-                            text: "Cancel";
-                            variant: ButtonVariant.ghost;
-                            clicked => {
-                                root.confirm-clear = false;
-                            }
-                        }
-
-                        if (root.confirm-clear) : AppButton {
-                            text: "Delete cache";
-                            variant: ButtonVariant.destructive;
-                            size: ButtonSize.lg;
-                            enabled: !Bridge.busy;
-                            disabled-reason: "Another operation is running. Wait for it to finish.";
-                            clicked => {
-                                root.confirm-clear = false;
-                                Bridge.clear-cache();
-                            }
+                    Button {
+                        text: @tr("Save");
+                        variant: ButtonVariant.primary;
+                        enabled: root.can-save;
+                        busy: Bridge.busy;
+                        clicked => {
+                            root.save-all();
                         }
                     }
                 }
@@ -649,51 +1992,16 @@ export component SettingsPage inherits VerticalLayout {
         }
     }
 
-    // --- footer: errors, the unsaved hint, Discard and Save -------------------
-
-    if (Bridge.loaded) : VerticalLayout {
-        spacing: Design.space-xs;
-        vertical-stretch: 0;
-
-        if (Bridge.settings-error != "") : Text {
-            text: Bridge.settings-error;
-            color: Design.destructive;
-            font-family: Design.font-family;
-            font-size: Design.font-sm;
-            font-weight: 500;
-            wrap: word-wrap;
-        }
-
-        if (root.dirty) : Text {
-            text: "You have unsaved changes.";
-            color: Design.warning;
-            font-family: Design.font-family;
-            font-size: Design.font-xs;
-        }
-
-        HorizontalLayout {
-            spacing: Design.space-sm;
-            alignment: end;
-
-            AppButton {
-                text: "Discard";
-                variant: ButtonVariant.secondary;
-                enabled: root.dirty && !Bridge.busy;
-                disabled-reason: Bridge.busy ? "Another operation is running. Wait for it to finish." : "There are no changes to discard.";
-                clicked => {
-                    root.resync();
-                }
-            }
-
-            AppButton {
-                text: "Save";
-                variant: ButtonVariant.default;
-                enabled: root.can-save;
-                disabled-reason: root.save-blocker;
-                clicked => {
-                    Bridge.save-settings(root.draft);
-                }
-            }
+    clear-dialog := ConfirmDialog {
+        width: parent.width;
+        height: parent.height;
+        title: @tr("Clear cached profiles?");
+        message: @tr("This deletes the downloaded subscription content. Your subscriptions stay configured.");
+        confirm-text: @tr("Clear cache");
+        busy: Bridge.busy;
+        confirmed => {
+            clear-dialog.close();
+            Bridge.clear-cache();
         }
     }
 }

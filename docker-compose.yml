@@ -17,7 +17,7 @@ services:
     command: cargo build --workspace --all-targets
 
   # Headless UI screenshots into <repo>/shots/ (tools/ui-shot.sh, see its header).
-  # Run: docker compose run --rm shot [dashboard|servers|rules|settings|logs]
+  # Run: docker compose run --rm shot [home|profiles|proxies|rules|logs|settings]
   shot:
     build:
       context: .

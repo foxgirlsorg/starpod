@@ -543,7 +543,12 @@ impl Supervisor {
     /// Spawn an unelevated engine and start draining its output.
     fn spawn_direct(&self, binary: &Path) -> EngineResult<(Child, u32)> {
         let mut command = Command::new(binary);
+        // The home directory is the configuration's directory, as in
+        // `elevate::engine_arguments`.
+        let home = self.config_path.parent().unwrap_or_else(|| Path::new("."));
         command
+            .arg("-d")
+            .arg(home)
             .arg("-f")
             .arg(&self.config_path)
             .arg("--secret")
@@ -928,6 +933,7 @@ mod tests {
             rules: vec!["MATCH,DIRECT".to_string()],
             rule_providers: Vec::new(),
             subscriptions: Vec::new(),
+            engine: Default::default(),
         }
     }
 
