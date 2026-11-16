@@ -13,7 +13,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_TOOLCHAIN: 1.92.0
 
 # Cancel superseded runs for the same branch or pull request. Tag builds are
 # never cancelled, so a release run always finishes.
@@ -40,14 +39,14 @@ jobs:
             binary: starpod
             name: starpod-linux-x86_64
             archive: starpod-linux-x86_64.tar.gz
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             binary: starpod
             name: starpod-macos-aarch64
             archive: starpod-macos-aarch64.tar.gz
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux system libraries
         if: runner.os == 'Linux'
@@ -71,7 +70,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.92.0
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
@@ -133,7 +131,7 @@ jobs:
           cat "$ARCHIVE.sha256"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.archive }}
           path: |
@@ -152,7 +150,7 @@ jobs:
       contents: write
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: starpod-*
           path: release
