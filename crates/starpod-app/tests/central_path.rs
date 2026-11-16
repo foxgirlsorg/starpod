@@ -1102,7 +1102,7 @@ async fn latency_is_forgotten_when_the_proxy_stops() {
 }
 
 #[tokio::test]
-async fn latency_refuses_with_a_clear_message_when_the_proxy_is_stopped() {
+async fn latency_pings_the_servers_directly_when_the_proxy_is_stopped() {
     let dir = TempDir::new().unwrap();
     let engine = FakeEngine::default();
     let provider: Arc<dyn SubscriptionProvider> =
@@ -1112,12 +1112,25 @@ async fn latency_refuses_with_a_clear_message_when_the_proxy_is_stopped() {
     let id = add_airport(&mut service, None).await;
     service.refresh_subscription(&id).await.unwrap();
 
-    match service.test_latency().await {
-        Err(AppError::Invalid(message)) => {
-            assert_eq!(message, "Connect first to test latency");
-        }
-        other => panic!("expected an invalid-request error, got {other:?}"),
-    }
+    // No engine is running, so the servers are pinged directly. The fixture's
+    // servers do not exist, so none answers; the test still runs and says so.
+    service
+        .test_latency()
+        .await
+        .expect("runs without the engine");
+    let snap = service.snapshot();
+    assert!(
+        snap.log_lines
+            .iter()
+            .any(|line| line.contains("direct ping, not connected")),
+        "{:?}",
+        snap.log_lines
+    );
+    assert_eq!(
+        snap.engine.phase,
+        EnginePhase::Stopped,
+        "nothing was started"
+    );
 }
 
 // ----- the connect rule ------------------------------------------------------

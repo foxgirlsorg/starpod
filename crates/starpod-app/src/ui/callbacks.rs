@@ -49,6 +49,23 @@ pub fn act<T, Fut>(
     });
 }
 
+/// Save which Proxies groups are open, in the background, so they open the
+/// same way next time.
+pub fn save_expanded_groups(ctx: &Ctx, expanded: std::collections::BTreeSet<String>) {
+    let service = ctx.service.clone();
+    ctx.runtime.spawn(async move {
+        let mut svc = service.lock().await;
+        let mut prefs = svc.user_state().preferences.clone();
+        if prefs.expanded_groups == expanded {
+            return;
+        }
+        prefs.expanded_groups = expanded;
+        if let Err(error) = svc.save_preferences(prefs).await {
+            warn!(%error, "could not save the open proxy groups");
+        }
+    });
+}
+
 /// Save the Proxies list settings the page shows (member sort and hiding), in
 /// the background. It is quiet: the page already shows the new order, so no
 /// busy message is raised.
@@ -291,8 +308,14 @@ fn wire_servers(bridge: &Bridge<'_>, ctx: &Ctx) {
         });
     });
 
-    bridge.on_toggle_group(|group| with_ui(|ui| ui.toggle_group(group.as_str())));
-    bridge.on_expand_all(|expanded| with_ui(|ui| ui.set_all_groups_expanded(expanded)));
+    let c = ctx.clone();
+    bridge.on_toggle_group(move |group| {
+        let mut expanded = None;
+        with_ui(|ui| expanded = Some(ui.toggle_group(group.as_str())));
+        if let Some(expanded) = expanded {
+            save_expanded_groups(&c, expanded);
+        }
+    });
 
     let c = ctx.clone();
     bridge.on_close_connection(move |id| {

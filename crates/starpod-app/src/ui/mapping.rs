@@ -1267,8 +1267,8 @@ pub struct ViewState {
     pub proxies_sort: i32,
     /// Whether the Proxies page hides timed-out members, as the UI last reported it.
     pub hide_unavailable: bool,
-    /// The groups the Proxies page has collapsed. Every other group is expanded.
-    pub collapsed_groups: BTreeSet<String>,
+    /// The groups the Proxies page has open. Every other group is collapsed.
+    pub expanded_groups: BTreeSet<String>,
     /// Whether the list settings were taken from the saved preferences. Until
     /// they are, the page's own values are not saved over the saved ones.
     pub list_prefs_loaded: bool,
@@ -1316,22 +1316,14 @@ impl ViewState {
         self.list_prefs_loaded = true;
         self.proxies_sort = i32::from(prefs.proxies_sort);
         self.hide_unavailable = prefs.hide_unavailable;
+        self.expanded_groups = prefs.expanded_groups.clone();
         true
     }
 
-    /// Flip one group between expanded and collapsed.
+    /// Flip one group between collapsed and expanded.
     pub fn toggle_group(&mut self, group: &str) {
-        if !self.collapsed_groups.remove(group) {
-            self.collapsed_groups.insert(group.to_string());
-        }
-    }
-
-    /// Expand every group (`expanded` true), or collapse the named groups.
-    pub fn set_all_expanded(&mut self, expanded: bool, groups: impl IntoIterator<Item = String>) {
-        if expanded {
-            self.collapsed_groups.clear();
-        } else {
-            self.collapsed_groups.extend(groups);
+        if !self.expanded_groups.remove(group) {
+            self.expanded_groups.insert(group.to_string());
         }
     }
 
@@ -1589,7 +1581,7 @@ fn set_servers(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
     let groups: Vec<GroupItem> = snap
         .groups
         .iter()
-        .map(|group| group_item_in(group, order, !view.collapsed_groups.contains(&group.name)))
+        .map(|group| group_item_in(group, order, view.expanded_groups.contains(&group.name)))
         .collect();
     if groups_changed(&bridge.get_groups(), &groups) {
         bridge.set_groups(ModelRc::new(VecModel::from(groups)));
@@ -2594,15 +2586,22 @@ mod tests {
             }
         );
 
+        assert!(
+            view.expanded_groups.is_empty(),
+            "every group starts collapsed"
+        );
         view.toggle_group("Proxy");
-        assert!(view.collapsed_groups.contains("Proxy"));
+        assert!(view.expanded_groups.contains("Proxy"));
         view.toggle_group("Proxy");
-        assert!(!view.collapsed_groups.contains("Proxy"));
+        assert!(!view.expanded_groups.contains("Proxy"));
 
-        view.set_all_expanded(false, vec!["Proxy".to_string()]);
-        assert!(view.collapsed_groups.contains("Proxy"));
-        view.set_all_expanded(true, Vec::<String>::new());
-        assert!(view.collapsed_groups.is_empty());
+        // The groups the user left open come back from the saved preferences.
+        let mut prefs = UserPreferences::default();
+        prefs.expanded_groups.insert("Streaming".to_string());
+        let mut fresh = ViewState::default();
+        assert!(fresh.load_list_prefs(&prefs));
+        assert!(fresh.expanded_groups.contains("Streaming"));
+        assert!(!fresh.expanded_groups.contains("Proxy"));
     }
 
     #[test]

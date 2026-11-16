@@ -1300,3 +1300,6 @@ msgstr "Установить обновление"
 
 msgid "Version {} is on GitHub. Installing it restarts Starpod."
 msgstr "Версия {} доступна на GitHub. Установка перезапустит Starpod."
+
+msgid "Back to settings"
+msgstr "Назад к настройкам"

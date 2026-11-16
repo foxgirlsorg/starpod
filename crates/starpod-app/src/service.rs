@@ -26,8 +26,8 @@ use starpod_core::config::{DEFAULT_GROUP_NAME, DEFAULT_MIXED_PORT};
 use starpod_core::rules::{parse_line, translate_all};
 use starpod_core::timestamp;
 use starpod_core::{
-    ProxyGroup, ProxyMode, RuleSpec, RuntimeConfig, StoredRule, Subscription, SubscriptionMode,
-    SubscriptionPayload, SubscriptionQuota as CoreQuota, UserPreferences,
+    Node, ProxyGroup, ProxyMode, RuleSpec, RuntimeConfig, StoredRule, Subscription,
+    SubscriptionMode, SubscriptionPayload, SubscriptionQuota as CoreQuota, UserPreferences,
 };
 use starpod_engine::log::redact_urls;
 use starpod_engine::reassert::{desired_rule_order, is_match_rule};
@@ -1816,9 +1816,17 @@ impl AppService {
 
     async fn test_latency_inner(&mut self) -> Result<(), AppError> {
         if !self.refresh_engine_status().await.is_running() {
-            return Err(AppError::Invalid(
-                "Connect first to test latency".to_string(),
+            // Not connected: ping each server directly instead.
+            let nodes = self.compose_current()?.config.proxies;
+            let total = nodes.len();
+            let timeout = self.state.preferences.effective_delay_test_timeout_ms();
+            let results = tcp_ping(nodes, timeout).await;
+            let answered = results.values().filter(|latency| latency.is_some()).count();
+            self.latencies = results;
+            self.log(format!(
+                "latency test (direct ping, not connected): {answered} of {total} nodes answered"
             ));
+            return Ok(());
         }
         let nodes: Vec<(String, String)> = self
             .built
@@ -1862,9 +1870,28 @@ impl AppService {
 
     async fn test_group_inner(&mut self, group: &str) -> Result<usize, AppError> {
         if !self.refresh_engine_status().await.is_running() {
-            return Err(AppError::Invalid(
-                "Connect first to test latency".to_string(),
+            // Not connected: ping the group's servers directly instead.
+            let config = self.compose_current()?.config;
+            let members = config
+                .proxy_groups
+                .iter()
+                .find(|candidate| candidate.name == group)
+                .map(|candidate| candidate.members.clone())
+                .ok_or_else(|| AppError::Invalid(format!("there is no group named “{group}”")))?;
+            let nodes: Vec<Node> = config
+                .proxies
+                .into_iter()
+                .filter(|node| members.contains(&node.name))
+                .collect();
+            let timeout = self.state.preferences.effective_delay_test_timeout_ms();
+            let results = tcp_ping(nodes, timeout).await;
+            let count = results.values().filter(|latency| latency.is_some()).count();
+            self.latencies.extend(results);
+            self.log(format!(
+                "group latency test “{group}” (direct ping, not connected): {count} of {} members answered",
+                members.len()
             ));
+            return Ok(count);
         }
         let (members, proxies) = {
             let Some(config) = self.built.as_ref() else {
@@ -2728,4 +2755,104 @@ fn new_id() -> String {
 
 fn now_unix() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
+}
+
+/// Protocols that carry traffic over UDP only. A TCP connection says nothing
+/// about them, so a direct ping leaves them untested.
+const UDP_ONLY_PROTOCOLS: &[&str] = &["hysteria", "hysteria2", "tuic", "wireguard"];
+
+/// Ping each node's server directly, without the engine: the time to open a
+/// TCP connection to its address and port, in milliseconds, or `None` when it
+/// does not answer within `timeout_ms`. The name lookup is done first and is
+/// not counted. A node without an address (`direct`) or on a UDP-only
+/// protocol gets no entry, so it shows as untested rather than failed.
+///
+/// This is what the latency test does while the proxy is off. It measures the
+/// route to the server, not a request through it, so it says a server is
+/// reachable, not that the proxy works.
+pub(crate) async fn tcp_ping(nodes: Vec<Node>, timeout_ms: u32) -> BTreeMap<String, Option<u32>> {
+    let timeout = std::time::Duration::from_millis(u64::from(timeout_ms));
+    let mut set = tokio::task::JoinSet::new();
+    for node in nodes {
+        let (Some(server), Some(port)) = (node.server.clone(), node.port) else {
+            continue;
+        };
+        if UDP_ONLY_PROTOCOLS.contains(&node.protocol.to_ascii_lowercase().as_str()) {
+            continue;
+        }
+        set.spawn(async move {
+            let latency = tokio::time::timeout(timeout, async {
+                let address = tokio::net::lookup_host((server.as_str(), port))
+                    .await
+                    .ok()?
+                    .next()?;
+                let started = std::time::Instant::now();
+                tokio::net::TcpStream::connect(address).await.ok()?;
+                Some(
+                    u32::try_from(started.elapsed().as_millis())
+                        .unwrap_or(u32::MAX)
+                        .max(1),
+                )
+            })
+            .await
+            .ok()
+            .flatten();
+            (node.id, latency)
+        });
+    }
+    let mut results = BTreeMap::new();
+    while let Some(joined) = set.join_next().await {
+        if let Ok((id, latency)) = joined {
+            results.insert(id, latency);
+        }
+    }
+    results
+}
+
+#[cfg(test)]
+mod tcp_ping_tests {
+    use super::*;
+
+    fn node(id: &str, protocol: &str, server: Option<&str>, port: Option<u16>) -> Node {
+        Node {
+            id: id.to_string(),
+            name: id.to_string(),
+            protocol: protocol.to_string(),
+            server: server.map(str::to_string),
+            port,
+            tags: Vec::new(),
+            raw: serde_json::Map::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_direct_ping_times_open_ports_and_skips_what_tcp_cannot_test() {
+        let open = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let open_port = open.local_addr().unwrap().port();
+        // A port that was free a moment ago: nothing listens on it.
+        let closed_port = {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            probe.local_addr().unwrap().port()
+        };
+        let results = tcp_ping(
+            vec![
+                node("up", "vless", Some("127.0.0.1"), Some(open_port)),
+                node("down", "trojan", Some("127.0.0.1"), Some(closed_port)),
+                node("direct", "direct", None, None),
+                node("udp", "hysteria2", Some("127.0.0.1"), Some(open_port)),
+            ],
+            2_000,
+        )
+        .await;
+        assert!(
+            matches!(results.get("up"), Some(Some(ms)) if *ms >= 1),
+            "{results:?}"
+        );
+        assert_eq!(results.get("down"), Some(&None));
+        assert!(!results.contains_key("direct"), "no address, not tested");
+        assert!(
+            !results.contains_key("udp"),
+            "TCP says nothing about a UDP protocol"
+        );
+    }
 }

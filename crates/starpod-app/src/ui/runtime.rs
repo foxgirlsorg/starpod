@@ -274,21 +274,12 @@ impl UiState {
         CONNECTIONS_PAUSED.store(bridge.get_connections_paused(), Ordering::Relaxed);
     }
 
-    /// Flip one Proxies group between expanded and collapsed.
-    pub fn toggle_group(&mut self, group: &str) {
+    /// Flip one Proxies group between collapsed and expanded. Returns the
+    /// groups now open, for saving.
+    pub fn toggle_group(&mut self, group: &str) -> std::collections::BTreeSet<String> {
         self.view.toggle_group(group);
         self.reapply_last();
-    }
-
-    /// Expand every Proxies group, or collapse them all.
-    pub fn set_all_groups_expanded(&mut self, expanded: bool) {
-        let names: Vec<String> = self
-            .last
-            .as_ref()
-            .map(|snap| snap.groups.iter().map(|group| group.name.clone()).collect())
-            .unwrap_or_default();
-        self.view.set_all_expanded(expanded, names);
-        self.reapply_last();
+        self.view.expanded_groups.clone()
     }
 
     /// Apply a new snapshot from the service.
@@ -363,6 +354,14 @@ impl UiState {
         self.busy += 1;
         self.busy_message = message.to_string();
         self.push_busy();
+    }
+
+    /// Change what the busy indicator says, without starting another task.
+    pub fn set_busy_message(&mut self, message: &str) {
+        if self.busy > 0 {
+            self.busy_message = message.to_string();
+            self.push_busy();
+        }
     }
 
     pub fn end_busy(&mut self) {
@@ -655,7 +654,10 @@ pub fn spawn_install_update(ctx: &Ctx) {
                     update::CURRENT_VERSION
                 ));
             }
-            let new = update::download_update(&release, &staging).await?;
+            let new = update::download_update(&release, &staging, |percent| {
+                post(move |ui| ui.set_busy_message(&format!("Downloading the update… {percent}%")));
+            })
+            .await?;
             let current = std::env::current_exe()
                 .map_err(|error| format!("the running Starpod could not be found: {error}"))?;
             update::replace_binary(&current, &new)?;
@@ -904,6 +906,15 @@ pub fn run(
             page,
             "STARPOD_UI_PAGE: opened the page given in the environment"
         );
+    }
+    // Debug hook for tools/ui-shot.sh: STARPOD_UI_SETTINGS=0..10 opens that
+    // Settings section instead of the section list.
+    if let Some(section) = std::env::var("STARPOD_UI_SETTINGS")
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .filter(|section| (0..=10).contains(section))
+    {
+        window.global::<Bridge>().set_settings_section(section);
     }
     // Debug hook for tools/ui-shot.sh: STARPOD_UI_NAV=1 opens the drawer.
     if std::env::var("STARPOD_UI_NAV").is_ok_and(|value| value.trim() == "1") {

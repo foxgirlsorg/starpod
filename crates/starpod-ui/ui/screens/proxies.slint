@@ -379,8 +379,9 @@ export component ProxiesPage inherits Rectangle {
                 }
             }
 
-            // The toolbar: the filter on the first row; the sort, the hide
-            // switch and the expand and collapse buttons on the second.
+            // The toolbar: the filter and the sort on the first row, the hide
+            // switch on the second. Groups open one by one; each is closed
+            // until the user opens it, and stays as the user left it.
             VerticalLayout {
                 spacing: 12px;
                 padding-bottom: 16px;
@@ -399,35 +400,15 @@ export component ProxiesPage inherits Rectangle {
                         horizontal-stretch: 1;
                     }
 
-                    Button {
-                        text: @tr("Expand all");
-                        variant: ButtonVariant.ghost;
-                        size: ButtonSize.sm;
-                        horizontal-stretch: 0;
-                        clicked => {
-                            Bridge.expand-all(true);
-                        }
-                    }
-
-                    Button {
-                        text: @tr("Collapse all");
-                        variant: ButtonVariant.ghost;
-                        size: ButtonSize.sm;
-                        horizontal-stretch: 0;
-                        clicked => {
-                            Bridge.expand-all(false);
-                        }
+                    Segmented {
+                        options: [@tr("Default"), @tr("Latency"), @tr("Name")];
+                        current-index <=> Bridge.proxies-sort;
                     }
                 }
 
                 HorizontalLayout {
                     spacing: 16px;
                     height: 36px;
-
-                    Segmented {
-                        options: [@tr("Default"), @tr("Latency"), @tr("Name")];
-                        current-index <=> Bridge.proxies-sort;
-                    }
 
                     HorizontalLayout {
                         spacing: 8px;

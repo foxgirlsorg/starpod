@@ -273,7 +273,7 @@ export struct GroupItem {
     label-runs: [TextRun],
     selected-runs: [TextRun],
     // whether the group's members are listed; false = collapsed. Rust keeps it
-    // and changes it with toggle-group and expand-all.
+    // and changes it with toggle-group.
     expanded: bool,
     // the index of `selected` in `members` and in `member-choices`, in the order
     // they are shown (after sorting and hiding); -1 when there is none
@@ -348,6 +348,8 @@ export global Bridge {
     // 0 Home, 1 Profiles, 2 Proxies, 3 Rules, 4 Logs, 5 Settings, 6 Connections
     // (CONNECTIONS_PAGE in ui/runtime.rs; app.slint has no page 6 yet)
     in-out property <int> active-page: 0;
+    // The Settings page: -1 shows the section list, 0.. that section.
+    in-out property <int> settings-section: -1;
 
     // --- engine -------------------------------------------------------------
     // "stopped" | "starting" | "running" | "stopping" | "failed"
@@ -502,8 +504,7 @@ export global Bridge {
     callback open-url(string);
     // group name: flips between expanded and collapsed
     callback toggle-group(string);
-    // true expands every group, false collapses every group
-    callback expand-all(bool);
+
 
     // --- callbacks: rules ---------------------------------------------------
     // kind, payload, target

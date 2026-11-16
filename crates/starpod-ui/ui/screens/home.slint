@@ -1,8 +1,8 @@
 // Home: the active profile card (logo, quota, expiry and its warning), the
 // other profiles' announcements, the connect button with its status line, and
-// the server picker of the primary group. The routing mode, the system proxy,
-// TUN and the session traffic are on the Proxies page. Sized to fit 1100x720
-// without scrolling in the demo state (ui-spec.md section 5.1).
+// the server picker of the primary group. The cards sit at the top, the picker
+// at the bottom, and the button in the middle. The routing mode, the system
+// proxy, TUN and the session traffic are on the Proxies page.
 
 import { Design } from "../design.slint";
 import { Bridge, AnnouncementItem, ProfileCardItem, TextRun } from "../bridge.slint";
@@ -179,15 +179,16 @@ export component HomePage inherits Rectangle {
             vertical-stretch: 1;
             alignment: center;
 
-            // The 440px column, centred in the page. It is vertically centred
-            // too when it fits, and scrolls with 12px on top when it does not.
+            // The 440px column, centred in the page, in three parts: the
+            // profile card and the news at the top, the server picker at the
+            // bottom, and the connect button with its status centred in the
+            // space between. A short window scrolls instead of squeezing it.
             stack := VerticalLayout {
                 horizontal-stretch: 0;
                 vertical-stretch: 1;
                 width: 440px;
-                alignment: center;
                 padding-top: 12px;
-                padding-bottom: 12px;
+                padding-bottom: 16px;
                 spacing: 0px;
 
                 // The active profile: header, quota and expiry.
@@ -398,10 +399,12 @@ export component HomePage inherits Rectangle {
                     }
                 }
 
+                // Takes half the free height, so the button sits in the middle.
+                // The ring hangs 14px above the button; 18px keeps it clear of
+                // the card.
                 Rectangle {
-                    vertical-stretch: 0;
-                    // The ring hangs 14px above the button; 18px keeps it clear of the card.
-                    height: (root.has-card || Bridge.announcements.length > 0) ? 18px : 0px;
+                    vertical-stretch: 1;
+                    min-height: (root.has-card || Bridge.announcements.length > 0) ? 18px : 0px;
                 }
 
                 // The connect button, 120px, with a 148px ring behind it when connected.
@@ -549,11 +552,16 @@ export component HomePage inherits Rectangle {
                     }
                 }
 
-                // The server picker: the primary group's choice, centred under
-                // the button. Its own page lists every group and server.
+                // The other half of the free height.
+                Rectangle {
+                    vertical-stretch: 1;
+                    min-height: 16px;
+                }
+
+                // The server picker: the primary group's choice, at the foot of
+                // the page. Its own page lists every group and server.
                 if (Bridge.primary-group != "" && Bridge.groups.length > 0 && Bridge.groups[root.gi].members.length > 0) : HorizontalLayout {
                     vertical-stretch: 0;
-                    padding-top: 16px;
                     alignment: center;
 
                     VerticalLayout {

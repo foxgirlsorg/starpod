@@ -10,25 +10,36 @@
 // again after the user has typed into it.
 
 import { Design } from "../../design.slint";
-import { Input, Segmented, Select, SelectItem, Switch } from "../../primitives.slint";
+import { Input, Segmented, Select, SelectItem, Switch, WindowMetrics } from "../../primitives.slint";
 import { TextEdit } from "std-widgets.slint";
 
-// A row of a card: label and description on the left, the control in a 220px
-// column on the right, centred vertically. The row is at least 60px tall. A
-// wrapped description or warning makes it taller.
-export component SettingRow inherits HorizontalLayout {
+// A row of a card: label and description, and the control. A narrow control
+// (a switch) sits to the right of the text. A wider one (a select, a number
+// field, buttons) sits in a 220px column on the right when the row is wide,
+// and under the text, at full width, when it is not, so the text never gets
+// squeezed into a sliver.
+export component SettingRow inherits GridLayout {
     in property <string> label;
     in property <string> description;
     // An amber line under the description, for a state the user should notice.
     in property <string> warning;
 
+    // A control this narrow always fits beside the text. The window width,
+    // not the row's, decides the rest: the row's own width depends on where
+    // the control goes, so reading it here would be a loop.
+    private property <bool> narrow-control: inner.min-width <= 64px;
+    private property <bool> stacked: !root.narrow-control && WindowMetrics.width < 680px;
+
     horizontal-stretch: 1;
     padding-top: 12px;
     padding-bottom: 12px;
     min-height: 60px;
-    spacing: 16px;
+    spacing-horizontal: 16px;
+    spacing-vertical: root.stacked ? 8px : 0px;
 
     VerticalLayout {
+        row: 0;
+        col: 0;
         horizontal-stretch: 1;
         vertical-stretch: 0;
         alignment: center;
@@ -61,11 +72,17 @@ export component SettingRow inherits HorizontalLayout {
     }
 
     control := VerticalLayout {
-        width: 220px;
+        row: root.stacked ? 1 : 0;
+        col: root.stacked ? 0 : 1;
+        preferred-width: root.narrow-control ? inner.min-width : 220px;
+        min-width: root.narrow-control ? 0px : root.stacked ? 0px : 220px;
+        horizontal-stretch: 0;
         vertical-stretch: 0;
         alignment: center;
 
-        @children
+        inner := VerticalLayout {
+            @children
+        }
     }
 }
 
@@ -140,6 +157,8 @@ export component DraftSelect inherits VerticalLayout {
     changed value => { root.shown = root.value; }
     changed revision => { root.shown = root.value; }
 
+    // Wide enough that SettingRow never treats it as a switch.
+    min-width: 140px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
 
@@ -181,6 +200,8 @@ export component DraftChoice inherits VerticalLayout {
         return -1;
     }
 
+    // Wide enough that SettingRow never treats it as a switch.
+    min-width: 140px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
 
@@ -203,6 +224,8 @@ export component DraftTri inherits VerticalLayout {
     in property <bool> enabled: true;
     callback committed(int);
 
+    // Wide enough that SettingRow never treats it as a switch.
+    min-width: 140px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
 
@@ -234,6 +257,8 @@ export component DraftSegmented inherits HorizontalLayout {
     changed revision => { root.shown = root.value; }
 
     alignment: end;
+    // Wide enough that SettingRow never treats it as a switch.
+    min-width: 140px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
 
@@ -262,6 +287,8 @@ export component DraftText inherits VerticalLayout {
     changed value => { root.shown = root.value; }
     changed revision => { root.shown = root.value; }
 
+    // Wide enough that SettingRow never treats it as a switch.
+    min-width: 140px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
 
@@ -323,6 +350,8 @@ export component DraftNumber inherits VerticalLayout {
     changed value => { root.shown = root.to-text(root.value); }
     changed revision => { root.shown = root.to-text(root.value); }
 
+    // Wide enough that SettingRow never treats it as a switch.
+    min-width: 140px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
 
@@ -383,28 +412,69 @@ export component DraftList inherits VerticalLayout {
     }
 }
 
-// One entry of the section list on the left.
-export component SubNavItem inherits Rectangle {
+// section holds, and a chevron. Clicking it opens the section.
+export component SectionLink inherits Rectangle {
+    in property <image> icon;
     in property <string> text;
-    in property <bool> selected;
+    in property <string> description;
     callback clicked();
 
-    height: 32px;
+    min-height: 56px;
     border-radius: Design.radius-md;
-    background: root.selected ? Design.accent : (ta.has-hover ? Design.card-hover : transparent);
+    background: ta.has-hover ? Design.card-hover : transparent;
 
-    Text {
-        x: 12px;
-        width: parent.width - 24px;
-        height: parent.height;
-        text: root.text;
-        color: root.selected ? Design.foreground : Design.muted-foreground;
-        font-family: Design.font-family;
-        font-size: Design.font-sm;
-        font-weight: 500;
-        vertical-alignment: center;
-        wrap: no-wrap;
-        overflow: elide;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 12px;
+
+        VerticalLayout {
+            alignment: center;
+
+            Image {
+                source: root.icon;
+                width: 18px;
+                height: 18px;
+                colorize: Design.muted-foreground;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: root.text;
+                color: Design.foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-base;
+                font-weight: 500;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+
+            if (root.description != "") : Text {
+                text: root.description;
+                color: Design.muted-foreground;
+                font-family: Design.font-family;
+                font-size: Design.font-sm;
+                wrap: word-wrap;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            Image {
+                source: @image-url("../../assets/icons/chevron-right.svg");
+                width: 16px;
+                height: 16px;
+                colorize: Design.subtle-foreground;
+            }
+        }
     }
 
     ta := TouchArea {

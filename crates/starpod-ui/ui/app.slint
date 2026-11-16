@@ -150,10 +150,11 @@ component StatusBlock inherits Rectangle {
 export component AppWindow inherits Window {
     title: "Starpod";
     icon: @image-url("assets/app-icon.png");
-    min-width: 900px;
-    min-height: 600px;
-    preferred-width: 1100px;
-    preferred-height: 720px;
+    // A tall, narrow window, like a phone-style client.
+    min-width: 440px;
+    min-height: 640px;
+    preferred-width: 480px;
+    preferred-height: 840px;
     background: Design.background;
 
     // Popups read the window size from WindowMetrics (see Select).

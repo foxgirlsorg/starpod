@@ -110,7 +110,7 @@ The Home and Proxies screens are where you choose servers. The rules, the routin
 
 - **Routing mode.** Rule, Global or Direct. Global is missing when the profile does not allow it.
 - **System proxy** and **TUN**, the same switches the Settings screen has (see section 6.2). While connected, the row also shows the session upload and download.
-- **Groups.** Each group is a card that opens to its servers. Choose a server in a select group by clicking its tile; automatic groups choose their own server. Use the gauge button to test a group's latency, and **Test latency** in the header to test every server.
+- **Groups.** Each group is a card that opens to its servers. Groups start closed; the ones you open stay open the next time you start Starpod. Choose a server in a select group by clicking its tile; automatic groups choose their own server. Use the gauge button to test a group's latency, and **Test latency** in the header to test every server.
 - **Filter, sort and hide.** The filter searches server names and labels. Sort by default order, latency or name, and hide unavailable servers.
 
 The automatic default is only a starting point. Choosing a server on Home or on Proxies saves your choice for that group, and a later refresh or rebuild keeps it. Nothing is written for the default itself, so a subscription change that alters the group chooses again.
@@ -119,7 +119,7 @@ The automatic default is only a starting point. Choosing a server on Home or on 
 
 - **Select a node.** While the proxy is running, the selection is applied live to the engine. While it is stopped, the selection is only saved and applies on the next start.
 - **Selection survives refreshes.** The selected node is remembered by its internal id, not its name. If the provider renames a node, your selection stays on it.
-- **Latency test.** Tests each node by asking the engine to measure a request to `https://www.gstatic.com/generate_204` with a 5-second timeout. It needs the proxy to be running. Results are kept until the proxy stops. The probe uses the engine's `/proxies/{name}/delay` endpoint, which follows the mihomo convention; it has not been checked against a live engine in this repository.
+- **Latency test.** While connected, tests each node by asking the engine to measure a request to `https://www.gstatic.com/generate_204` with a 5-second timeout. While not connected, it pings each server directly instead: the time to open a TCP connection to its address and port. That shows the server is reachable, not that the proxy works, and servers on UDP-only protocols (Hysteria, TUIC, WireGuard) stay untested. Results are kept until the proxy stops. The probe uses the engine's `/proxies/{name}/delay` endpoint, which follows the mihomo convention; it has not been checked against a live engine in this repository.
 
 ## 4. Configuration precedence
 
@@ -191,6 +191,8 @@ Things to know:
 - **Geo rules.** `GEOIP`, `SRC-GEOIP`, `IP-ASN` and `SRC-IP-ASN` make the app show a warning. The engine downloads its geo database the first time it needs it, so the first match can be slow. `GEOSITE` needs no database check; if the database is absent, the rule simply never matches.
 
 ## 6. Settings
+
+Settings opens on a list of its sections (General, Network, TUN, DNS and the rest), each with an icon and a line on what it holds. Pick one to open it; the arrow at the top goes back to the list. The menu button in the top bar still opens the app's navigation from anywhere. In a narrow window, a setting's drop-down or text field sits under its name; switches stay on the right.
 
 | Setting | Default | Notes |
 |---|---|---|

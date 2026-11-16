@@ -7,7 +7,7 @@
 //! Everything here is plain data: serialisable, comparable, and free of
 //! behaviour that touches the outside world.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -606,6 +606,10 @@ pub struct UserPreferences {
     /// Files written before this field existed load as `false`.
     #[serde(default)]
     pub hide_unavailable: bool,
+    /// The Proxies groups the user has opened, by name. Every other group is
+    /// shown collapsed. Files written before this field existed load as empty.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub expanded_groups: BTreeSet<String>,
     /// Whether choosing a member of a group closes the connections that went
     /// through that group, so they re-open on the new member. On by default,
     /// as in Koala. Files written before this field existed load as `true`.
@@ -713,6 +717,7 @@ impl Default for UserPreferences {
             auto_connect_on_start: false,
             proxies_sort: 0,
             hide_unavailable: false,
+            expanded_groups: BTreeSet::new(),
             auto_close_connections_on_switch: true,
             close_to_tray: true,
             language: String::new(),

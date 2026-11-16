@@ -15,13 +15,15 @@
 # STARPOD_UI_LANG=ru (e.g. docker compose run --rm -e STARPOD_UI_LANG=ru shot home) shoots
 # the Russian UI into <page>-ru-<width>x<height>.png. Unset or en shoots English.
 # With --empty: /work/shots/<page>-empty-<width>x<height>.png.
-# Sizes: 1100x720 and 900x600. Each shot gets its own Xvfb and a fresh temporary
+# Sizes: 480x840 (the preferred portrait window) and 760x900, or the
+# space-separated list in STARPOD_SHOT_SIZES. STARPOD_UI_NAV=1 (the drawer
+# open) and STARPOD_UI_SETTINGS=0..10 (a Settings section) pass through. Each shot gets its own Xvfb and a fresh temporary
 # HOME (with XDG dirs under it), so the user's real data is never touched.
 # Exit status is 1 if any shot failed; the other shots are still taken.
 set -euo pipefail
 
 ALL_PAGES=(home profiles proxies rules logs settings connections)   # index = Bridge.active-page
-SIZES=("1100x720" "900x600")
+read -r -a SIZES <<< "${STARPOD_SHOT_SIZES:-480x840 760x900}"
 DISPLAY_NUM=99
 BIN=/target/debug/starpod
 OUT=/work/shots

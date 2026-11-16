@@ -1,6 +1,7 @@
 // The Settings page (ui-spec.md section 5.6).
 //
-// A left list picks the section; each section is a set of cards. The page edits
+// The page opens on a list of the sections. Picking one shows that section,
+// a set of cards, at full width, with a back button to the list. The page edits
 // two private copies: the draft of Bridge.settings, and the draft of
 // Bridge.engine-settings. One bar saves whichever copy changed. Discard rereads
 // both. Hotkeys have their own draft and Save, in their section. Privacy and
@@ -11,15 +12,34 @@
 
 import { Design } from "../design.slint";
 import { Bridge, EngineSettingsModel, HotkeyModel, SettingsModel } from "../bridge.slint";
-import { Button, ButtonVariant, Card, CardHeader, ConfirmDialog, EmptyState, PageHeader, Separator, SelectItem } from "../primitives.slint";
+import { Button, ButtonSize, ButtonVariant, Card, CardHeader, ConfirmDialog, EmptyState, IconButton, PageHeader, Separator, SelectItem } from "../primitives.slint";
 import { ScrollView } from "std-widgets.slint";
-import { DraftChoice, DraftList, DraftNumber, DraftSegmented, DraftSwitch, DraftTri, DraftText, DraftSelect, ListRow, SettingRow, SubNavItem } from "settings/controls.slint";
+import { DraftChoice, DraftList, DraftNumber, DraftSegmented, DraftSwitch, DraftTri, DraftText, DraftSelect, ListRow, SectionLink, SettingRow } from "settings/controls.slint";
 import { EmojiText } from "../emoji-text.slint";
 
 export component SettingsPage inherits Rectangle {
     // --- navigation -----------------------------------------------------------
 
-    private property <int> section: 0;
+    // -1 is the section list; 0.. is that section. Kept in Bridge so the
+    // section survives a page switch and the screenshot tool can open one.
+    private property <int> section: Bridge.settings-section;
+    function open-section(i: int) {
+        Bridge.settings-section = i;
+        scroll.content-y = 0;
+    }
+    private property <[image]> section-icons: [
+        @image-url("../assets/icons/settings.svg"),
+        @image-url("../assets/icons/wifi.svg"),
+        @image-url("../assets/icons/network.svg"),
+        @image-url("../assets/icons/globe.svg"),
+        @image-url("../assets/icons/scan-search.svg"),
+        @image-url("../assets/icons/map.svg"),
+        @image-url("../assets/icons/cpu.svg"),
+        @image-url("../assets/icons/server.svg"),
+        @image-url("../assets/icons/shield.svg"),
+        @image-url("../assets/icons/keyboard.svg"),
+        @image-url("../assets/icons/hard-drive.svg"),
+    ];
     private property <[string]> section-names: [
         @tr("General"), @tr("Network"), @tr("TUN"), @tr("DNS"), @tr("Sniffer"), @tr("Geo data"),
         @tr("Engine"), @tr("Proxies"), @tr("Privacy"), @tr("Hotkeys"), @tr("Storage"),
@@ -248,49 +268,22 @@ export component SettingsPage inherits Rectangle {
 
     // --- layout ---------------------------------------------------------------
 
-    // The section list on the left, and the section on the right. The save bar
-    // sits along the bottom while anything is unsaved.
-    nav := VerticalLayout {
+    // The section list, or one section. The save bar sits along the bottom
+    // while anything is unsaved.
+    scroll := ScrollView {
         x: 0px;
         y: 0px;
-        width: 184px;
-        height: parent.height - (root.dirty ? 57px : 0px);
-        padding-top: 28px;
-        padding-left: 16px;
-        padding-right: 12px;
-        spacing: 2px;
-        alignment: start;
-
-        for name[i] in root.section-names : SubNavItem {
-            text: name;
-            selected: root.section == i;
-            clicked => {
-                root.section = i;
-            }
-        }
-    }
-
-    Rectangle {
-        x: 184px;
-        y: 0px;
-        width: 1px;
-        height: parent.height - (root.dirty ? 57px : 0px);
-        background: Design.border;
-    }
-
-    scroll := ScrollView {
-        x: 185px;
-        y: 0px;
-        width: parent.width - 185px;
+        width: parent.width;
         height: parent.height - (root.dirty ? 57px : 0px);
         content-height: max(self.height, body.preferred-height);
 
         body := HorizontalLayout {
             vertical-stretch: 0;
-            padding-left: 32px;
-            padding-right: 32px;
-            padding-top: 28px;
-            padding-bottom: 32px;
+            alignment: center;
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 20px;
+            padding-bottom: 24px;
 
             VerticalLayout {
                 horizontal-stretch: 1;
@@ -299,9 +292,47 @@ export component SettingsPage inherits Rectangle {
                 max-width: 920px;
                 spacing: 0px;
 
-                PageHeader {
-                    title: root.section-names[root.section];
-                    description: root.section-texts[root.section];
+                if (root.section < 0) : PageHeader {
+                    title: @tr("Settings");
+                    description: "";
+                }
+
+                // A section: the back button, then its name and what it holds.
+                if (root.section >= 0) : HorizontalLayout {
+                    padding-bottom: 20px;
+                    spacing: 8px;
+
+                    VerticalLayout {
+                        alignment: start;
+
+                        IconButton {
+                            icon: @image-url("../assets/icons/arrow-left.svg");
+                            size: ButtonSize.md;
+                            variant: ButtonVariant.ghost;
+                            tooltip: @tr("Back to settings");
+                            clicked => {
+                                root.open-section(-1);
+                            }
+                        }
+                    }
+
+                    PageHeader {
+                        horizontal-stretch: 1;
+                        padding-bottom: 0px;
+                        title: root.section-names[root.section];
+                        description: root.section-texts[root.section];
+                    }
+                }
+
+                if (root.section < 0) : Card {
+                    for name[i] in root.section-names : SectionLink {
+                        icon: root.section-icons[i];
+                        text: name;
+                        description: root.section-texts[i];
+                        clicked => {
+                            root.open-section(i);
+                        }
+                    }
                 }
 
                 if (!Bridge.loaded) : Card {
@@ -1945,9 +1976,9 @@ export component SettingsPage inherits Rectangle {
             y: 1px;
             width: parent.width;
             height: parent.height - 1px;
-            padding-left: 32px;
-            padding-right: 32px;
-            spacing: 16px;
+            padding-left: 16px;
+            padding-right: 16px;
+            spacing: 12px;
 
             VerticalLayout {
                 horizontal-stretch: 1;

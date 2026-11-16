@@ -106,6 +106,13 @@ pub async fn fetch_latest_release() -> Result<Release, String> {
         .await
         .map_err(|error| format!("GitHub could not be reached: {error}"))?;
     let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        // GitHub answers 404 both when nothing is published and when the
+        // repository is private (to a request without a token).
+        return Err(format!(
+            "GitHub has no published Starpod release (the repository {RELEASE_REPO} has none, or is not public)"
+        ));
+    }
     if !status.is_success() {
         return Err(format!("GitHub answered {status}"));
     }
@@ -248,9 +255,14 @@ pub fn extract_binary(archive: &str, bytes: &[u8], staging: &Path) -> Result<Pat
     Ok(out)
 }
 
-/// Download one file from a release.
-async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
-    let response = client
+/// Download one file from a release. `progress` gets the percentage done
+/// whenever it changes, when the server says how big the file is.
+async fn fetch(
+    client: &reqwest::Client,
+    url: &str,
+    progress: &(dyn Fn(u8) + Send + Sync),
+) -> Result<Vec<u8>, String> {
+    let mut response = client
         .get(url)
         .header(USER_AGENT, format!("starpod/{CURRENT_VERSION}"))
         .send()
@@ -260,25 +272,43 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
     if !status.is_success() {
         return Err(format!("the download failed: GitHub answered {status}"));
     }
-    response
-        .bytes()
+    let total = response.content_length().filter(|total| *total > 0);
+    let mut bytes = Vec::with_capacity(total.unwrap_or(0).min(256 << 20) as usize);
+    let mut shown = None;
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map(|bytes| bytes.to_vec())
-        .map_err(|error| format!("the download failed: {error}"))
+        .map_err(|error| format!("the download failed: {error}"))?
+    {
+        bytes.extend_from_slice(&chunk);
+        if let Some(total) = total {
+            let percent = (bytes.len() as u64 * 100 / total).min(100) as u8;
+            if shown != Some(percent) {
+                shown = Some(percent);
+                progress(percent);
+            }
+        }
+    }
+    Ok(bytes)
 }
 
 /// Download this platform's build of `release` into `staging`, check it, and
-/// return the path of the new binary.
-pub async fn download_update(release: &Release, staging: &Path) -> Result<PathBuf, String> {
+/// return the path of the new binary. `progress` gets the archive's
+/// percentage done as it downloads.
+pub async fn download_update(
+    release: &Release,
+    staging: &Path,
+    progress: impl Fn(u8) + Send + Sync,
+) -> Result<PathBuf, String> {
     let archive = archive_name().ok_or("no Starpod build is published for this computer")?;
     let (archive_asset, checksum_asset) = pick_assets(release, archive)?;
     let client = reqwest::Client::builder()
         .timeout(DOWNLOAD_TIMEOUT)
         .build()
         .map_err(|error| format!("the request could not be made: {error}"))?;
-    let checksum = fetch(&client, &checksum_asset.url).await?;
+    let checksum = fetch(&client, &checksum_asset.url, &|_| {}).await?;
     let expected = parse_checksum(&String::from_utf8_lossy(&checksum))?;
-    let bytes = fetch(&client, &archive_asset.url).await?;
+    let bytes = fetch(&client, &archive_asset.url, &progress).await?;
     if sha256_hex(&bytes) != expected {
         return Err(
             "the download does not match the release's checksum; nothing was installed".to_string(),
@@ -510,10 +540,20 @@ mod tests {
     async fn a_release_whose_checksum_matches_is_downloaded_and_unpacked() {
         let (_server, release) = serve_release(b"the new starpod", None).await;
         let dir = tempfile::tempdir().unwrap();
-        let binary = download_update(&release, dir.path())
-            .await
-            .expect("installs");
+        let seen = std::sync::Mutex::new(Vec::new());
+        let binary = download_update(&release, dir.path(), |percent| {
+            seen.lock().unwrap().push(percent);
+        })
+        .await
+        .expect("installs");
         assert_eq!(std::fs::read(binary).unwrap(), b"the new starpod");
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(
+            seen.last(),
+            Some(&100),
+            "the progress ends at 100%: {seen:?}"
+        );
+        assert!(seen.windows(2).all(|pair| pair[0] < pair[1]), "{seen:?}");
     }
 
     #[tokio::test]
@@ -521,7 +561,9 @@ mod tests {
         let wrong = format!("{}  starpod\n", "0".repeat(64));
         let (_server, release) = serve_release(b"the new starpod", Some(wrong)).await;
         let dir = tempfile::tempdir().unwrap();
-        let error = download_update(&release, dir.path()).await.unwrap_err();
+        let error = download_update(&release, dir.path(), |_| {})
+            .await
+            .unwrap_err();
         assert!(error.contains("checksum"), "{error}");
         assert!(
             !dir.path().join(binary_name()).exists(),

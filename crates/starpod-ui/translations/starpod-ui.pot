@@ -1300,3 +1300,6 @@ msgstr ""
 
 msgid "Version {} is on GitHub. Installing it restarts Starpod."
 msgstr ""
+
+msgid "Back to settings"
+msgstr ""
