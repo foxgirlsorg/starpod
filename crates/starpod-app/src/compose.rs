@@ -95,7 +95,35 @@ pub(crate) struct Composed {
     pub default_selection: Option<(String, String)>,
 }
 
+/// The id of the subscription in use: the one the user chose, when it still
+/// exists, else the first one. Only one subscription is in use at a time; the
+/// others are kept, refreshed and listed, but take no part in the build.
+pub(crate) fn active_subscription_id<'a>(
+    state: &UserState,
+    meta: &'a SubscriptionMeta,
+) -> Option<&'a str> {
+    meta.subscriptions
+        .iter()
+        .find(|subscription| {
+            Some(subscription.id.as_str()) == state.selected_subscription.as_deref()
+        })
+        .or_else(|| meta.subscriptions.first())
+        .map(|subscription| subscription.id.as_str())
+}
+
+/// `meta` with only the subscription in use (see [`active_subscription_id`]).
+pub(crate) fn only_active(state: &UserState, meta: &SubscriptionMeta) -> SubscriptionMeta {
+    let mut active = meta.clone();
+    let id = active_subscription_id(state, meta).map(str::to_string);
+    active
+        .subscriptions
+        .retain(|subscription| Some(&subscription.id) == id.as_ref());
+    active
+}
+
 /// Compose the candidate for the given state.
+///
+/// Only the subscription in use takes part (see [`active_subscription_id`]).
 ///
 /// `engine_urls` maps the id of each engine-managed subscription to its URL.
 /// The caller reads them from the secret store, so this function stays free
@@ -109,6 +137,7 @@ pub(crate) fn compose(
     caches: &SubscriptionCacheSet,
     engine_urls: &BTreeMap<String, String>,
 ) -> Result<Composed, Vec<String>> {
+    let meta = &only_active(state, meta);
     let mut subscriptions = Vec::new();
     let mut engine_managed = Vec::new();
     for subscription in &meta.subscriptions {

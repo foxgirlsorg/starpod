@@ -159,7 +159,8 @@ docker compose run --rm --user root dev chown -R dev:dev /usr/local/cargo/regist
 
 ### 2.4 Assets
 
-- `tools/convert_icons.py` and `tools/convert_logo.py` turn Lucide SVG icons and the foxgirls mark into Slint `Path` components. Each takes an input and an output path. Slint has no runtime SVG renderer, so the conversion happens at authoring time. The assets are in `crates/starpod-ui/ui/assets/`.
+- `tools/convert_icons.py` turns Lucide SVG icons into Slint `Path` components. It takes an input and an output path. The assets are in `crates/starpod-ui/ui/assets/`.
+- `tools/render_icon.py` renders the Starpod mark (`tools/icon/alliance.svg`, painted `#de6161`) into every icon: the window icon, the tray icons, the `.ico` embedded in the Windows executable (`crates/starpod-app/build.rs`), and `ui/logo.slint`. Run it from the repository root after changing the SVG; it needs Pillow.
 - The design tokens come from `docs/research/foxgirls-design.md`.
 
 ## 3. Testing

@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // run's log file, nor re-register the scheme.
     let link = deeplink::find_in_args(std::env::args().skip(1));
     let mut startup_warnings = Vec::new();
-    let (_instance_guard, forwards) = match AppPaths::resolve() {
+    let (instance_guard, forwards) = match AppPaths::resolve() {
         Ok(paths) => match instance::start(paths.data_dir(), link.as_deref()) {
             Ok(Startup::Forwarded) => return Ok(()),
             Ok(Startup::Primary { forwards, guard }) => (Some(guard), Some(forwards)),
@@ -69,6 +69,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     init_logging();
     info!(version = env!("CARGO_PKG_VERSION"), "starpod starting");
+    // The binary an earlier update replaced is no longer running.
+    starpod_app::update::remove_previous_binary();
     for warning in &startup_warnings {
         warn!("{warning}");
     }
@@ -111,6 +113,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     runtime.shutdown_timeout(Duration::from_secs(5));
     info!("starpod exiting");
+    // Closed before an update's relaunch, so the new process becomes the
+    // running instance.
+    drop(instance_guard);
+    starpod_app::update::relaunch_if_scheduled();
     outcome
 }
 

@@ -291,6 +291,18 @@ export component ProfilesPage inherits Rectangle {
                                 wrap: false;
                             }
 
+                            if (s.active) : VerticalLayout {
+                                alignment: center;
+
+                                HorizontalLayout {
+                                    Badge {
+                                        horizontal-stretch: 0;
+                                        text: @tr("In use");
+                                        variant: BadgeVariant.success;
+                                    }
+                                }
+                            }
+
                             VerticalLayout {
                                 alignment: center;
 
@@ -300,6 +312,16 @@ export component ProfilesPage inherits Rectangle {
                                         text: root.status-text(s.status);
                                         variant: root.status-variant(s.status);
                                     }
+                                }
+                            }
+
+                            // Only one subscription is in use at a time.
+                            if (!s.active) : Button {
+                                text: @tr("Use");
+                                variant: ButtonVariant.outline;
+                                size: ButtonSize.sm;
+                                clicked => {
+                                    Bridge.activate-subscription(s.id);
                                 }
                             }
 

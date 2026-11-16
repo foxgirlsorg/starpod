@@ -503,16 +503,26 @@ export component SettingsPage inherits Rectangle {
 
                             SettingRow {
                                 label: @tr("Update available");
-                                description: @tr("Version {} is on GitHub. It is not installed for you.", Bridge.update-version);
+                                description: @tr("Version {} is on GitHub. Installing it restarts Starpod.", Bridge.update-version);
 
                                 HorizontalLayout {
                                     alignment: end;
+                                    spacing: 8px;
 
                                     Button {
-                                        text: @tr("Open release page");
-                                        variant: ButtonVariant.primary;
+                                        text: @tr("Release notes");
+                                        variant: ButtonVariant.outline;
                                         clicked => {
                                             Bridge.open-url(Bridge.update-url);
+                                        }
+                                    }
+
+                                    Button {
+                                        text: @tr("Install update");
+                                        variant: ButtonVariant.primary;
+                                        busy: Bridge.busy;
+                                        clicked => {
+                                            Bridge.install-update();
                                         }
                                     }
                                 }

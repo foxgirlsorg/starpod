@@ -53,6 +53,7 @@ use starpod_core::domain::{
     DnsSettings, LogLevel, RuleProvider, RuleProviderBehavior, SubscriptionSettings,
 };
 use starpod_core::rules::parse::parse_line;
+use starpod_core::rules::translate::translate;
 use starpod_core::{Node, ProxyGroup, ProxyMode, RuleSpec, RuleTarget, SubscriptionPayload};
 
 use crate::error::SubscriptionError;
@@ -119,7 +120,7 @@ pub const NAMESPACE_SEPARATOR: &str = " / ";
 /// | `vless` | 474 | `uuid` |
 /// | `http` | 480 | none |
 /// | `socks5` | 486 | none |
-/// | `direct` | 492 | none |
+/// | `direct` | 492 | none, and no server or port either (see [`validate_node`]) |
 /// | `anytls` | 498 | `password` |
 /// | `hysteria2` | 504 | `password` |
 /// | `vmess` | 510 | `uuid` |
@@ -143,6 +144,7 @@ pub const KNOWN_PROTOCOLS: &[&str] = &[
     "snell",
     "http",
     "socks5",
+    "direct",
 ];
 
 /// The SIP003 plugin names the engine implements in-process.
@@ -388,6 +390,9 @@ fn extract(document: &serde_json::Value, label: &str) -> Result<Extracted, Subsc
 
     let mut nodes = Vec::new();
     let mut dropped = Vec::new();
+    // The namespaced names of the proxies and groups that were dropped, so
+    // references to them can be pruned once every entry has been read.
+    let mut dropped_names = BTreeSet::new();
 
     match mapping.get("proxies") {
         None => {}
@@ -395,14 +400,11 @@ fn extract(document: &serde_json::Value, label: &str) -> Result<Extracted, Subsc
             for entry in entries {
                 match validate_node(entry, label) {
                     Ok(node) => nodes.push(node),
-                    Err(reason) => dropped.push(DroppedEntry {
-                        name: entry
-                            .as_object()
-                            .and_then(|object| object.get("name"))
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_string),
-                        reason,
-                    }),
+                    Err(reason) => {
+                        let name = entry_name(entry);
+                        remember_dropped(&mut dropped_names, label, name.as_deref());
+                        dropped.push(DroppedEntry { name, reason });
+                    }
                 }
             }
         }
@@ -413,21 +415,18 @@ fn extract(document: &serde_json::Value, label: &str) -> Result<Extracted, Subsc
         }
     }
 
-    let groups = match mapping.get("proxy-groups") {
+    let mut groups = match mapping.get("proxy-groups") {
         None => Vec::new(),
         Some(serde_json::Value::Array(entries)) => {
             let mut groups = Vec::new();
             for entry in entries {
                 match validate_group(entry, label) {
                     Ok(group) => groups.push(group),
-                    Err(reason) => dropped.push(DroppedEntry {
-                        name: entry
-                            .as_object()
-                            .and_then(|object| object.get("name"))
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_string),
-                        reason,
-                    }),
+                    Err(reason) => {
+                        let name = entry_name(entry);
+                        remember_dropped(&mut dropped_names, label, name.as_deref());
+                        dropped.push(DroppedEntry { name, reason });
+                    }
                 }
             }
             groups
@@ -438,6 +437,8 @@ fn extract(document: &serde_json::Value, label: &str) -> Result<Extracted, Subsc
             ));
         }
     };
+
+    expand_include_all(&mut groups, &nodes, label);
 
     // The names this subscription defines, already namespaced. A rule target,
     // a provider's download proxy or a RULE-SET that names one of them is
@@ -452,7 +453,7 @@ fn extract(document: &serde_json::Value, label: &str) -> Result<Extracted, Subsc
     let (rule_providers, dropped_providers) =
         extract_rule_providers(mapping, label, &own_names, &mut dropped)?;
 
-    let rules = match mapping.get("rules") {
+    let mut rules = match mapping.get("rules") {
         None => Vec::new(),
         Some(serde_json::Value::Array(entries)) => {
             let mut rules = Vec::new();
@@ -501,6 +502,15 @@ fn extract(document: &serde_json::Value, label: &str) -> Result<Extracted, Subsc
         }
     };
 
+    prune_dangling(
+        label,
+        &own_names,
+        &dropped_names,
+        &mut groups,
+        &mut rules,
+        &mut dropped,
+    );
+
     let settings = read_settings(mapping);
 
     // The subscription's DNS block is kept whole, so the user's choice to use it
@@ -508,7 +518,10 @@ fn extract(document: &serde_json::Value, label: &str) -> Result<Extracted, Subsc
     let dns = match mapping.get("dns") {
         None | Some(serde_json::Value::Null) => None,
         Some(value) => match serde_json::from_value::<DnsSettings>(value.clone()) {
-            Ok(dns) => Some(dns),
+            Ok(mut dns) => {
+                retarget_dns(&mut dns, label, &own_names, &dropped_names);
+                Some(dns)
+            }
             Err(error) => {
                 dropped.push(DroppedEntry {
                     name: None,
@@ -843,6 +856,362 @@ fn retarget_name(name: &str, label: &str, own_names: &BTreeSet<String>) -> Strin
     }
 }
 
+/// Bring a payload cached by an earlier build up to what [`parse_payload`]
+/// makes today, without the original body.
+///
+/// The cache keeps the parsed payload, not the response, so a fix to the
+/// parser would otherwise reach a subscription only at its next refresh, and
+/// until then the engine could refuse the configuration. Both steps are safe
+/// to repeat on a payload that has them already: an `include-all` group has
+/// its keys removed once expanded, and a nameserver already in the engine's
+/// syntax carries no `#<name>` tag. `label` is the subscription's label, the
+/// namespace its nodes were given.
+pub fn upgrade_cached_payload(payload: &mut SubscriptionPayload, label: &str) {
+    expand_include_all(&mut payload.groups, &payload.nodes, label);
+    let own_names: BTreeSet<String> = payload
+        .nodes
+        .iter()
+        .map(|node| node.name.clone())
+        .chain(payload.groups.iter().map(|group| group.name.clone()))
+        .collect();
+    if let Some(dns) = payload.dns.as_mut() {
+        retarget_dns(dns, label, &own_names, &BTreeSet::new());
+    }
+}
+
+/// Fill a group that asks for `include-all` with this subscription's nodes.
+///
+/// In mihomo, `include-all: true` adds every proxy and every provider's
+/// proxies to the group, narrowed by `filter`, `exclude-filter` and
+/// `exclude-type`. The engine reads `include-all` as providers only, and
+/// takes top-level proxies through `include-all-proxies`
+/// (meow `website/guide/proxy-groups.md`). The app does not pass providers
+/// on, and letting the engine include every top-level proxy would also pull
+/// in other subscriptions' nodes and the user's own. So the group is
+/// expanded here, from this subscription's nodes only, and the keys are
+/// removed so the engine does not apply them a second time.
+///
+/// `filter` and `exclude-filter` are regular expressions matched against the
+/// node name as the provider wrote it; several can be joined with a
+/// backtick, as in mihomo. A pattern that does not compile leaves the group
+/// as it was.
+fn expand_include_all(groups: &mut [ProxyGroup], nodes: &[Node], label: &str) {
+    const KEYS: [&str; 5] = [
+        "include-all",
+        "include-all-proxies",
+        "filter",
+        "exclude-filter",
+        "exclude-type",
+    ];
+    for group in groups.iter_mut() {
+        let flag =
+            |key: &str| group.raw.get(key).and_then(serde_json::Value::as_bool) == Some(true);
+        if !flag("include-all") && !flag("include-all-proxies") {
+            continue;
+        }
+        let patterns = |key: &str| -> Result<Vec<regex::Regex>, regex::Error> {
+            group
+                .raw
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(|text| {
+                    text.split('`')
+                        .filter(|part| !part.is_empty())
+                        .map(regex::Regex::new)
+                        .collect()
+                })
+                .unwrap_or_else(|| Ok(Vec::new()))
+        };
+        let (Ok(include), Ok(exclude)) = (patterns("filter"), patterns("exclude-filter")) else {
+            continue;
+        };
+        let excluded_types: Vec<String> = match group.raw.get("exclude-type") {
+            Some(serde_json::Value::String(text)) => text
+                .split('|')
+                .map(|kind| kind.trim().to_ascii_lowercase())
+                .collect(),
+            Some(serde_json::Value::Array(kinds)) => kinds
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(|kind| kind.trim().to_ascii_lowercase())
+                .collect(),
+            _ => Vec::new(),
+        };
+        let prefix = format!("{label}{NAMESPACE_SEPARATOR}");
+        for node in nodes {
+            let original = node.name.strip_prefix(&prefix).unwrap_or(&node.name);
+            let wanted = (include.is_empty() || include.iter().any(|re| re.is_match(original)))
+                && !exclude.iter().any(|re| re.is_match(original))
+                && !excluded_types.contains(&node.protocol.to_ascii_lowercase());
+            if wanted && !group.members.contains(&node.name) {
+                group.members.push(node.name.clone());
+            }
+        }
+        for key in KEYS {
+            group.raw.remove(key);
+        }
+        group.raw.insert(
+            "proxies".to_string(),
+            serde_json::Value::Array(
+                group
+                    .members
+                    .iter()
+                    .map(|member| serde_json::Value::String(member.clone()))
+                    .collect(),
+            ),
+        );
+    }
+}
+
+/// Rewrite the outbound each nameserver in a subscription's DNS block names.
+///
+/// Subscriptions are written for mihomo, where `<server>#<name>` sends the
+/// query through the proxy or group `<name>`. The engine reads `#` on a
+/// `tls://` or `https://` entry as the TLS server name instead, and takes the
+/// outbound in a `?proxy=<name>` parameter (`meow-dns-0.29.0/src/upstream.rs`,
+/// `NameServerEntry`). A mihomo entry such as `https://8.8.8.8/dns-query#DIRECT`
+/// would therefore make every lookup fail its TLS handshake. On top of that,
+/// the subscription's groups are namespaced, so `#<group>` no longer names
+/// anything.
+///
+/// For each entry whose `#` names `DIRECT` or one of this subscription's own
+/// nodes or groups:
+/// - `DIRECT` is dropped, since a query goes direct without a tag;
+/// - an own name becomes `?proxy=<namespaced name>` on `tls://` and
+///   `https://` entries, and `#<namespaced name>` on the plain forms;
+/// - `default-nameserver` may not name a proxy at all (the engine refuses
+///   it, because it resolves the proxies' own hosts), so the tag is dropped.
+///
+/// A `#` that names something else is left as written: it may be a real
+/// server name or an interface.
+fn retarget_dns(
+    dns: &mut DnsSettings,
+    label: &str,
+    own_names: &BTreeSet<String>,
+    dropped_names: &BTreeSet<String>,
+) {
+    let fix = |entries: &mut Vec<String>, allow_proxy: bool| {
+        for entry in entries.iter_mut() {
+            *entry = retarget_nameserver(entry, label, own_names, dropped_names, allow_proxy);
+        }
+    };
+    fix(&mut dns.nameserver, true);
+    fix(&mut dns.fallback, true);
+    fix(&mut dns.proxy_server_nameserver, true);
+    fix(&mut dns.default_nameserver, false);
+    for servers in dns.nameserver_policy.values_mut() {
+        fix(servers, true);
+    }
+    if let Some(serde_json::Value::Array(entries)) = dns.extra.get_mut("direct-nameserver") {
+        for entry in entries.iter_mut() {
+            if let Some(text) = entry.as_str() {
+                *entry = serde_json::Value::String(retarget_nameserver(
+                    text,
+                    label,
+                    own_names,
+                    dropped_names,
+                    true,
+                ));
+            }
+        }
+    }
+}
+
+/// One nameserver entry, rewritten as [`retarget_dns`] describes.
+fn retarget_nameserver(
+    entry: &str,
+    label: &str,
+    own_names: &BTreeSet<String>,
+    dropped_names: &BTreeSet<String>,
+    allow_proxy: bool,
+) -> String {
+    let retagged = retag_nameserver(entry, label, own_names, dropped_names, allow_proxy);
+    strip_plain_path(&retagged)
+}
+
+/// A plain nameserver (no `scheme://`) with a path, such as
+/// `94.140.14.14/dns-query`, is a provider's slip that mihomo forgives: it
+/// reads the entry as plain DNS to the host and ignores the path. The engine
+/// refuses the whole configuration over it ("invalid host"), so the path is
+/// dropped here. A `#tag` after it is kept; it may itself hold a `/`, as a
+/// namespaced group name does.
+fn strip_plain_path(entry: &str) -> String {
+    if entry.contains("://") {
+        return entry.to_string();
+    }
+    let (address, tag) = match entry.split_once('#') {
+        Some((address, tag)) => (address, Some(tag)),
+        None => (entry, None),
+    };
+    let Some((host, _path)) = address.split_once('/') else {
+        return entry.to_string();
+    };
+    match tag {
+        Some(tag) => format!("{host}#{tag}"),
+        None => host.to_string(),
+    }
+}
+
+/// [`retarget_nameserver`]'s handling of the `#` tag.
+fn retag_nameserver(
+    entry: &str,
+    label: &str,
+    own_names: &BTreeSet<String>,
+    dropped_names: &BTreeSet<String>,
+    allow_proxy: bool,
+) -> String {
+    let trimmed = entry.trim();
+    let Some((head, tag)) = trimmed.rsplit_once('#') else {
+        return entry.to_string();
+    };
+    let tag = tag.trim();
+    let encrypted = head.starts_with("tls://") || head.starts_with("https://");
+    if tag.eq_ignore_ascii_case("DIRECT") {
+        return head.to_string();
+    }
+    let namespaced = namespace(label, tag);
+    if dropped_names.contains(&namespaced) {
+        return head.to_string();
+    }
+    if !own_names.contains(&namespaced) {
+        return entry.to_string();
+    }
+    // The engine refuses a proxy name holding `#`, `?` or `&`, and a
+    // parameter section on an entry that already has one.
+    let unusable = namespaced.contains(['#', '?', '&']) || (encrypted && head.contains('?'));
+    if !allow_proxy || unusable {
+        return head.to_string();
+    }
+    if encrypted {
+        format!("{head}?proxy={namespaced}")
+    } else {
+        format!("{head}#{namespaced}")
+    }
+}
+
+/// The `name:` of a proxy or group entry as written, when it has one.
+fn entry_name(entry: &serde_json::Value) -> Option<String> {
+    entry
+        .as_object()
+        .and_then(|object| object.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+/// Record the namespaced name of a dropped proxy or group, so that a
+/// reference to it can be pruned. A blank name names nothing and is skipped.
+fn remember_dropped(dropped_names: &mut BTreeSet<String>, label: &str, name: Option<&str>) {
+    if let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) {
+        dropped_names.insert(namespace(label, name));
+    }
+}
+
+/// A group member as the group names it. A builtin outbound (`DIRECT`,
+/// `REJECT`, …) is left as written; anything else is namespaced like a node.
+fn namespace_member(label: &str, member: &str) -> String {
+    if RuleTarget::new(member).builtin_kind().is_some() {
+        member.to_string()
+    } else {
+        namespace(label, member)
+    }
+}
+
+/// The target of a rule, when it has one. A `SUB-RULE` has none.
+fn rule_target(rule: &RuleSpec) -> Option<&RuleTarget> {
+    match rule {
+        RuleSpec::Simple { target, .. }
+        | RuleSpec::Match { target }
+        | RuleSpec::Logic { target, .. }
+        | RuleSpec::RuleSet { target, .. } => Some(target),
+        RuleSpec::SubRule { .. } => None,
+    }
+}
+
+/// Remove references to proxies and groups this subscription dropped.
+///
+/// Without this, one dropped entry (say a `type: direct` or `type: dns`
+/// node the app does not accept) leaves a group or rule pointing at a name
+/// that no longer exists, and the core validator rejects the whole
+/// subscription for it.
+///
+/// Only names the subscription itself defined and then dropped are pruned.
+/// A name it never defined may be a user's own group, so it is left for the
+/// core validator, and builtin outbounds are never touched. Every removal is
+/// recorded in `dropped`. A group left with no members points at `DIRECT`.
+fn prune_dangling(
+    label: &str,
+    own_names: &BTreeSet<String>,
+    dropped_names: &BTreeSet<String>,
+    groups: &mut [ProxyGroup],
+    rules: &mut Vec<RuleSpec>,
+    dropped: &mut Vec<DroppedEntry>,
+) {
+    // A name the subscription dropped and did not also keep under the same name.
+    let is_dropped = |name: &str| dropped_names.contains(name) && !own_names.contains(name);
+
+    for group in groups.iter_mut() {
+        let mut kept = Vec::with_capacity(group.members.len());
+        for member in &group.members {
+            if RuleTarget::new(member).builtin_kind().is_none() && is_dropped(member) {
+                dropped.push(DroppedEntry {
+                    name: Some(member.clone()),
+                    reason: format!(
+                        "the group “{}” listed it, but it was dropped from the subscription, \
+                         so the group no longer refers to it",
+                        group.name
+                    ),
+                });
+            } else {
+                kept.push(member.clone());
+            }
+        }
+        if kept.len() == group.members.len() {
+            continue;
+        }
+        if kept.is_empty() {
+            kept.push("DIRECT".to_string());
+            dropped.push(DroppedEntry {
+                name: Some(group.name.clone()),
+                reason: "every member of the group was dropped from the subscription, \
+                         so the group now sends traffic DIRECT"
+                    .to_string(),
+            });
+        }
+        // Keep the raw map in step with the members it is emitted from.
+        if group.raw.contains_key("proxies") {
+            group.raw.insert(
+                "proxies".to_string(),
+                serde_json::Value::Array(
+                    kept.iter()
+                        .map(|member| serde_json::Value::String(member.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        group.members = kept;
+    }
+
+    rules.retain(|rule| {
+        let Some(target) = rule_target(rule) else {
+            return true;
+        };
+        if target.builtin_kind().is_some() {
+            return true;
+        }
+        if !is_dropped(&namespace(label, target.as_str())) {
+            return true;
+        }
+        dropped.push(DroppedEntry {
+            name: Some(translate(rule)),
+            reason: format!(
+                "it sends traffic to “{}”, which was dropped from the subscription",
+                target.as_str()
+            ),
+        });
+        false
+    });
+}
+
 /// Validate one node against what the engine will accept.
 fn validate_node(entry: &serde_json::Value, label: &str) -> Result<Node, String> {
     let Some(object) = entry.as_object() else {
@@ -874,27 +1243,36 @@ fn validate_node(entry: &serde_json::Value, label: &str) -> Result<Node, String>
         ));
     }
 
-    // The server. Every protocol the engine dispatches on requires a
-    // non-empty `server:` string.
-    let server = object
-        .get("server")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "the node has no server".to_string())?;
+    // The address. `direct` is the one protocol with no server and no port:
+    // the engine builds it from its name and optional fields alone
+    // (`meow-config-0.29.0/src/proxy_parser.rs:492`). Every other protocol
+    // requires both.
+    let (server, port) = if protocol == "direct" {
+        (None, None)
+    } else {
+        // The server. Every other protocol the engine dispatches on requires
+        // a non-empty `server:` string.
+        let server = object
+            .get("server")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "the node has no server".to_string())?;
 
-    // The port. The engine's `required_port`
-    // (`meow-config-0.29.0/src/proxy_parser.rs:20-33`) wants a `u64` that
-    // fits a `u16` and is not zero.
-    let raw_port = object
-        .get("port")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| "the node has no port".to_string())?;
-    let port =
-        u16::try_from(raw_port).map_err(|_| format!("the port {raw_port} is out of range"))?;
-    if port == 0 {
-        return Err("the port is zero".to_string());
-    }
+        // The port. The engine's `required_port`
+        // (`meow-config-0.29.0/src/proxy_parser.rs:20-33`) wants a `u64` that
+        // fits a `u16` and is not zero.
+        let raw_port = object
+            .get("port")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| "the node has no port".to_string())?;
+        let port =
+            u16::try_from(raw_port).map_err(|_| format!("the port {raw_port} is out of range"))?;
+        if port == 0 {
+            return Err("the port is zero".to_string());
+        }
+        (Some(server.to_string()), Some(port))
+    };
 
     // The protocol's credential.
     match protocol {
@@ -954,8 +1332,8 @@ fn validate_node(entry: &serde_json::Value, label: &str) -> Result<Node, String>
         id: node_id,
         name: namespace(label, name),
         protocol: protocol.to_string(),
-        server: Some(server.to_string()),
-        port: Some(port),
+        server,
+        port,
         tags: Vec::new(),
         raw,
     })
@@ -990,7 +1368,8 @@ fn validate_group(entry: &serde_json::Value, label: &str) -> Result<ProxyGroup, 
     // (`meow-config-0.29.0/src/raw.rs:613`).
     //
     // The members name nodes, so they are namespaced the same way the
-    // nodes are — otherwise a group would point at nothing.
+    // nodes are — otherwise a group would point at nothing. A builtin
+    // outbound such as `DIRECT` is not a node and is kept as written.
     let members: Vec<String> = object
         .get("proxies")
         .and_then(serde_json::Value::as_array)
@@ -998,7 +1377,7 @@ fn validate_group(entry: &serde_json::Value, label: &str) -> Result<ProxyGroup, 
             entries
                 .iter()
                 .filter_map(serde_json::Value::as_str)
-                .map(|member| namespace(label, member))
+                .map(|member| namespace_member(label, member))
                 .collect()
         })
         .unwrap_or_default();
@@ -1545,10 +1924,277 @@ rules:
             assert!(!protocol.is_empty());
         }
         assert!(
+            KNOWN_PROTOCOLS.contains(&"direct"),
+            "the engine dispatches on `direct` (proxy_parser.rs:492)"
+        );
+        assert!(
+            !KNOWN_PROTOCOLS.contains(&"dns"),
+            "the engine has no `dns` proxy type"
+        );
+        assert!(
             !KNOWN_PROTOCOLS.contains(&"trusttunnel"),
             "the engine's trusttunnel arm is feature-gated and the release build does not \
              enable it"
         );
+    }
+
+    #[test]
+    fn a_direct_node_with_only_a_name_is_kept() {
+        let body = "proxies:\n  - { name: Без VPN, type: direct }\n";
+        let parsed = parse_payload(body.as_bytes(), "sub-1", "Cumzone").expect("parses");
+        assert_eq!(parsed.payload.nodes.len(), 1);
+        assert_eq!(parsed.payload.dropped_entries, 0);
+        let node = &parsed.payload.nodes[0];
+        assert_eq!(node.name, "Cumzone / Без VPN");
+        assert_eq!(node.protocol, "direct");
+        assert_eq!(node.server, None, "a direct node has no server");
+        assert_eq!(node.port, None, "a direct node has no port");
+        assert_eq!(
+            node.raw.get("type").and_then(|v| v.as_str()),
+            Some("direct"),
+            "the raw map carries the engine's type verbatim"
+        );
+        assert!(
+            !node.raw.contains_key("server") && !node.raw.contains_key("port"),
+            "no server or port is invented for the engine"
+        );
+    }
+
+    #[test]
+    fn a_payload_cached_before_the_fixes_is_upgraded_and_stays_put_after() {
+        let body = "\
+proxies:
+  - { name: \"🇷🇺 Moscow\", type: http, server: m.example.com, port: 8080 }
+proxy-groups:
+  - { name: Web, type: select, proxies: [DIRECT] }
+";
+        let mut payload = parse_payload(body.as_bytes(), "sub-1", "Sub")
+            .expect("parses")
+            .payload;
+        // What an earlier build cached: the tags and keys as the provider wrote them.
+        payload.groups[0]
+            .raw
+            .insert("include-all".into(), serde_json::Value::Bool(true));
+        payload.dns = Some(DnsSettings {
+            default_nameserver: vec!["https://94.140.14.14/dns-query#DIRECT".into()],
+            nameserver: vec!["https://8.8.8.8/dns-query#Web".into()],
+            ..DnsSettings::default()
+        });
+
+        upgrade_cached_payload(&mut payload, "Sub");
+        let dns = payload.dns.clone().unwrap();
+        assert_eq!(
+            dns.default_nameserver,
+            vec!["https://94.140.14.14/dns-query"]
+        );
+        assert_eq!(
+            dns.nameserver,
+            vec!["https://8.8.8.8/dns-query?proxy=Sub / Web"]
+        );
+        assert_eq!(payload.groups[0].members, vec!["DIRECT", "Sub / 🇷🇺 Moscow"]);
+
+        let once = payload.clone();
+        upgrade_cached_payload(&mut payload, "Sub");
+        assert_eq!(payload, once, "a second upgrade changes nothing");
+    }
+
+    #[test]
+    fn include_all_is_expanded_from_this_subscriptions_nodes() {
+        let body = "\
+proxies:
+  - { name: \"🇷🇺 Moscow\", type: http, server: m.example.com, port: 8080 }
+  - { name: \"🇷🇺➡️ Chained\", type: http, server: c.example.com, port: 8080 }
+  - { name: \"🇩🇪 Berlin\", type: http, server: b.example.com, port: 8080 }
+proxy-groups:
+  - { name: RU, type: select, include-all: true, filter: \"🇷🇺\", exclude-filter: \"🇷🇺➡️\", proxies: [] }
+  - { name: All, type: select, include-all-proxies: true, proxies: [DIRECT] }
+";
+        let parsed = parse_payload(body.as_bytes(), "sub-1", "Sub").expect("parses");
+        let ru = &parsed.payload.groups[0];
+        assert_eq!(ru.members, vec!["Sub / 🇷🇺 Moscow".to_string()]);
+        assert_eq!(
+            ru.raw.get("proxies"),
+            Some(&serde_json::json!(["Sub / 🇷🇺 Moscow"]))
+        );
+        for key in ["include-all", "filter", "exclude-filter"] {
+            assert!(!ru.raw.contains_key(key), "{key} is applied, not passed on");
+        }
+        let all = &parsed.payload.groups[1];
+        assert_eq!(
+            all.members,
+            vec![
+                "DIRECT",
+                "Sub / 🇷🇺 Moscow",
+                "Sub / 🇷🇺➡️ Chained",
+                "Sub / 🇩🇪 Berlin"
+            ]
+        );
+    }
+
+    #[test]
+    fn mihomo_nameserver_proxy_tags_become_engine_syntax() {
+        let body = "\
+proxies:
+  - { name: Good, type: http, server: good.example.com, port: 8080 }
+proxy-groups:
+  - { name: \"🌍 Web\", type: select, proxies: [Good, DIRECT] }
+dns:
+  default-nameserver:
+    - https://94.140.14.14/dns-query#DIRECT
+    - 1.1.1.1#🌍 Web
+  nameserver:
+    - https://8.8.8.8/dns-query#🌍 Web
+    - tls://1.1.1.1#cloudflare-dns.com
+    - 9.9.9.9#Good
+  direct-nameserver:
+    - https://77.88.8.8/dns-query#DIRECT
+    - 94.140.14.14/dns-query#DIRECT
+    - 1.1.1.1/dns-query#🌍 Web
+  nameserver-policy:
+    rule-set:youtube:
+      - https://8.8.8.8/dns-query#🌍 Web
+      - rcode://refused
+";
+        let parsed = parse_payload(body.as_bytes(), "sub-1", "Sub").expect("parses");
+        let dns = parsed.payload.dns.expect("the dns block is kept");
+        assert_eq!(
+            dns.default_nameserver,
+            vec!["https://94.140.14.14/dns-query", "1.1.1.1"],
+            "default-nameserver may not name a proxy"
+        );
+        assert_eq!(
+            dns.nameserver,
+            vec![
+                "https://8.8.8.8/dns-query?proxy=Sub / 🌍 Web",
+                "tls://1.1.1.1#cloudflare-dns.com",
+                "9.9.9.9#Sub / Good",
+            ],
+            "own names are namespaced, a real SNI stays"
+        );
+        assert_eq!(
+            dns.extra.get("direct-nameserver"),
+            Some(&serde_json::json!([
+                "https://77.88.8.8/dns-query",
+                "94.140.14.14",
+                "1.1.1.1#Sub / 🌍 Web"
+            ])),
+            "a plain entry loses the path mihomo ignores"
+        );
+        assert_eq!(
+            dns.nameserver_policy["rule-set:youtube"],
+            vec![
+                "https://8.8.8.8/dns-query?proxy=Sub / 🌍 Web",
+                "rcode://refused"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dropped_dns_node_is_pruned_from_groups_and_rules() {
+        let body = "\
+proxies:
+  - { name: Good, type: http, server: good.example.com, port: 8080 }
+  - { name: DNS-OUT, type: dns }
+proxy-groups:
+  - { name: G, type: select, proxies: [DNS-OUT, Good, DIRECT] }
+rules:
+  - DST-PORT,53,DNS-OUT
+  - MATCH,G
+";
+        let parsed = parse_payload(body.as_bytes(), "sub-1", "Cumzone").expect("parses");
+        assert_eq!(parsed.payload.nodes.len(), 1, "the dns node is dropped");
+        assert_eq!(parsed.payload.nodes[0].name, "Cumzone / Good");
+
+        let group = &parsed.payload.groups[0];
+        assert_eq!(
+            group.members,
+            vec!["Cumzone / Good".to_string(), "DIRECT".to_string()],
+            "the dropped member goes, the surviving node and the builtin stay"
+        );
+        assert_eq!(
+            group.raw.get("proxies"),
+            Some(&serde_json::json!(["Cumzone / Good", "DIRECT"])),
+            "the raw map follows the members"
+        );
+
+        let lines: Vec<String> = parsed.payload.rules.iter().map(translate).collect();
+        assert_eq!(lines, vec!["MATCH,Cumzone / G".to_string()]);
+
+        let reasons: Vec<&str> = parsed.dropped.iter().map(|d| d.reason.as_str()).collect();
+        assert!(
+            parsed
+                .dropped
+                .iter()
+                .any(|d| d.name.as_deref() == Some("DNS-OUT")),
+            "the dropped node is reported: {reasons:?}"
+        );
+        assert!(
+            parsed
+                .dropped
+                .iter()
+                .any(|d| d.name.as_deref() == Some("Cumzone / DNS-OUT")),
+            "the pruned group member is reported: {reasons:?}"
+        );
+        assert!(
+            parsed
+                .dropped
+                .iter()
+                .any(|d| d.name.as_deref() == Some("DST-PORT,53,DNS-OUT")),
+            "the pruned rule is reported: {reasons:?}"
+        );
+        assert_eq!(parsed.payload.dropped_entries, parsed.dropped.len());
+    }
+
+    #[test]
+    fn a_group_whose_only_member_was_dropped_points_at_direct() {
+        let body = "\
+proxies:
+  - { name: Good, type: http, server: good.example.com, port: 8080 }
+  - { name: DNS-OUT, type: dns }
+proxy-groups:
+  - { name: Solo, type: select, proxies: [DNS-OUT] }
+  - { name: G, type: select, proxies: [Good] }
+";
+        let parsed = parse_payload(body.as_bytes(), "sub-1", "Cumzone").expect("parses");
+        let solo = parsed
+            .payload
+            .groups
+            .iter()
+            .find(|group| group.name == "Cumzone / Solo")
+            .expect("the group survives");
+        assert_eq!(solo.members, vec!["DIRECT".to_string()]);
+        assert!(
+            parsed
+                .dropped
+                .iter()
+                .any(|d| d.reason.contains("DIRECT") && d.name.as_deref() == Some("Cumzone / Solo")),
+            "the emptied group is reported: {:?}",
+            parsed.dropped
+        );
+    }
+
+    #[test]
+    fn a_reference_to_a_name_never_defined_is_left_for_the_core_validator() {
+        let body = "\
+proxies:
+  - { name: Good, type: http, server: good.example.com, port: 8080 }
+proxy-groups:
+  - { name: G, type: select, proxies: [Good, Ghost] }
+rules:
+  - MATCH,Ghost
+";
+        let parsed = parse_payload(body.as_bytes(), "sub-1", "Cumzone").expect("parses");
+        assert_eq!(
+            parsed.payload.groups[0].members,
+            vec!["Cumzone / Good".to_string(), "Cumzone / Ghost".to_string()],
+            "an undefined member is not pruned"
+        );
+        assert_eq!(
+            parsed.payload.rules.len(),
+            1,
+            "an undefined target is not pruned"
+        );
+        assert_eq!(parsed.payload.dropped_entries, 0);
     }
 }
 

@@ -157,13 +157,14 @@ pub fn quota_fraction(quota: &SubscriptionQuota) -> f32 {
 }
 
 /// `12.3 GB of 100 GB`, or `12.3 GB used` when the provider gave no total.
+/// A total of `0` is the providers' way of saying there is no limit.
 pub fn quota_text(quota: &SubscriptionQuota) -> String {
     match quota.total {
-        Some(total) => crate::i18n::fmt(
+        Some(total) if total > 0 => crate::i18n::fmt(
             "{} of {}",
             &[&format_bytes(quota.used), &format_bytes(total)],
         ),
-        None => crate::i18n::fmt("{} used", &[&format_bytes(quota.used)]),
+        _ => crate::i18n::fmt("{} used", &[&format_bytes(quota.used)]),
     }
 }
 
@@ -195,12 +196,19 @@ pub fn subscription_item(view: &SubscriptionView) -> SubscriptionItem {
             true,
             quota_fraction(quota),
             quota_text(quota),
-            quota.expires.as_deref().map(short_date).unwrap_or_default(),
+            // `expire=0` is a plan with no end date, not one that ended in 1970.
+            quota
+                .expires
+                .as_deref()
+                .filter(|text| starpod_core::timestamp::parse(text).is_some_and(|unix| unix > 0))
+                .map(short_date)
+                .unwrap_or_default(),
         ),
         None => (false, 0.0, String::new(), String::new()),
     };
     let error = view.error.clone().unwrap_or_default();
     SubscriptionItem {
+        active: view.active,
         id: view.id.as_str().into(),
         label: view.label.as_str().into(),
         title: view.title.as_str().into(),
@@ -1729,6 +1737,7 @@ mod tests {
 
     fn subscription(quota: Option<SubscriptionQuota>) -> SubscriptionView {
         SubscriptionView {
+            active: true,
             id: "sub-1".to_string(),
             label: "Main".to_string(),
             mode: SubscriptionMode::AppManaged,
@@ -1803,6 +1812,22 @@ mod tests {
         };
         assert_eq!(quota_text(&unknown), "5 GB used");
         assert_eq!(quota_fraction(&unknown), 0.0);
+
+        let unlimited = SubscriptionQuota {
+            used: 5_000_000_000,
+            total: Some(0),
+            expires: Some("1970-01-01T00:00:00Z".to_string()),
+        };
+        assert_eq!(
+            quota_text(&unlimited),
+            "5 GB used",
+            "a total of 0 is no limit"
+        );
+        let item = subscription_item(&SubscriptionView {
+            quota: Some(unlimited),
+            ..subscription(None)
+        });
+        assert_eq!(item.expires, "", "expire=0 is no end date");
     }
 
     #[test]

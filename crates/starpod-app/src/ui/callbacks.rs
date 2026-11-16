@@ -226,6 +226,17 @@ fn wire_servers(bridge: &Bridge<'_>, ctx: &Ctx) {
     });
 
     let c = ctx.clone();
+    bridge.on_activate_subscription(move |id| {
+        let id = id.to_string();
+        act(
+            &c,
+            "Switching the subscription…",
+            Sink::Banner,
+            move |s| async move { s.lock().await.set_active_subscription(&id).await },
+        );
+    });
+
+    let c = ctx.clone();
     bridge.on_refresh_all(move || {
         act(
             &c,
@@ -574,6 +585,8 @@ fn wire_tray_actions(bridge: &Bridge<'_>, ctx: &Ctx) {
 
     let c = ctx.clone();
     bridge.on_check_for_updates(move || spawn_update_check(&c, true));
+    let c = ctx.clone();
+    bridge.on_install_update(move || super::runtime::spawn_install_update(&c));
 }
 
 fn wire_shell(bridge: &Bridge<'_>, ctx: &Ctx, window: slint::Weak<AppWindow>) {

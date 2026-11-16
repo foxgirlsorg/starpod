@@ -5089,6 +5089,7 @@ dependencies = [
  "starpod-subscription",
  "starpod-ui",
  "sys-locale",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "time",
@@ -5100,6 +5101,9 @@ dependencies = [
  "uuid",
  "windows-sys 0.61.2",
  "winreg",
+ "winresource",
+ "wiremock",
+ "zip",
 ]
 
 [[package]]
@@ -5173,6 +5177,7 @@ version = "0.0.2"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
+ "regex",
  "reqwest",
  "serde-saphyr",
  "serde_json",
@@ -6727,6 +6732,16 @@ checksum = "cb5a765337c50e9ec252c2069be9bf91c7df47afb103b642ba3a53bf8101be97"
 dependencies = [
  "cfg-if",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "winresource"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2bc6d36480b829272a5bdabf08e6dca8004761c1da7e35efef800540c66221b"
+dependencies = [
+ "toml",
+ "version_check",
 ]
 
 [[package]]

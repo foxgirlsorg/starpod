@@ -1279,3 +1279,24 @@ msgstr "Групп прокси нет"
 
 msgid "Quit"
 msgstr "Выход"
+
+msgid "In use"
+msgstr "Используется"
+
+msgid "Use"
+msgstr "Использовать"
+
+msgid "Menu"
+msgstr "Меню"
+
+msgid "Close menu"
+msgstr "Закрыть меню"
+
+msgid "Release notes"
+msgstr "Что нового"
+
+msgid "Install update"
+msgstr "Установить обновление"
+
+msgid "Version {} is on GitHub. Installing it restarts Starpod."
+msgstr "Версия {} доступна на GitHub. Установка перезапустит Starpod."

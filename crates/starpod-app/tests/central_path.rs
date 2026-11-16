@@ -2053,3 +2053,102 @@ async fn a_user_choice_in_the_primary_group_replaces_the_default_on_every_build(
         Some("Airport / Node B")
     );
 }
+
+// ----- one subscription in use at a time ----------------------------------------
+
+#[tokio::test]
+async fn only_the_subscription_in_use_is_built_and_shows_its_news() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let response = |news: &str| {
+        Ok(FetchResponse {
+            body: FIXTURE.as_bytes().to_vec(),
+            headers: vec![("announce".to_string(), news.to_string())],
+        })
+    };
+    let provider = Scripted::new(vec![response("news from A"), response("news from B")]);
+    let mut service = build_service(&dir, &engine, Arc::new(provider));
+    service.load().await.unwrap();
+
+    let a = service
+        .add_subscription(
+            "A".into(),
+            SUB_URL.into(),
+            None,
+            SubscriptionMode::AppManaged,
+        )
+        .await
+        .unwrap();
+    service.refresh_subscription(&a).await.unwrap();
+    service.connect().await.unwrap();
+    let b = service
+        .add_subscription(
+            "B".into(),
+            "https://other.example.com/sub".into(),
+            None,
+            SubscriptionMode::AppManaged,
+        )
+        .await
+        .unwrap();
+    // Until B has servers, A stays in use and the proxy keeps running on it.
+    let snap = service.snapshot();
+    assert_eq!(
+        snap.engine.phase,
+        EnginePhase::Running,
+        "adding B must not stop the proxy"
+    );
+    assert!(snap.subscriptions.iter().any(|s| s.id == a && s.active));
+    service.refresh_subscription(&b).await.unwrap();
+
+    // The subscription added last is the one in use once it has servers.
+    let snap = service.snapshot();
+    let active: Vec<&str> = snap
+        .subscriptions
+        .iter()
+        .filter(|s| s.active)
+        .map(|s| s.id.as_str())
+        .collect();
+    assert_eq!(active, vec![b.as_str()]);
+    let news: Vec<&str> = snap.announcements.iter().map(|a| a.text.as_str()).collect();
+    assert_eq!(news, vec!["news from B"], "only the news of the one in use");
+    assert_eq!(
+        snap.profile_card
+            .as_ref()
+            .map(|card| card.subscription_id.as_str()),
+        Some(b.as_str())
+    );
+
+    service.connect().await.unwrap();
+    let names = node_names(&last_config(&engine.calls()));
+    assert!(
+        names.iter().all(|name| name.starts_with("B / ")),
+        "{names:?}"
+    );
+
+    // Switching reloads the running proxy onto the other one.
+    service.set_active_subscription(&a).await.unwrap();
+    let names = node_names(&last_config(&engine.calls()));
+    assert!(!names.is_empty());
+    assert!(
+        names.iter().all(|name| name.starts_with("A / ")),
+        "{names:?}"
+    );
+    assert!(matches!(engine.calls().last(), Some(Call::Reload(_))));
+    let snap = service.snapshot();
+    let news: Vec<&str> = snap.announcements.iter().map(|a| a.text.as_str()).collect();
+    assert_eq!(news, vec!["news from A"]);
+
+    // The choice is saved.
+    service.load().await.unwrap();
+    assert!(
+        service
+            .snapshot()
+            .subscriptions
+            .iter()
+            .any(|s| s.id == a && s.active)
+    );
+
+    // Removing the one in use falls back to the other.
+    service.remove_subscription(&a).await.unwrap();
+    assert!(service.snapshot().subscriptions.iter().all(|s| s.active));
+}

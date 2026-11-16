@@ -85,6 +85,7 @@ pub fn apply(bridge: &Bridge<'_>) {
 
     // One profile, with its quota and expiry.
     let profile = SubscriptionView {
+        active: true,
         id: "sub-foxgirls".into(),
         label: "Foxgirls VPN".into(),
         mode: SubscriptionMode::AppManaged,

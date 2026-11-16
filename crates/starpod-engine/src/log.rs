@@ -80,7 +80,7 @@ impl LogBuffer {
         lines.push_back(LogLine {
             timestamp_ms: now_millis(),
             stream,
-            text: text.into(),
+            text: strip_ansi(&text.into()),
         });
     }
 
@@ -259,8 +259,47 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
+/// `text` without terminal colour codes.
+///
+/// The engine colours its log when it believes it writes to a terminal, and
+/// on Windows its hidden console counts as one. The Logs page would show the
+/// codes as text (`[2m…[0m`), so the CSI sequences (`ESC [ … final`) go.
+pub fn strip_ansi(text: &str) -> String {
+    if !text.contains('\u{1b}') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            // Parameters and intermediates, then one final byte in `@`..=`~`.
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn colour_codes_are_removed_from_engine_lines() {
+        let line = "\u{1b}[2m2026-11-16T20:54:11Z\u{1b}[0m \u{1b}[33m WARN\u{1b}[0m meow: hi";
+        assert_eq!(
+            super::strip_ansi(line),
+            "2026-11-16T20:54:11Z  WARN meow: hi"
+        );
+        assert_eq!(super::strip_ansi("plain"), "plain");
+    }
+
     use super::*;
 
     #[test]

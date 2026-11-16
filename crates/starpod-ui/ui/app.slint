@@ -4,15 +4,17 @@
 // tray, the Bridge global and the structs the Bridge carries. Rust code is
 // generated only for what this file exports (ARCHITECTURE §6.3).
 //
-// The shell follows docs/design/ui-spec.md section 4: a 220px sidebar with
-// five pages and Settings at the foot, a status block, and a content area
-// with an optional banner above the active page.
+// The shell: a top bar with the menu button and the mark, and the active page
+// below it at full width, with an optional banner above the page. The
+// navigation (the pages, Settings, the status block) is a drawer that is
+// closed by default; the menu button slides it in over the page, and choosing
+// a page or clicking outside it closes it again.
 
 import { Design } from "design.slint";
 import { Palette } from "std-widgets.slint";
 import { Bridge, TextRun } from "bridge.slint";
-import { Alert, AlertVariant, ButtonVariant, ConfirmDialog, WindowMetrics, EmojiText } from "primitives.slint";
-import { FoxMarkFill, FoxMarkOutline } from "logo.slint";
+import { Alert, AlertVariant, ButtonSize, ButtonVariant, ConfirmDialog, IconButton, WindowMetrics, EmojiText } from "primitives.slint";
+import { StarpodMark } from "logo.slint";
 import { HomePage } from "screens/home.slint";
 import { ProfilesPage } from "screens/profiles.slint";
 import { ProxiesPage } from "screens/proxies.slint";
@@ -147,6 +149,7 @@ component StatusBlock inherits Rectangle {
 
 export component AppWindow inherits Window {
     title: "Starpod";
+    icon: @image-url("assets/app-icon.png");
     min-width: 900px;
     min-height: 600px;
     preferred-width: 1100px;
@@ -168,187 +171,96 @@ export component AppWindow inherits Window {
         WindowMetrics.height = root.height;
     }
 
-    HorizontalLayout {
-        // The sidebar: 220px, padding 12.
+    // Whether the navigation drawer is open. It starts closed.
+    in-out property <bool> nav-open: false;
+
+    VerticalLayout {
+        // The top bar: the menu button, the mark and the name, and the
+        // update notice when there is one.
         Rectangle {
-            width: 220px;
+            height: 52px;
             background: Design.sidebar;
 
-            VerticalLayout {
-                padding: 12px;
-                spacing: 0px;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 16px;
+                spacing: 10px;
 
-                // The brand row: the fox mark in primary, then the name.
-                Rectangle {
-                    height: 52px;
+                VerticalLayout {
+                    alignment: center;
 
-                    FoxMarkFill {
-                        x: 8px;
-                        y: (parent.height - 22px) / 2;
-                        width: 23px;
-                        height: 22px;
-                        viewbox-x: -10;
-                        viewbox-y: 0;
-                        viewbox-width: 230;
-                        viewbox-height: 220;
+                    IconButton {
+                        icon: @image-url("assets/icons/menu.svg");
+                        size: ButtonSize.md;
+                        variant: ButtonVariant.ghost;
+                        tooltip: @tr("Menu");
+                        clicked => {
+                            root.nav-open = true;
+                        }
                     }
+                }
 
-                    FoxMarkOutline {
-                        x: 8px;
-                        y: (parent.height - 22px) / 2;
-                        width: 23px;
+                VerticalLayout {
+                    alignment: center;
+
+                    StarpodMark {
+                        width: 22px;
                         height: 22px;
-                        viewbox-x: -10;
-                        viewbox-y: 0;
-                        viewbox-width: 230;
-                        viewbox-height: 220;
+                    }
+                }
+
+                Text {
+                    horizontal-stretch: 0;
+                    text: "Starpod";
+                    color: Design.foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-lg;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                // The engine state, so it is visible with the drawer closed.
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    spacing: 8px;
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: Bridge.engine-phase == "running" ? Design.success
+                                : Bridge.engine-phase == "failed" ? Design.destructive
+                                : Design.subtle-foreground;
+                        }
                     }
 
                     Text {
-                        x: 39px;
-                        y: 0px;
-                        width: parent.width - 39px;
-                        height: parent.height;
-                        text: "Starpod";
-                        color: Design.foreground;
+                        text: Bridge.engine-phase == "running" ? @tr("Connected")
+                            : Bridge.engine-phase == "failed" ? @tr("Failed")
+                            : Bridge.engine-phase == "starting" ? @tr("Connecting…")
+                            : Bridge.engine-phase == "stopping" ? @tr("Disconnecting…")
+                            : @tr("Not connected");
+                        color: Design.muted-foreground;
                         font-family: Design.font-family;
-                        font-size: Design.font-lg;
-                        font-weight: 600;
+                        font-size: Design.font-sm;
                         vertical-alignment: center;
                         wrap: no-wrap;
-                    }
-                }
-
-                VerticalLayout {
-                    padding-top: 12px;
-                    spacing: 4px;
-
-                    NavItem {
-                        label: @tr("Home");
-                        icon: @image-url("assets/icons/house.svg");
-                        active: Bridge.active-page == 0;
-                        activated => {
-                            Bridge.active-page = 0;
-                        }
-                    }
-
-                    NavItem {
-                        label: @tr("Profiles");
-                        icon: @image-url("assets/icons/layers.svg");
-                        active: Bridge.active-page == 1;
-                        activated => {
-                            Bridge.active-page = 1;
-                        }
-                    }
-
-                    NavItem {
-                        label: @tr("Proxies");
-                        icon: @image-url("assets/icons/server.svg");
-                        active: Bridge.active-page == 2;
-                        activated => {
-                            Bridge.active-page = 2;
-                        }
-                    }
-
-                    NavItem {
-                        label: @tr("Rules");
-                        icon: @image-url("assets/icons/route.svg");
-                        active: Bridge.active-page == 3;
-                        activated => {
-                            Bridge.active-page = 3;
-                        }
-                    }
-
-                    NavItem {
-                        label: @tr("Logs");
-                        icon: @image-url("assets/icons/scroll-text.svg");
-                        active: Bridge.active-page == 4;
-                        activated => {
-                            Bridge.active-page = 4;
-                        }
-                    }
-
-                    NavItem {
-                        label: @tr("Connections");
-                        icon: @image-url("assets/icons/activity.svg");
-                        active: Bridge.active-page == 6;
-                        activated => {
-                            Bridge.active-page = 6;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    vertical-stretch: 1;
-                }
-
-                VerticalLayout {
-                    spacing: 4px;
-                    padding-bottom: 8px;
-
-                    NavItem {
-                        label: @tr("Settings");
-                        icon: @image-url("assets/icons/settings.svg");
-                        active: Bridge.active-page == 5;
-                        activated => {
-                            Bridge.active-page = 5;
-                        }
-                    }
-
-                    if (Bridge.update-available) : Rectangle {
-                        height: 28px;
-                        border-radius: Design.radius-md;
-                        background: update-ta.has-hover ? Design.card-hover : transparent;
-
-                        HorizontalLayout {
-                            x: 10px;
-                            width: parent.width - 20px;
-                            height: parent.height;
-                            spacing: 8px;
-
-                            Image {
-                                width: 14px;
-                                height: 14px;
-                                source: @image-url("assets/icons/download.svg");
-                                colorize: Design.primary;
-                            }
-
-                            EmojiText {
-                                horizontal-stretch: 1;
-                                min-width: 0px;
-                                // update-version has no leading "v" (update.rs strips it).
-                                fallback: @tr("Update available: v{}", Bridge.update-version);
-                                color: Design.primary;
-                                font-size: Design.font-xs;
-                                font-weight: 500;
-                                wrap: false;
-                            }
-                        }
-
-                        update-ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                Bridge.open-url(Bridge.update-url);
-                            }
-                        }
-                    }
-
-                    StatusBlock {
-                        phase: Bridge.engine-phase;
-                        uptime: Bridge.uptime;
-                        mode: Bridge.mode;
-                        busy-message: Bridge.busy ? Bridge.busy-message : "";
-                        busy-message-runs: Bridge.busy-message-runs;
-                        error: Bridge.engine-phase == "failed" ? Bridge.engine-error : "";
-                        error-runs: Bridge.engine-error-runs;
                     }
                 }
             }
         }
 
-        // The hairline between the sidebar and the content.
+        // The hairline under the top bar.
         Rectangle {
-            width: 1px;
+            height: 1px;
             background: Design.border;
         }
 
@@ -404,6 +316,223 @@ export component AppWindow inherits Window {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
             }
+        }
+    }
+
+    // The backdrop behind the open drawer. A click on it closes the drawer.
+    if (root.nav-open) : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #00000099;
+
+        TouchArea {
+            clicked => {
+                root.nav-open = false;
+            }
+        }
+    }
+
+    // The navigation drawer: 240px, sliding in from the left over the page.
+    drawer := Rectangle {
+        x: root.nav-open ? 0px : -self.width - 2px;
+        y: 0px;
+        width: 240px;
+        height: root.height;
+        background: Design.sidebar;
+        animate x {
+            duration: 180ms;
+            easing: ease-out;
+        }
+
+        // Swallows clicks, so they do not reach the backdrop or the page.
+        TouchArea { }
+
+        // The hairline on the drawer's edge.
+        Rectangle {
+            x: parent.width - 1px;
+            width: 1px;
+            background: Design.border;
+        }
+
+        VerticalLayout {
+            padding: 12px;
+            padding-top: 8px;
+            spacing: 0px;
+
+            // The brand row, with the button that closes the drawer at the
+            // same place as the one that opened it.
+            HorizontalLayout {
+                height: 44px;
+                spacing: 10px;
+                padding-left: -2px;
+
+                VerticalLayout {
+                    alignment: center;
+
+                    IconButton {
+                        icon: @image-url("assets/icons/x.svg");
+                        size: ButtonSize.md;
+                        variant: ButtonVariant.ghost;
+                        tooltip: @tr("Close menu");
+                        clicked => {
+                            root.nav-open = false;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    StarpodMark {
+                        width: 22px;
+                        height: 22px;
+                    }
+                }
+
+                Text {
+                    text: "Starpod";
+                    color: Design.foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-lg;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                }
+            }
+
+                VerticalLayout {
+                    padding-top: 12px;
+                    spacing: 4px;
+
+                    NavItem {
+                        label: @tr("Home");
+                        icon: @image-url("assets/icons/house.svg");
+                        active: Bridge.active-page == 0;
+                        activated => {
+                            Bridge.active-page = 0;
+                            root.nav-open = false;
+                        }
+                    }
+
+                    NavItem {
+                        label: @tr("Profiles");
+                        icon: @image-url("assets/icons/layers.svg");
+                        active: Bridge.active-page == 1;
+                        activated => {
+                            Bridge.active-page = 1;
+                            root.nav-open = false;
+                        }
+                    }
+
+                    NavItem {
+                        label: @tr("Proxies");
+                        icon: @image-url("assets/icons/server.svg");
+                        active: Bridge.active-page == 2;
+                        activated => {
+                            Bridge.active-page = 2;
+                            root.nav-open = false;
+                        }
+                    }
+
+                    NavItem {
+                        label: @tr("Rules");
+                        icon: @image-url("assets/icons/route.svg");
+                        active: Bridge.active-page == 3;
+                        activated => {
+                            Bridge.active-page = 3;
+                            root.nav-open = false;
+                        }
+                    }
+
+                    NavItem {
+                        label: @tr("Logs");
+                        icon: @image-url("assets/icons/scroll-text.svg");
+                        active: Bridge.active-page == 4;
+                        activated => {
+                            Bridge.active-page = 4;
+                            root.nav-open = false;
+                        }
+                    }
+
+                    NavItem {
+                        label: @tr("Connections");
+                        icon: @image-url("assets/icons/activity.svg");
+                        active: Bridge.active-page == 6;
+                        activated => {
+                            Bridge.active-page = 6;
+                            root.nav-open = false;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    padding-bottom: 8px;
+
+                    NavItem {
+                        label: @tr("Settings");
+                        icon: @image-url("assets/icons/settings.svg");
+                        active: Bridge.active-page == 5;
+                        activated => {
+                            Bridge.active-page = 5;
+                            root.nav-open = false;
+                        }
+                    }
+
+                    if (Bridge.update-available) : Rectangle {
+                        height: 28px;
+                        border-radius: Design.radius-md;
+                        background: update-ta.has-hover ? Design.card-hover : transparent;
+
+                        HorizontalLayout {
+                            x: 10px;
+                            width: parent.width - 20px;
+                            height: parent.height;
+                            spacing: 8px;
+
+                            Image {
+                                width: 14px;
+                                height: 14px;
+                                source: @image-url("assets/icons/download.svg");
+                                colorize: Design.primary;
+                            }
+
+                            EmojiText {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                // update-version has no leading "v" (update.rs strips it).
+                                fallback: @tr("Update available: v{}", Bridge.update-version);
+                                color: Design.primary;
+                                font-size: Design.font-xs;
+                                font-weight: 500;
+                                wrap: false;
+                            }
+                        }
+
+                        update-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                Bridge.install-update();
+                            }
+                        }
+                    }
+
+                    StatusBlock {
+                        phase: Bridge.engine-phase;
+                        uptime: Bridge.uptime;
+                        mode: Bridge.mode;
+                        busy-message: Bridge.busy ? Bridge.busy-message : "";
+                        busy-message-runs: Bridge.busy-message-runs;
+                        error: Bridge.engine-phase == "failed" ? Bridge.engine-error : "";
+                        error-runs: Bridge.engine-error-runs;
+                    }
+                }
         }
     }
 

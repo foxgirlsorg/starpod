@@ -758,7 +758,10 @@ impl UserPreferences {
 /// fields. The app keeps the fields it needs to *display* and *select* a
 /// node, and keeps the untouched original map alongside, so that fields the
 /// app does not model are still passed to the engine verbatim.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// It is stored as one flat object: the original map with the app's fields
+/// written over it (see [`flat_object`]).
+#[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     /// The node's unique id, stable across subscription refreshes.
     pub id: String,
@@ -771,38 +774,187 @@ pub struct Node {
     /// The server port.
     pub port: Option<u16>,
     /// The node's traffic labels, if the subscription supplied any.
-    #[serde(default)]
     pub tags: Vec<String>,
     /// The original engine-format node, passed through untouched.
-    #[serde(flatten)]
     pub raw: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A proxy group as the app understands it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Stored like [`Node`]: one flat object.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProxyGroup {
     /// The group's unique id.
     pub id: String,
     /// The group's display name, unique within the configuration.
     pub name: String,
     /// The group type (`select`, `url-test`, `fallback`, `load-balance`, …).
-    #[serde(rename = "type")]
     pub group_type: String,
     /// The group's members, by node or group name.
-    #[serde(default)]
     pub members: Vec<String>,
     /// The selection strategy, for the strategies that have one.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub strategy: Option<String>,
     /// The health-check URL, for the groups that have one.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// The health-check interval in seconds.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub interval: Option<u64>,
     /// The original engine-format group, passed through untouched.
-    #[serde(flatten)]
     pub raw: serde_json::Map<String, serde_json::Value>,
+}
+
+// ----- the stored form of nodes and groups --------------------------------------
+//
+// A node's `raw` map holds the engine's own keys, and some share a name with
+// one of the app's fields (`name`, `server`, `port`; for a group also `type`,
+// `strategy`, `url`, `interval`). A derived `#[serde(flatten)]` wrote such a
+// key twice, and serde then refused to read the object back ("duplicate
+// field"), so a cached subscription never loaded after a restart. The stored
+// form is one object: `raw`, with the app's fields written over it. Reading
+// goes through a JSON map, which keeps the last of duplicate keys, so files
+// written the old way load too.
+
+/// `raw` with `fields` written over it, as one object. A `None` field is
+/// left out.
+fn flat_object(
+    raw: &serde_json::Map<String, serde_json::Value>,
+    fields: Vec<(&str, Option<serde_json::Value>)>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut object = raw.clone();
+    for (key, value) in fields {
+        match value {
+            Some(value) => {
+                object.insert(key.to_string(), value);
+            }
+            None => {
+                object.remove(key);
+            }
+        }
+    }
+    object
+}
+
+/// Take the app-only key `key` out of `object`.
+fn take<T: serde::de::DeserializeOwned, E: serde::de::Error>(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<T>, E> {
+    match object.remove(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => serde_json::from_value(value)
+            .map(Some)
+            .map_err(|error| E::custom(format!("`{key}`: {error}"))),
+    }
+}
+
+/// Read the engine key `key` from `object`, leaving it in place for `raw`.
+fn peek<T: serde::de::DeserializeOwned, E: serde::de::Error>(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<T>, E> {
+    match object.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => serde_json::from_value(value.clone())
+            .map(Some)
+            .map_err(|error| E::custom(format!("`{key}`: {error}"))),
+    }
+}
+
+/// Remove `keys` whose value is `null`: an older build wrote an absent
+/// field as `null`, which is not an engine value.
+fn drop_nulls(object: &mut serde_json::Map<String, serde_json::Value>, keys: &[&str]) {
+    for key in keys {
+        if object.get(*key) == Some(&serde_json::Value::Null) {
+            object.remove(*key);
+        }
+    }
+}
+
+impl Serialize for Node {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde_json::Value;
+        let tags = (!self.tags.is_empty()).then(|| Value::from(self.tags.clone()));
+        flat_object(
+            &self.raw,
+            vec![
+                ("id", Some(Value::from(self.id.clone()))),
+                ("name", Some(Value::from(self.name.clone()))),
+                ("protocol", Some(Value::from(self.protocol.clone()))),
+                ("server", self.server.clone().map(Value::from)),
+                ("port", self.port.map(Value::from)),
+                ("tags", tags),
+            ],
+        )
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Node {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let mut object = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        // The app's own keys come out; the engine's stay in `raw`.
+        let id = take(&mut object, "id")?.ok_or_else(|| D::Error::missing_field("id"))?;
+        let protocol =
+            take(&mut object, "protocol")?.ok_or_else(|| D::Error::missing_field("protocol"))?;
+        let tags = take(&mut object, "tags")?.unwrap_or_default();
+        let name = peek(&object, "name")?.ok_or_else(|| D::Error::missing_field("name"))?;
+        let server = peek(&object, "server")?;
+        let port = peek(&object, "port")?;
+        drop_nulls(&mut object, &["server", "port"]);
+        Ok(Node {
+            id,
+            name,
+            protocol,
+            server,
+            port,
+            tags,
+            raw: object,
+        })
+    }
+}
+
+impl Serialize for ProxyGroup {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde_json::Value;
+        flat_object(
+            &self.raw,
+            vec![
+                ("id", Some(Value::from(self.id.clone()))),
+                ("name", Some(Value::from(self.name.clone()))),
+                ("type", Some(Value::from(self.group_type.clone()))),
+                ("members", Some(Value::from(self.members.clone()))),
+                ("strategy", self.strategy.clone().map(Value::from)),
+                ("url", self.url.clone().map(Value::from)),
+                ("interval", self.interval.map(Value::from)),
+            ],
+        )
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProxyGroup {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let mut object = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let id = take(&mut object, "id")?.ok_or_else(|| D::Error::missing_field("id"))?;
+        let members = take(&mut object, "members")?.unwrap_or_default();
+        let name = peek(&object, "name")?.ok_or_else(|| D::Error::missing_field("name"))?;
+        let group_type = peek(&object, "type")?.ok_or_else(|| D::Error::missing_field("type"))?;
+        let strategy = peek(&object, "strategy")?;
+        let url = peek(&object, "url")?;
+        let interval = peek(&object, "interval")?;
+        drop_nulls(&mut object, &["strategy", "url", "interval"]);
+        Ok(ProxyGroup {
+            id,
+            name,
+            group_type,
+            members,
+            strategy,
+            url,
+            interval,
+            raw: object,
+        })
+    }
 }
 
 /// A rule as the app stores it.
@@ -1389,6 +1541,66 @@ mod preference_tests {
 #[cfg(test)]
 mod subscription_payload_tests {
     use super::*;
+
+    fn object(json: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        json.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_cached_node_and_group_read_back_as_they_were_written() {
+        let node = Node {
+            id: "Sub / ::A@a.example.com:443".into(),
+            name: "Sub / A".into(),
+            protocol: "vless".into(),
+            server: Some("a.example.com".into()),
+            port: Some(443),
+            tags: vec![],
+            raw: object(serde_json::json!({
+                "name": "A", "type": "vless", "server": "a.example.com", "port": 443, "uuid": "x"
+            })),
+        };
+        let group = ProxyGroup {
+            id: "g".into(),
+            name: "Sub / G".into(),
+            group_type: "url-test".into(),
+            members: vec!["Sub / A".into()],
+            strategy: None,
+            url: Some("https://example.com/204".into()),
+            interval: Some(300),
+            raw: object(serde_json::json!({
+                "name": "Sub / G", "type": "url-test", "proxies": ["Sub / A"],
+                "url": "https://example.com/204", "interval": 300
+            })),
+        };
+        let text = serde_json::to_string(&(&node, &group)).unwrap();
+        let (node_back, group_back): (Node, ProxyGroup) =
+            serde_json::from_str(&text).expect("no duplicate keys");
+        assert_eq!(node_back.id, node.id);
+        assert_eq!(node_back.name, node.name);
+        assert_eq!((node_back.server, node_back.port), (node.server, node.port));
+        assert_eq!(node_back.raw.get("uuid"), node.raw.get("uuid"));
+        assert_eq!(node_back.raw.get("type"), node.raw.get("type"));
+        assert_eq!(group_back.members, group.members);
+        assert_eq!(
+            (group_back.url, group_back.interval),
+            (group.url, group.interval)
+        );
+        assert_eq!(group_back.group_type, "url-test");
+    }
+
+    #[test]
+    fn a_node_written_with_duplicate_keys_by_an_older_build_still_loads() {
+        let old = r#"{"id":"n","name":"Sub / A","protocol":"direct","server":null,"port":null,
+            "tags":[],"name":"A","type":"direct","udp":true}"#;
+        let node: Node = serde_json::from_str(old).expect("the old cache loads");
+        assert_eq!(node.protocol, "direct");
+        assert_eq!(node.server, None);
+        assert!(
+            !node.raw.contains_key("server"),
+            "a null is not an engine value"
+        );
+        assert_eq!(node.raw.get("udp"), Some(&serde_json::Value::Bool(true)));
+    }
 
     #[test]
     fn a_cache_written_before_rule_providers_still_loads() {

@@ -1,9 +1,16 @@
-//! The update check: ask GitHub for the latest release and compare its tag
-//! with the running version (ARCHITECTURE §6.4).
+//! Updates from GitHub Releases: the check, and the over-the-air install.
 //!
-//! The check only reads. It never downloads or installs anything; the UI
-//! offers the release page and the user decides.
+//! The check asks GitHub for the latest release and compares its tag with the
+//! running version (ARCHITECTURE §6.4). It only reads.
+//!
+//! The install runs only when the user asks for it. It downloads this
+//! platform's archive from the release, the one `build.yml` publishes, checks
+//! it against the release's own `.sha256` file, takes the binary out, and puts
+//! it in place of the running one. The app then quits and starts the new
+//! binary. The release is not signed, so the checksum catches a damaged
+//! download, not a compromised release.
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use reqwest::header::{ACCEPT, USER_AGENT};
@@ -24,13 +31,28 @@ pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// How long the request may take before the check gives up.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// A release the check found: its version without the leading `v`, and the
-/// page to show the user.
+/// How long the archive download may take.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// A release the check found: its version without the leading `v`, the page
+/// to show the user, and the files it carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {
     /// The version, for example `0.2.0`.
     pub version: String,
     /// The release's web page (`html_url`).
+    pub url: String,
+    /// The files attached to the release.
+    pub assets: Vec<ReleaseAsset>,
+}
+
+/// One file attached to a release.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ReleaseAsset {
+    /// The file name, for example `starpod-windows-x86_64.zip`.
+    pub name: String,
+    /// Where to download it.
+    #[serde(rename = "browser_download_url")]
     pub url: String,
 }
 
@@ -39,6 +61,8 @@ pub struct Release {
 struct ReleaseBody {
     tag_name: String,
     html_url: String,
+    #[serde(default)]
+    assets: Vec<ReleaseAsset>,
 }
 
 /// Parse a version from a release tag. A leading `v` is allowed. The tag must
@@ -63,6 +87,7 @@ pub fn parse_release(body: &str) -> Result<Release, String> {
     Ok(Release {
         version,
         url: parsed.html_url,
+        assets: parsed.assets,
     })
 }
 
@@ -91,9 +116,431 @@ pub async fn fetch_latest_release() -> Result<Release, String> {
     parse_release(&body)
 }
 
+// ----- the over-the-air install -----------------------------------------------
+
+/// The archive `build.yml` publishes for this platform, or `None` where no
+/// build is published.
+pub fn archive_name() -> Option<&'static str> {
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        Some("starpod-windows-x86_64.zip")
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        Some("starpod-linux-x86_64.tar.gz")
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        Some("starpod-macos-aarch64.tar.gz")
+    } else {
+        None
+    }
+}
+
+/// The app binary's file name inside the archive.
+pub fn binary_name() -> &'static str {
+    if cfg!(windows) {
+        "starpod.exe"
+    } else {
+        "starpod"
+    }
+}
+
+/// The archive for this platform and its checksum file, from the release.
+pub fn pick_assets<'a>(
+    release: &'a Release,
+    archive: &str,
+) -> Result<(&'a ReleaseAsset, &'a ReleaseAsset), String> {
+    let find = |name: &str| release.assets.iter().find(|asset| asset.name == name);
+    let checksum_name = format!("{archive}.sha256");
+    match (find(archive), find(&checksum_name)) {
+        (Some(archive), Some(checksum)) => Ok((archive, checksum)),
+        (None, _) => Err(format!(
+            "release {} has no build for this computer ({archive})",
+            release.version
+        )),
+        (Some(_), None) => Err(format!(
+            "release {} has no checksum for {archive}, so it cannot be checked",
+            release.version
+        )),
+    }
+}
+
+/// The hash in a `sha256sum` line (`<hash>  <file>`).
+pub fn parse_checksum(text: &str) -> Result<String, String> {
+    let hash = text
+        .split_whitespace()
+        .next()
+        .ok_or("the checksum file is empty")?
+        .to_ascii_lowercase();
+    if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("the checksum file does not hold a SHA-256 hash".to_string());
+    }
+    Ok(hash)
+}
+
+/// The SHA-256 of `bytes`, as lowercase hex.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The last part of an archive entry's name.
+fn base_name(name: &str) -> &str {
+    name.rsplit(['/', '\\']).next().unwrap_or(name)
+}
+
+/// Take the app binary out of the archive into `staging`. The binary is the
+/// entry named [`binary_name`], in any folder; an archive without one is an
+/// error, so a saved error page is never installed.
+pub fn extract_binary(archive: &str, bytes: &[u8], staging: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(staging)
+        .map_err(|error| format!("the update folder could not be made: {error}"))?;
+    let out = staging.join(binary_name());
+    let write = |reader: &mut dyn std::io::Read| -> Result<(), String> {
+        let mut file = std::fs::File::create(&out)
+            .map_err(|error| format!("the update could not be written: {error}"))?;
+        std::io::copy(reader, &mut file)
+            .map_err(|error| format!("the update could not be written: {error}"))?;
+        Ok(())
+    };
+    let mut found = false;
+    if archive.ends_with(".zip") {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+            .map_err(|error| format!("the download is not a zip archive: {error}"))?;
+        for index in 0..zip.len() {
+            let mut entry = zip.by_index(index).map_err(|error| error.to_string())?;
+            let matches = entry
+                .name()
+                .is_ok_and(|name| base_name(name.as_ref()) == binary_name());
+            if matches {
+                write(&mut entry)?;
+                found = true;
+                break;
+            }
+        }
+    } else {
+        let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
+        let entries = tar
+            .entries()
+            .map_err(|error| format!("the download is not a tar.gz archive: {error}"))?;
+        for entry in entries {
+            let mut entry = entry.map_err(|error| error.to_string())?;
+            let name = entry
+                .path()
+                .map_err(|error| error.to_string())?
+                .to_string_lossy()
+                .to_string();
+            if base_name(&name) == binary_name() {
+                write(&mut entry)?;
+                found = true;
+                break;
+            }
+        }
+    }
+    if !found {
+        return Err("the downloaded archive does not contain Starpod".to_string());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o755))
+            .map_err(|error| format!("the update could not be made executable: {error}"))?;
+    }
+    Ok(out)
+}
+
+/// Download one file from a release.
+async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
+    let response = client
+        .get(url)
+        .header(USER_AGENT, format!("starpod/{CURRENT_VERSION}"))
+        .send()
+        .await
+        .map_err(|error| format!("the download failed: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("the download failed: GitHub answered {status}"));
+    }
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|error| format!("the download failed: {error}"))
+}
+
+/// Download this platform's build of `release` into `staging`, check it, and
+/// return the path of the new binary.
+pub async fn download_update(release: &Release, staging: &Path) -> Result<PathBuf, String> {
+    let archive = archive_name().ok_or("no Starpod build is published for this computer")?;
+    let (archive_asset, checksum_asset) = pick_assets(release, archive)?;
+    let client = reqwest::Client::builder()
+        .timeout(DOWNLOAD_TIMEOUT)
+        .build()
+        .map_err(|error| format!("the request could not be made: {error}"))?;
+    let checksum = fetch(&client, &checksum_asset.url).await?;
+    let expected = parse_checksum(&String::from_utf8_lossy(&checksum))?;
+    let bytes = fetch(&client, &archive_asset.url).await?;
+    if sha256_hex(&bytes) != expected {
+        return Err(
+            "the download does not match the release's checksum; nothing was installed".to_string(),
+        );
+    }
+    extract_binary(archive, &bytes, staging)
+}
+
+/// The path the running binary is moved to while the new one takes its place.
+pub fn previous_binary_path(current: &Path) -> PathBuf {
+    let mut name = current.file_name().unwrap_or_default().to_os_string();
+    name.push(".old");
+    current.with_file_name(name)
+}
+
+/// Put the binary at `new` in place of `current`, keeping the old one beside
+/// it as `<name>.old` until the next start (see [`remove_previous_binary`]).
+///
+/// A running binary cannot be overwritten on Windows, but it can be renamed,
+/// so the old one is renamed away first. If the new one cannot be put in
+/// place, the old one is renamed back.
+pub fn replace_binary(current: &Path, new: &Path) -> Result<(), String> {
+    let previous = previous_binary_path(current);
+    let _ = std::fs::remove_file(&previous);
+    std::fs::rename(current, &previous)
+        .map_err(|error| format!("the running Starpod could not be moved aside: {error}"))?;
+    // A copy, not a rename: the download may be on another drive.
+    if let Err(error) = std::fs::copy(new, current) {
+        let _ = std::fs::rename(&previous, current);
+        return Err(format!(
+            "the new Starpod could not be put in place: {error}"
+        ));
+    }
+    let _ = std::fs::remove_file(new);
+    Ok(())
+}
+
+/// The binary to start once this one has shut down, set by a finished update.
+static RELAUNCH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Start `binary` when this process exits (see [`relaunch_if_scheduled`]).
+pub fn schedule_relaunch(binary: PathBuf) {
+    let _ = RELAUNCH.set(binary);
+}
+
+/// Start the binary a finished update scheduled. Called at the very end of
+/// `main`, after the single-instance channel is closed, so the new process
+/// becomes the running instance instead of handing itself back to this one.
+pub fn relaunch_if_scheduled() {
+    if let Some(binary) = RELAUNCH.get() {
+        match std::process::Command::new(binary).spawn() {
+            Ok(_) => tracing::info!("started the updated Starpod"),
+            Err(error) => tracing::warn!(%error, "could not start the updated Starpod"),
+        }
+    }
+}
+
+/// Remove the binary an update left beside the running one. Called at start;
+/// by then the old binary is no longer running.
+pub fn remove_previous_binary() {
+    if let Ok(current) = std::env::current_exe() {
+        let previous = previous_binary_path(&current);
+        if previous.exists() {
+            let _ = std::fs::remove_file(previous);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn release_with(names: &[&str]) -> Release {
+        Release {
+            version: "0.3.0".into(),
+            url: "https://example.test/r".into(),
+            assets: names
+                .iter()
+                .map(|name| ReleaseAsset {
+                    name: name.to_string(),
+                    url: format!("https://example.test/{name}"),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_archive_and_its_checksum_are_picked_by_name() {
+        let release = release_with(&["a.zip", "a.zip.sha256", "b.tar.gz", "b.tar.gz.sha256"]);
+        let (archive, checksum) = pick_assets(&release, "b.tar.gz").unwrap();
+        assert_eq!(archive.name, "b.tar.gz");
+        assert_eq!(checksum.name, "b.tar.gz.sha256");
+        assert!(pick_assets(&release, "c.zip").is_err(), "no build");
+        let unchecked = release_with(&["a.zip"]);
+        assert!(
+            pick_assets(&unchecked, "a.zip").is_err(),
+            "no checksum, no install"
+        );
+    }
+
+    #[test]
+    fn a_checksum_line_gives_its_hash() {
+        let hash = "a".repeat(64);
+        assert_eq!(parse_checksum(&format!("{hash}  starpod.zip\n")), Ok(hash));
+        assert!(parse_checksum("").is_err());
+        assert!(parse_checksum("not-a-hash file").is_err());
+    }
+
+    #[test]
+    fn the_binary_is_taken_out_of_a_zip() {
+        use std::io::Write as _;
+        let mut bytes = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("starpod-x/README.md", options).unwrap();
+            zip.write_all(b"readme").unwrap();
+            zip.start_file(format!("starpod-x/{}", binary_name()), options)
+                .unwrap();
+            zip.write_all(b"new binary").unwrap();
+            zip.finish().unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let out = extract_binary("x.zip", &bytes, dir.path()).unwrap();
+        assert_eq!(std::fs::read(out).unwrap(), b"new binary");
+        assert!(extract_binary("x.zip", b"<html>", dir.path()).is_err());
+    }
+
+    #[test]
+    fn the_binary_is_taken_out_of_a_tar_gz() {
+        let mut tarball = Vec::new();
+        {
+            let gz = flate2::write::GzEncoder::new(&mut tarball, flate2::Compression::fast());
+            let mut builder = tar::Builder::new(gz);
+            let data = b"new binary";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    format!("starpod-x/{}", binary_name()),
+                    &data[..],
+                )
+                .unwrap();
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let out = extract_binary("x.tar.gz", &tarball, dir.path()).unwrap();
+        assert_eq!(std::fs::read(out).unwrap(), b"new binary");
+    }
+
+    #[test]
+    fn the_binary_is_replaced_and_the_old_one_kept_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join(binary_name());
+        let new = dir.path().join("download").join(binary_name());
+        std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+        std::fs::write(&current, b"old").unwrap();
+        std::fs::write(&new, b"new").unwrap();
+        replace_binary(&current, &new).unwrap();
+        assert_eq!(std::fs::read(&current).unwrap(), b"new");
+        assert_eq!(
+            std::fs::read(previous_binary_path(&current)).unwrap(),
+            b"old"
+        );
+    }
+
+    /// A release served by a local stand-in for GitHub: this platform's
+    /// archive holding `binary`, and a checksum file with `checksum`.
+    async fn serve_release(
+        binary: &[u8],
+        checksum: Option<String>,
+    ) -> (wiremock::MockServer, Release) {
+        use std::io::Write as _;
+        use wiremock::matchers::path;
+        use wiremock::{Mock, ResponseTemplate};
+
+        let archive = archive_name().expect("a published platform");
+        let mut bytes = Vec::new();
+        if archive.ends_with(".zip") {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+            zip.start_file(
+                format!("starpod/{}", binary_name()),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(binary).unwrap();
+            zip.finish().unwrap();
+        } else {
+            let gz = flate2::write::GzEncoder::new(&mut bytes, flate2::Compression::fast());
+            let mut builder = tar::Builder::new(gz);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(binary.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, format!("starpod/{}", binary_name()), binary)
+                .unwrap();
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+        let checksum = checksum.unwrap_or_else(|| format!("{}  {archive}\n", sha256_hex(&bytes)));
+
+        let server = wiremock::MockServer::start().await;
+        Mock::given(path(format!("/{archive}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
+            .mount(&server)
+            .await;
+        Mock::given(path(format!("/{archive}.sha256")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(checksum))
+            .mount(&server)
+            .await;
+        let release = Release {
+            version: "9.9.9".into(),
+            url: format!("{}/release", server.uri()),
+            assets: [archive.to_string(), format!("{archive}.sha256")]
+                .into_iter()
+                .map(|name| ReleaseAsset {
+                    url: format!("{}/{name}", server.uri()),
+                    name,
+                })
+                .collect(),
+        };
+        (server, release)
+    }
+
+    #[tokio::test]
+    async fn a_release_whose_checksum_matches_is_downloaded_and_unpacked() {
+        let (_server, release) = serve_release(b"the new starpod", None).await;
+        let dir = tempfile::tempdir().unwrap();
+        let binary = download_update(&release, dir.path())
+            .await
+            .expect("installs");
+        assert_eq!(std::fs::read(binary).unwrap(), b"the new starpod");
+    }
+
+    #[tokio::test]
+    async fn a_release_whose_checksum_does_not_match_installs_nothing() {
+        let wrong = format!("{}  starpod\n", "0".repeat(64));
+        let (_server, release) = serve_release(b"the new starpod", Some(wrong)).await;
+        let dir = tempfile::tempdir().unwrap();
+        let error = download_update(&release, dir.path()).await.unwrap_err();
+        assert!(error.contains("checksum"), "{error}");
+        assert!(
+            !dir.path().join(binary_name()).exists(),
+            "nothing was written"
+        );
+    }
+
+    #[test]
+    fn a_release_body_lists_its_assets() {
+        let body = r#"{
+            "tag_name": "v0.3.1",
+            "html_url": "https://github.com/foxgirlsorg/starpod/releases/tag/v0.3.1",
+            "assets": [{"name": "starpod-windows-x86_64.zip",
+                        "browser_download_url": "https://example.test/w.zip"}]
+        }"#;
+        let release = parse_release(body).unwrap();
+        assert_eq!(release.assets.len(), 1);
+        assert_eq!(release.assets[0].url, "https://example.test/w.zip");
+    }
 
     #[test]
     fn a_leading_v_is_ignored_when_comparing() {

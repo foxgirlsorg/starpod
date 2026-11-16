@@ -196,6 +196,9 @@ pub enum SubscriptionStatus {
 /// One subscription, as the UI shows it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubscriptionView {
+    /// Whether this is the subscription in use. Exactly one is, when there
+    /// are any; the others take no part in the configuration.
+    pub active: bool,
     /// The subscription's id.
     pub id: String,
     /// The label the user gave it.
@@ -319,8 +322,14 @@ pub(crate) fn profile_card(
     let quota = subscription.quota.as_ref();
     let used = quota.map_or(0, |quota| quota.used);
     let total = quota.and_then(|quota| quota.total).unwrap_or(0);
-    let expires = quota.and_then(|quota| quota.expires.clone());
-    let expires_unix = expires.as_deref().and_then(starpod_core::timestamp::parse);
+    // Providers send `expire=0` for a plan with no end date (the Clash
+    // convention, like `total=0` for no traffic limit), so a timestamp at or
+    // before the epoch is no expiry, not a plan that ended in 1970.
+    let expires_unix = quota
+        .and_then(|quota| quota.expires.as_deref())
+        .and_then(starpod_core::timestamp::parse)
+        .filter(|&expires| expires > 0);
+    let expires = expires_unix.and_then(|_| quota.and_then(|quota| quota.expires.clone()));
     let days_remaining = expires_unix.map_or(-1, |expires| days_until(expires, now));
     ProfileCard {
         subscription_id: subscription.id.clone(),
@@ -781,6 +790,17 @@ mod tests {
         assert_eq!(card.expires, None);
         assert_eq!(card.days_remaining, -1, "-1 is the no-expiry marker");
         assert!(!card.expiring_soon);
+    }
+
+    #[test]
+    fn a_zero_expiry_means_no_end_date() {
+        let _lang = crate::i18n::pin(crate::i18n::Lang::En);
+        let card = profile_card(&with_quota(Some(0), Some(0)), None, NOW);
+        assert!(card.has_quota);
+        assert!(!card.expired, "expire=0 is not a plan that ended in 1970");
+        assert!(!card.expiring_soon);
+        assert_eq!(card.expires, None);
+        assert_eq!(card.days_remaining, -1);
     }
 
     #[test]

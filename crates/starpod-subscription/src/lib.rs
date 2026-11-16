@@ -69,7 +69,7 @@ pub mod schedule;
 pub use cache::{SubscriptionCache, SubscriptionCacheSet};
 pub use error::{ProviderError, SubscriptionError};
 pub use metadata::{ProfileInfo, SubscriptionMetadata, SubscriptionQuota, format_timestamp};
-pub use pipeline::{ParsedBody, PayloadFormat, parse_payload};
+pub use pipeline::{ParsedBody, PayloadFormat, parse_payload, upgrade_cached_payload};
 pub use provider::{
     DeviceHeaders, FetchRequest, FetchResponse, HttpSubscriptionProvider, ProviderKind,
     StaticSubscriptionProvider, SubscriptionProvider,

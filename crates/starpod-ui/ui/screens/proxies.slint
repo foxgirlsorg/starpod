@@ -277,21 +277,27 @@ export component ProxiesPage inherits Rectangle {
                     VerticalLayout {
                         spacing: 8px;
 
+                        // One row: the switches and the session traffic on the
+                        // left, the routing mode on the right.
                         HorizontalLayout {
                             vertical-stretch: 0;
                             height: 36px;
                             spacing: 16px;
 
-                            Segmented {
-                                options: root.mode-labels;
-                                current-index: root.mode-index;
-                                selected(i) => {
-                                    Bridge.set-mode(root.mode-keys[i]);
+                            SwitchRow {
+                                label: @tr("System proxy");
+                                checked: Bridge.system-proxy-active;
+                                toggled(value) => {
+                                    Bridge.toggle-system-proxy(value);
                                 }
                             }
 
-                            Rectangle {
-                                horizontal-stretch: 1;
+                            SwitchRow {
+                                label: @tr("TUN");
+                                checked: Bridge.settings.tun-enabled;
+                                toggled(value) => {
+                                    Bridge.toggle-tun(value);
+                                }
                             }
 
                             if (root.running && Bridge.session-traffic-visible) : HorizontalLayout {
@@ -348,31 +354,17 @@ export component ProxiesPage inherits Rectangle {
                                     }
                                 }
                             }
-                        }
-
-                        HorizontalLayout {
-                            vertical-stretch: 0;
-                            height: 36px;
-                            spacing: 16px;
-
-                            SwitchRow {
-                                label: @tr("System proxy");
-                                checked: Bridge.system-proxy-active;
-                                toggled(value) => {
-                                    Bridge.toggle-system-proxy(value);
-                                }
-                            }
-
-                            SwitchRow {
-                                label: @tr("TUN");
-                                checked: Bridge.settings.tun-enabled;
-                                toggled(value) => {
-                                    Bridge.toggle-tun(value);
-                                }
-                            }
 
                             Rectangle {
                                 horizontal-stretch: 1;
+                            }
+
+                            Segmented {
+                                options: root.mode-labels;
+                                current-index: root.mode-index;
+                                selected(i) => {
+                                    Bridge.set-mode(root.mode-keys[i]);
+                                }
                             }
                         }
 

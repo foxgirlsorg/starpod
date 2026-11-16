@@ -44,6 +44,10 @@ semver = { workspace = true }
 global-hotkey = { workspace = true }
 # The Linux desktop entry's directory (src/scheme.rs).
 dirs = { workspace = true }
+# Unpacking a downloaded app update (src/update.rs): a zip on Windows, a
+# tar.gz elsewhere, as build.yml packs them.
+zip = { workspace = true }
+tar = { workspace = true }
 
 # The Windows scheme registration writes to the current user's registry hive.
 [target.'cfg(windows)'.dependencies]
@@ -51,9 +55,16 @@ winreg = "0.55"
 # The system proxy's registry values and WinInet notification (src/sysproxy/win.rs).
 windows-sys = { workspace = true }
 
+# The .exe icon (build.rs). Not target-gated: a build-dependency's cfg is the
+# build machine's, and the Windows .exe is also cross-built from Linux.
+[build-dependencies]
+winresource = "0.1"
+
 [[bin]]
 name = "starpod"
 path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# A local stand-in for GitHub in the update download tests (src/update.rs).
+wiremock = { workspace = true }

@@ -26,6 +26,8 @@ export struct WarningItem {
 
 export struct SubscriptionItem {
     id: string,
+    // the subscription in use; only one is
+    active: bool,
     label: string,
     // The profile-title header, or the label
     title: string,
@@ -488,6 +490,8 @@ export global Bridge {
     callback add-subscription(string, string, string, string);
     callback remove-subscription(string);
     callback refresh-subscription(string);
+    // Use this subscription, and only it.
+    callback activate-subscription(string);
     callback refresh-all();
     // subscription id, mode
     callback set-subscription-mode(string, string);
@@ -525,6 +529,8 @@ export global Bridge {
     callback set-check-updates(bool);
     // Ask GitHub for the latest release now (the startup check runs by itself).
     callback check-for-updates();
+    // Download the newest release, put it in place and restart (update.rs).
+    callback install-update();
     // Put the proxy command (for the visible proxy port) on the clipboard.
     callback copy-proxy-env();
     callback clear-cache();

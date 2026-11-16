@@ -1279,3 +1279,24 @@ msgstr ""
 
 msgid "Quit"
 msgstr ""
+
+msgid "In use"
+msgstr ""
+
+msgid "Use"
+msgstr ""
+
+msgid "Menu"
+msgstr ""
+
+msgid "Close menu"
+msgstr ""
+
+msgid "Release notes"
+msgstr ""
+
+msgid "Install update"
+msgstr ""
+
+msgid "Version {} is on GitHub. Installing it restarts Starpod."
+msgstr ""

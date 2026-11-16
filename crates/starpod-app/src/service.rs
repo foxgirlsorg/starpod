@@ -54,7 +54,7 @@ use uuid::Uuid;
 use crate::reassert::{OwnNode, RefreshWatch, shadow_warnings};
 
 use crate::autostart;
-use crate::compose::{Composed, compose, global_mode_blocked};
+use crate::compose::{Composed, active_subscription_id, compose, global_mode_blocked, only_active};
 use crate::connections::ConnectionTracker;
 use crate::device::DeviceProfile;
 use crate::error::{AppError, RuleLineError};
@@ -183,6 +183,10 @@ pub struct AppService {
     /// The platform code that reads and writes the system proxy.
     system_proxy_backend: Box<dyn sysproxy::Backend>,
     updates: watch::Sender<AppSnapshot>,
+    /// A subscription the user just added, to be put in use once its first
+    /// refresh has servers. Putting it in use before then would leave the
+    /// running proxy with no servers, and stop it.
+    activate_after_refresh: Option<String>,
 }
 
 impl AppService {
@@ -235,6 +239,7 @@ impl AppService {
             system_proxy: SystemProxy::default(),
             system_proxy_backend: sysproxy::os_backend(),
             updates: watch::channel(AppSnapshot::default()).0,
+            activate_after_refresh: None,
         };
         service.publish();
         service
@@ -313,11 +318,13 @@ impl AppService {
                 .filter(|path| path.is_file())
         };
 
+        let active_id = active_subscription_id(&self.state, &self.meta);
         let subscriptions = self
             .meta
             .subscriptions
             .iter()
             .map(|subscription| SubscriptionView {
+                active: active_id == Some(subscription.id.as_str()),
                 id: subscription.id.clone(),
                 label: subscription.label.clone(),
                 mode: subscription.mode,
@@ -342,12 +349,14 @@ impl AppService {
             })
             .collect();
 
-        // An announcement per subscription with announce text, and a notice
-        // per subscription at its device limit, carrying the support link.
+        // The announcement of the subscription in use, or its device-limit
+        // notice, carrying the support link. The others are not in use, so
+        // their news is not shown.
         let announcements: Vec<AnnouncementView> = self
             .meta
             .subscriptions
             .iter()
+            .filter(|subscription| active_id == Some(subscription.id.as_str()))
             .filter_map(|subscription| {
                 let text = match subscription
                     .announce
@@ -371,18 +380,16 @@ impl AppService {
             })
             .collect();
 
-        // The Home page card is for the selected subscription, else the first.
+        // The Home page card is for the subscription in use.
         let active = self
             .meta
             .subscriptions
             .iter()
-            .find(|subscription| {
-                Some(subscription.id.as_str()) == self.state.selected_subscription.as_deref()
-            })
-            .or_else(|| self.meta.subscriptions.first());
+            .find(|subscription| active_id == Some(subscription.id.as_str()));
         let card = active
             .map(|subscription| profile_card(subscription, logo_path(subscription), now_unix()));
-        let global_mode_allowed = !global_mode_blocked(&self.meta, &self.caches);
+        let global_mode_allowed =
+            !global_mode_blocked(&only_active(&self.state, &self.meta), &self.caches);
 
         let rules: Vec<RuleView> = self
             .state
@@ -610,16 +617,20 @@ impl AppService {
     /// [`connect_blocked_reason`]. It reads the saved subscriptions and their
     /// cached payloads, never the engine.
     fn connect_block(&self) -> Option<String> {
-        self.connect_block_for(&self.meta, &self.caches)
+        self.connect_block_for(&self.state, &self.meta, &self.caches)
     }
 
     /// As [`AppService::connect_block`], for a candidate set of subscriptions
     /// and caches that has not been saved yet.
     fn connect_block_for(
         &self,
+        state: &UserState,
         meta: &SubscriptionMeta,
         caches: &SubscriptionCacheSet,
     ) -> Option<String> {
+        // Only the subscription in use counts: the others take no part in
+        // the build, so their servers cannot carry traffic.
+        let meta = only_active(state, meta);
         let rows: Vec<(&Subscription, Option<usize>)> = meta
             .subscriptions
             .iter()
@@ -715,7 +726,13 @@ impl AppService {
         {
             match self.store.read_subscription_cache(&subscription.id) {
                 Ok(Some(bytes)) => match serde_json::from_slice::<SubscriptionPayload>(&bytes) {
-                    Ok(payload) => {
+                    Ok(mut payload) => {
+                        // A cache written by an earlier build lacks later
+                        // parser fixes; apply them now, not at the next refresh.
+                        starpod_subscription::upgrade_cached_payload(
+                            &mut payload,
+                            &subscription.label,
+                        );
                         let stored_at = subscription
                             .last_updated
                             .as_deref()
@@ -862,6 +879,13 @@ impl AppService {
         mode: SubscriptionMode,
     ) -> Result<(), AppError> {
         let result = self.set_subscription_mode_inner(id, mode).await;
+        self.finish(result)
+    }
+
+    /// Use the subscription `id`, and only it. The configuration is rebuilt
+    /// from it, and a running proxy is reloaded onto it.
+    pub async fn set_active_subscription(&mut self, id: &str) -> Result<(), AppError> {
+        let result = self.set_active_subscription_inner(id).await;
         self.finish(result)
     }
 
@@ -1220,7 +1244,15 @@ impl AppService {
             });
         }
 
-        let state = self.state.clone();
+        // A new subscription is the one the user wants to use. An app-managed
+        // one has no servers until its first refresh, so while another one
+        // is usable it is put in use only then (see `refresh_inner`).
+        let mut state = self.state.clone();
+        if mode == SubscriptionMode::EngineManaged || self.connect_block().is_some() {
+            state.selected_subscription = Some(id.clone());
+        } else {
+            self.activate_after_refresh = Some(id.clone());
+        }
         let caches = self.caches.clone();
         if let Err(error) = self.commit(state, meta, caches).await {
             // A storage failure leaves the subscription recorded, so its
@@ -1273,6 +1305,26 @@ impl AppService {
         }
         self.forget_secrets(id);
         self.log(format!("removed the subscription “{}”", removed.label));
+        Ok(())
+    }
+
+    async fn set_active_subscription_inner(&mut self, id: &str) -> Result<(), AppError> {
+        let subscription = self
+            .meta
+            .subscriptions
+            .iter()
+            .find(|subscription| subscription.id == id)
+            .ok_or_else(|| AppError::NotFound("that subscription".to_string()))?;
+        let label = subscription.label.clone();
+        if active_subscription_id(&self.state, &self.meta) == Some(id) {
+            return Ok(());
+        }
+        let mut state = self.state.clone();
+        state.selected_subscription = Some(id.to_string());
+        let meta = self.meta.clone();
+        let caches = self.caches.clone();
+        self.commit(state, meta, caches).await?;
+        self.log(format!("now using the subscription “{label}”"));
         Ok(())
     }
 
@@ -1414,6 +1466,13 @@ impl AppService {
                     "refreshed “{}”: {node_count} nodes, {group_count} groups",
                     subscription.label
                 ));
+                // The first refresh of a subscription the user just added puts
+                // it in use. This is the user's choice made when adding it, not
+                // the refresh writing user state.
+                if self.activate_after_refresh.as_deref() == Some(id) && node_count > 0 {
+                    self.activate_after_refresh = None;
+                    self.set_active_subscription_inner(id).await?;
+                }
                 Ok(())
             }
             RefreshOutcome::Failed { error, profile, .. } => {
@@ -1635,7 +1694,9 @@ impl AppService {
     }
 
     async fn set_mode_inner(&mut self, mode: ProxyMode) -> Result<(), AppError> {
-        if mode == ProxyMode::Global && global_mode_blocked(&self.meta, &self.caches) {
+        if mode == ProxyMode::Global
+            && global_mode_blocked(&only_active(&self.state, &self.meta), &self.caches)
+        {
             return Err(AppError::Invalid(
                 "your subscription does not allow the Global mode".to_string(),
             ));
@@ -2140,7 +2201,7 @@ impl AppService {
         self.check_writable(&state, &meta)?;
         let composed = self.compose_for(&state, &meta, &caches)?;
         let was_connectable = self.connect_block().is_none();
-        let now_connectable = self.connect_block_for(&meta, &caches).is_none();
+        let now_connectable = self.connect_block_for(&state, &meta, &caches).is_none();
         let stop_proxy =
             was_connectable && !now_connectable && self.refresh_engine_status().await.is_running();
         if stop_proxy {

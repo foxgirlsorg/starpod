@@ -286,6 +286,18 @@ Secrets never appear in an error message either. The app scrubs every error text
 
 ## 8. Tray and window
 
+- **Navigation.** The page list is in a drawer, closed by default. The menu button at the top left opens it over the page; choosing a page, the close button, or a click outside it closes it. The top bar always shows whether you are connected.
+- **One subscription at a time.** Only the subscription marked **In use** on the Profiles page supplies servers, rules and DNS, and only its announcements are shown. **Use** on another one switches to it, and a running proxy is reloaded onto it. A subscription you add is put in use once its first refresh has servers.
+
+### 8.0 Updating Starpod
+
+Starpod checks GitHub for a newer release at start (Settings > General, "Check for updates at startup") or when you press **Check for updates**. When one is found, Settings shows **Install update**, and the drawer shows the version.
+
+**Install update** downloads this platform's archive from the release, checks it against the release's `.sha256` file, and replaces the running Starpod with it. Starpod then disconnects, restores your system proxy, quits and starts the new version. The previous binary is kept beside the new one as `starpod.exe.old` (`starpod.old` elsewhere) until the next start. A download that does not match its checksum installs nothing. The release is not signed, so the check catches a damaged download, not a compromised release.
+
+The releases must be readable without signing in to GitHub: while the repository is private, the check and the install report that GitHub answered 404.
+
+
 - **Tray available.** Closing the window hides it to the system tray. The proxy keeps running. Settings > General > Close to tray turns this off, so that closing the window quits instead. Quit in the tray menu stops the engine gracefully and exits. The engine gets a stop signal and 10 seconds to exit before it is killed.
 - **Tray not available.** Some Linux desktops have no tray host. Closing the window then stops the engine and exits. The app says so once at startup.
 

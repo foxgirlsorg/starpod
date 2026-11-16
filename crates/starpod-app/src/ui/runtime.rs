@@ -639,6 +639,49 @@ pub fn spawn_update_check(ctx: &Ctx, manual: bool) {
     });
 }
 
+/// Download and install the newest release, then quit and start it. Runs
+/// only when the user asks. A failure changes nothing and says why.
+pub fn spawn_install_update(ctx: &Ctx) {
+    let ctx = ctx.clone();
+    let service = ctx.service.clone();
+    ctx.runtime.clone().spawn(async move {
+        post(|ui| ui.begin_busy("Downloading the update…"));
+        let staging = service.lock().await.paths().data_dir().join("update");
+        let result = async {
+            let release = update::fetch_latest_release().await?;
+            if !update::is_newer(&release.version, update::CURRENT_VERSION)? {
+                return Err(format!(
+                    "Starpod {} is the latest version",
+                    update::CURRENT_VERSION
+                ));
+            }
+            let new = update::download_update(&release, &staging).await?;
+            let current = std::env::current_exe()
+                .map_err(|error| format!("the running Starpod could not be found: {error}"))?;
+            update::replace_binary(&current, &new)?;
+            Ok((current, release.version))
+        }
+        .await;
+        match result {
+            Ok((current, version)) => {
+                info!(%version, "update installed; restarting");
+                update::schedule_relaunch(current);
+                post(|ui| ui.end_busy());
+                request_quit(&ctx);
+            }
+            Err(message) => {
+                warn!(%message, "the update was not installed");
+                post(move |ui| {
+                    ui.end_busy();
+                    ui.show_banner(Banner::error(format!(
+                        "could not update Starpod: {message}"
+                    )));
+                });
+            }
+        }
+    });
+}
+
 /// Show the window, if it still exists.
 pub fn show_window(window: &slint::Weak<AppWindow>) {
     match window.upgrade() {
@@ -862,6 +905,10 @@ pub fn run(
             "STARPOD_UI_PAGE: opened the page given in the environment"
         );
     }
+    // Debug hook for tools/ui-shot.sh: STARPOD_UI_NAV=1 opens the drawer.
+    if std::env::var("STARPOD_UI_NAV").is_ok_and(|value| value.trim() == "1") {
+        window.set_nav_open(true);
+    }
     let tray = create_tray();
     let tray_available = tray.is_some();
     let weak = window.as_weak();
@@ -962,6 +1009,7 @@ mod tests {
 
     fn subscription(id: &str, mode: SubscriptionMode, last: Option<&str>) -> SubscriptionView {
         SubscriptionView {
+            active: true,
             id: id.to_string(),
             label: id.to_string(),
             mode,
