@@ -149,6 +149,31 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The full history, so the notes can list the commits since the last tag.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The release notes are the messages of the commits this release adds:
+      # everything since the previous v* tag, oldest first, each with its body.
+      - name: Write release notes from the commits
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          previous=$(git describe --tags --abbrev=0 --match 'v*' "$TAG^" 2>/dev/null || true)
+          if [ -n "$previous" ]; then
+            range="$previous..$TAG"
+            echo "Changes since $previous:" > notes.md
+          else
+            range="$TAG"
+            echo "Changes:" > notes.md
+          fi
+          echo >> notes.md
+          git log --reverse --no-merges --format='### %s%n%n%b%n_(%h)_%n' "$range" >> notes.md
+          cat notes.md
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v8
         with:
@@ -168,4 +193,4 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: release/*
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          body_path: notes.md

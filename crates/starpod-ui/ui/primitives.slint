@@ -6,8 +6,8 @@
 // so one component serves every icon.
 //
 // Common rules for every interactive primitive: disabled means opacity 0.5
-// and no hover; keyboard focus shows a 2px ring (Design.ring) offset 2px from
-// the edge; clickable things show a pointer cursor.
+// and no hover; there is no focus ring, keyboard or mouse (Space and Enter
+// still work on a focused control); clickable things show a pointer cursor.
 
 import { Design } from "design.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
@@ -147,17 +147,6 @@ export component Button inherits Rectangle {
     opacity: root.enabled ? 1 : 0.5;
 
     // Focus ring: 2px wide, 2px outside the edge.
-    Rectangle {
-        x: -4px;
-        y: -4px;
-        width: root.width + 8px;
-        height: root.height + 8px;
-        border-radius: Design.radius-md + 4px;
-        border-width: 2px;
-        border-color: fs.has-focus ? Design.ring : transparent;
-        background: transparent;
-    }
-
     if (root.busy) : Spinner {
         x: (root.width - root.content-w) / 2;
         y: (root.height - 16px) / 2;
@@ -203,7 +192,6 @@ export component Button inherits Rectangle {
         enabled: root.live;
         mouse-cursor: root.live ? pointer : default;
         clicked => {
-            fs.focus();
             root.clicked();
         }
     }
@@ -232,17 +220,6 @@ export component IconButton inherits Rectangle {
     border-width: root.variant == ButtonVariant.outline ? 1px : 0px;
     border-color: Design.input;
     opacity: root.enabled ? 1 : 0.5;
-
-    Rectangle {
-        x: -4px;
-        y: -4px;
-        width: root.width + 8px;
-        height: root.height + 8px;
-        border-radius: Design.radius-md + 4px;
-        border-width: 2px;
-        border-color: fs.has-focus ? Design.ring : transparent;
-        background: transparent;
-    }
 
     Image {
         x: (parent.width - 16px) / 2;
@@ -273,7 +250,6 @@ export component IconButton inherits Rectangle {
         enabled: root.live;
         mouse-cursor: root.live ? pointer : default;
         clicked => {
-            fs.focus();
             root.clicked();
         }
     }
@@ -595,17 +571,6 @@ export component Switch inherits Rectangle {
     }
 
     Rectangle {
-        x: -4px;
-        y: -4px;
-        width: root.width + 8px;
-        height: root.height + 8px;
-        border-radius: Design.radius-full;
-        border-width: 2px;
-        border-color: fs.has-focus ? Design.ring : transparent;
-        background: transparent;
-    }
-
-    Rectangle {
         x: root.checked ? 18px : 2px;
         y: 2px;
         width: 16px;
@@ -631,7 +596,6 @@ export component Switch inherits Rectangle {
         enabled: root.live;
         mouse-cursor: root.live ? pointer : default;
         clicked => {
-            fs.focus();
             root.toggle();
         }
     }
@@ -653,17 +617,6 @@ export component Segmented inherits Rectangle {
     preferred-width: row.preferred-width;
     horizontal-stretch: 0;
     vertical-stretch: 0;
-
-    Rectangle {
-        x: -4px;
-        y: -4px;
-        width: root.width + 8px;
-        height: root.height + 8px;
-        border-radius: Design.radius-md + 4px;
-        border-width: 2px;
-        border-color: fs.has-focus ? Design.ring : transparent;
-        background: transparent;
-    }
 
     row := HorizontalLayout {
         padding: 3px;
@@ -692,7 +645,6 @@ export component Segmented inherits Rectangle {
             item-ta := TouchArea {
                 mouse-cursor: pointer;
                 clicked => {
-                    fs.focus();
                     root.current-index = i;
                     root.selected(i);
                 }

@@ -4,6 +4,38 @@ All notable changes to Starpod are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3] - 2026-11-17
+
+### Added
+
+- Over-the-air updates from GitHub Releases: **Install update** downloads this
+  platform's build, checks it against the release's checksum, swaps it in and
+  restarts, with download progress.
+- The latency test works while disconnected, by timing a TCP connection to
+  each server.
+- The app icon and in-app mark are the new red Starpod mark.
+
+### Changed
+
+- One subscription is in use at a time, and only its announcements show.
+- The window is portrait. Navigation is a drawer behind the menu button.
+- Home pins the profile card and news to the top and the server picker to the
+  bottom, with the connect button centred between them.
+- Proxies: the routing mode and switches share one row; groups start collapsed
+  and remember the ones you open; Expand all and Collapse all are gone.
+- Settings opens on a list of its sections with icons; each section has a back
+  arrow. Wide controls sit under their label in a narrow window.
+- Buttons no longer show a focus ring.
+- Release notes are written by the release workflow from the commit messages.
+
+### Fixed
+
+- Traffic in app-managed mode: DNS entries now name their proxy the way the
+  engine expects.
+- The cached subscription is read again on start.
+- Adding a subscription no longer stops the running proxy.
+- The macOS CI build runs on a supported runner.
+
 ## [0.0.2] - 2026-11-14
 
 ### Changed
