@@ -81,6 +81,9 @@ use crate::log::{LogBuffer, LogStreamKind, Redactor};
 use crate::rest::ControllerClient;
 use crate::signal;
 
+/// How many of the engine's last output lines an exit report holds.
+const EXIT_REPORT_LINES: usize = 200;
+
 /// How long the engine may take to exit after a graceful stop request.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 
@@ -291,6 +294,9 @@ pub struct Supervisor {
     /// so Starpod's controller file never collides with another meow's on
     /// the machine.
     controller_dir: Option<PathBuf>,
+    /// The folder an unexpected exit is reported in, when one was set. The
+    /// report holds the exit status and the engine's last output lines.
+    crash_dir: Option<PathBuf>,
     inner: Arc<Inner>,
 }
 
@@ -314,6 +320,7 @@ impl Supervisor {
             redactor: Redactor::new([secret]),
             config_path: PathBuf::new(),
             controller_dir: None,
+            crash_dir: None,
             inner: Arc::new(Inner {
                 running: Mutex::new(None),
                 exited,
@@ -337,6 +344,21 @@ impl Supervisor {
     pub fn with_controller_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.controller_dir = Some(dir.into());
         self
+    }
+
+    /// Report an engine that exits on its own in `dir`, as a file named
+    /// `engine-<timestamp>.log`. The report holds the exit status and the
+    /// last lines the engine printed. A stop that was asked for is not
+    /// reported.
+    #[must_use]
+    pub fn with_crash_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.crash_dir = Some(dir.into());
+        self
+    }
+
+    /// The directory an unexpected exit is reported in, if one was set.
+    pub fn crash_dir(&self) -> Option<&Path> {
+        self.crash_dir.as_deref()
     }
 
     /// The directory the engine is told to publish its controller file in,
@@ -530,7 +552,14 @@ impl Supervisor {
         // previous run's exit as its own.
         self.inner.exited.send_replace(None);
 
-        tokio::spawn(supervise(run, launch, control_rx, Arc::clone(&self.inner)));
+        tokio::spawn(supervise(
+            run,
+            launch,
+            control_rx,
+            Arc::clone(&self.inner),
+            self.logs.clone(),
+            self.crash_dir.clone(),
+        ));
 
         Ok(EngineHandle {
             exited: self.inner.exited.subscribe(),
@@ -708,6 +737,8 @@ async fn supervise(
     mut launch: Launch,
     mut control: mpsc::UnboundedReceiver<Control>,
     inner: Arc<Inner>,
+    logs: LogBuffer,
+    crash_dir: Option<PathBuf>,
 ) {
     let event = tokio::select! {
         info = launch.wait() => Event::Exited(info),
@@ -718,6 +749,11 @@ async fn supervise(
         Event::Control(None) => launch.wait().await,
         Event::Control(Some(_)) => stop_launch(&mut launch).await,
     };
+    if !info.requested
+        && let Some(dir) = crash_dir.as_deref()
+    {
+        write_exit_report(dir, &info, &logs);
+    }
     {
         let mut slot = lock_running(&inner);
         if slot.as_ref().is_some_and(|running| running.run == run) {
@@ -725,6 +761,33 @@ async fn supervise(
         }
     }
     inner.exited.send_replace(Some(info));
+}
+
+/// Write the engine's exit status and its last output lines to a report in
+/// `dir`. Called only when the engine exited without a stop being asked for.
+///
+/// The log lines are already redacted by the time they reach the buffer.
+fn write_exit_report(dir: &Path, info: &ExitInfo, logs: &LogBuffer) {
+    use std::fmt::Write as _;
+
+    let time = starpod_core::timestamp::now().unwrap_or_else(|| "unknown".to_string());
+    let lines = logs.tail(EXIT_REPORT_LINES);
+    let mut body = format!(
+        "Starpod engine exit report\n\
+         version: {version}\n\
+         os: {os} {arch}\n\
+         time: {time}\n\
+         exit: {info:?}\n\n\
+         last {count} lines of engine output:\n",
+        version = env!("CARGO_PKG_VERSION"),
+        os = std::env::consts::OS,
+        arch = std::env::consts::ARCH,
+        count = lines.len(),
+    );
+    for line in lines {
+        let _ = writeln!(body, "[{}] {}", line.stream.as_str(), line.text);
+    }
+    let _ = starpod_store::crash::write_report(dir, "engine", &body);
 }
 
 /// Ask a running engine to stop, then force it if it does not exit in time.

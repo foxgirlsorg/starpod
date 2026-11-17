@@ -195,6 +195,22 @@ impl AppPaths {
         self.data_dir.join("controllers")
     }
 
+    /// The folder the run's log file lives in.
+    ///
+    /// The log is replaced on each start, so anything that must outlive a
+    /// run goes in a subfolder of it or next to it, not in the log itself.
+    pub fn log_dir(&self) -> PathBuf {
+        self.data_dir.join("logs")
+    }
+
+    /// The folder crash reports are written to, inside [`AppPaths::log_dir`].
+    ///
+    /// Each report is its own file (see [`crate::crash`]), so a crash
+    /// survives the log's rotation.
+    pub fn crash_dir(&self) -> PathBuf {
+        self.log_dir().join("crashes")
+    }
+
     /// The file the plain-file secret fallback writes to.
     pub fn fallback_secret_file(&self) -> PathBuf {
         self.data_dir.join("secrets.json")

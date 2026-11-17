@@ -206,7 +206,7 @@ fn open_log_file() -> Option<File> {
 
 /// The directory the log file lives in.
 fn log_dir(paths: &AppPaths) -> PathBuf {
-    paths.data_dir().join("logs")
+    paths.log_dir()
 }
 
 /// Writes every log line to stderr and to the log file.
@@ -261,19 +261,17 @@ fn install_panic_hook() {
     }));
 }
 
-/// Log the panic's message, location and a forced backtrace.
+/// Log the panic's message, location and a forced backtrace, and write the
+/// same details to a crash report of their own.
 fn log_panic(info: &std::panic::PanicHookInfo<'_>) {
-    let message = info
-        .payload()
-        .downcast_ref::<&str>()
-        .map(|text| (*text).to_string())
-        .or_else(|| info.payload().downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "non-string panic payload".to_string());
-    let location = info
-        .location()
-        .map_or_else(|| "unknown location".to_string(), ToString::to_string);
+    let message = starpod_app::crash::panic_message(info);
+    let location = starpod_app::crash::panic_location(info);
     let backtrace = std::backtrace::Backtrace::force_capture();
     error!(%location, "PANIC: {message}\n{backtrace}");
+    // The report is a file of its own, so it survives the log's rotation.
+    if let Ok(paths) = AppPaths::resolve() {
+        let _ = starpod_app::crash::write_panic_report(info, &paths.crash_dir());
+    }
 }
 
 /// Run the graceful stop on a helper thread. The panicking thread may be the

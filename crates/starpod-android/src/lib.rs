@@ -64,6 +64,11 @@ fn android_main(app: AndroidApp) {
             "PANIC: {info}\n{}",
             std::backtrace::Backtrace::force_capture()
         );
+        // HOME is the app's files directory by now, so the data directory
+        // resolves under it.
+        if let Ok(paths) = starpod_store::AppPaths::resolve() {
+            let _ = starpod_app::crash::write_panic_report(info, &paths.crash_dir());
+        }
     }));
     info!(
         version = env!("CARGO_PKG_VERSION"),

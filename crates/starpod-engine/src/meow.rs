@@ -86,6 +86,10 @@ pub struct MeowEngine {
     binary: PathBuf,
     /// Where the generated configuration is written.
     config_path: PathBuf,
+    /// The directory the engine's controller file goes in, if one was set.
+    controller_dir: Option<PathBuf>,
+    /// The directory an unexpected engine exit is reported in, if one was set.
+    crash_dir: Option<PathBuf>,
     /// The controller client, rebuilt whenever the controller's address
     /// changes.
     client: Arc<RwLock<Option<ControllerClient>>>,
@@ -121,13 +125,30 @@ impl MeowEngine {
             version: Arc::new(RwLock::new(None)),
             last_error: Arc::new(RwLock::new(None)),
             elevated: Arc::new(RwLock::new(false)),
+            controller_dir: None,
+            crash_dir: None,
         }
     }
 
     /// Build an engine around the installed binary, writing its
     /// configuration to `config_path`.
+    ///
+    /// An unexpected exit is reported in the app's crashes folder.
     pub fn installed(config_path: PathBuf) -> Self {
-        Self::new(crate::download::installed_binary_path(), config_path)
+        let engine = Self::new(crate::download::installed_binary_path(), config_path);
+        match starpod_store::AppPaths::resolve() {
+            Ok(paths) => engine.with_crash_dir(paths.crash_dir()),
+            Err(_) => engine,
+        }
+    }
+
+    /// Report an unexpected engine exit in `dir`. Call before the engine
+    /// starts.
+    #[must_use]
+    pub fn with_crash_dir(mut self, dir: PathBuf) -> Self {
+        self.crash_dir = Some(dir);
+        self.supervisor = Arc::new(self.build_supervisor());
+        self
     }
 
     /// Point the engine's controller file at `dir`, which the application
@@ -140,12 +161,21 @@ impl MeowEngine {
     /// engine starts.
     #[must_use]
     pub fn with_controller_dir(mut self, dir: PathBuf) -> Self {
-        self.supervisor = Arc::new(
-            Supervisor::new()
-                .with_config_path(self.config_path.clone())
-                .with_controller_dir(dir),
-        );
+        self.controller_dir = Some(dir);
+        self.supervisor = Arc::new(self.build_supervisor());
         self
+    }
+
+    /// A supervisor with every directory this engine was given.
+    fn build_supervisor(&self) -> Supervisor {
+        let mut supervisor = Supervisor::new().with_config_path(self.config_path.clone());
+        if let Some(dir) = &self.controller_dir {
+            supervisor = supervisor.with_controller_dir(dir.clone());
+        }
+        if let Some(dir) = &self.crash_dir {
+            supervisor = supervisor.with_crash_dir(dir.clone());
+        }
+        supervisor
     }
 
     /// The binary this engine runs.

@@ -51,6 +51,7 @@
 //! so the Settings screen can state the weaker guarantee plainly.
 
 pub mod atomic;
+pub mod crash;
 pub mod error;
 pub mod migration;
 pub mod paths;

@@ -28,6 +28,7 @@
 pub mod autostart;
 mod compose;
 pub mod connections;
+pub mod crash;
 pub mod deeplink;
 pub mod device;
 pub mod engine_form;
