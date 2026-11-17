@@ -83,24 +83,41 @@ fn ctrl_c_to_console_of(pid: u32) -> bool {
         SetConsoleCtrlHandler,
     };
 
-    // SAFETY: every call takes plain integers or a null handler routine, and
-    // each result is checked. `SetConsoleCtrlHandler(None, TRUE)` only makes
-    // this process ignore Ctrl events, which is what we want while attached.
+    // SAFETY: every call takes plain integers or a handler routine that lives
+    // for the whole process, and each result is checked.
     unsafe {
         // A console window that belongs to this app means the engine would
         // share it with the user's terminal; refuse rather than reach it.
         if !GetConsoleWindow().is_null() {
             return false;
         }
+        // The event reaches this process too, on a thread Windows starts for
+        // it, at some point after `GenerateConsoleCtrlEvent` returns. A
+        // handler that is switched off again right after sending can be off
+        // by then, and Windows' default handling ends the app at once, with
+        // no panic and no crash report. So the handler is installed once and
+        // never removed. It is a routine rather than `SetConsoleCtrlHandler(
+        // None, TRUE)`, because that "ignore Ctrl+C" state is inherited by
+        // child processes, and the engine started next would ignore its stop.
+        static SWALLOW: std::sync::Once = std::sync::Once::new();
+        SWALLOW.call_once(|| {
+            SetConsoleCtrlHandler(Some(swallow_ctrl_c), 1);
+        });
         if AttachConsole(pid) == 0 {
             return false;
         }
-        SetConsoleCtrlHandler(None, 1);
         let sent = GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) != 0;
         FreeConsole();
-        SetConsoleCtrlHandler(None, 0);
         sent
     }
+}
+
+/// The app's own Ctrl+C handler: it only receives the event it sends to the
+/// engine's console, so it marks Ctrl+C as handled. Other events (close,
+/// log off, shut down) go on to the default handling.
+#[cfg(windows)]
+unsafe extern "system" fn swallow_ctrl_c(ctrl_type: u32) -> windows_sys::core::BOOL {
+    i32::from(ctrl_type == windows_sys::Win32::System::Console::CTRL_C_EVENT)
 }
 
 /// `TerminateProcess` on `pid`, through a handle opened for that purpose.
