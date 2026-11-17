@@ -1205,10 +1205,10 @@ export component PageHeader inherits VerticalLayout {
                 color: Design.muted-foreground;
                 font-family: Design.font-family;
                 font-size: Design.font-base;
-                height: 20px;
+                min-height: 20px;
                 vertical-alignment: center;
-                wrap: no-wrap;
-                overflow: elide;
+                // Wraps in a narrow window instead of cutting the sentence.
+                wrap: word-wrap;
             }
         }
 
