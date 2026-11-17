@@ -26,7 +26,7 @@ export enum ButtonSize { sm, md, lg }
 export enum BadgeVariant { neutral, primary, success, warning, destructive, outline }
 export enum AlertVariant { info, error, success, warning }
 
-// The latency colour and text rules, shared by LatencyText and Select items.
+// The latency color and text rules, shared by LatencyText and Select items.
 // -1 = untested, 0 = timeout, otherwise milliseconds.
 export global LatencyFormat {
     public pure function latency-color(ms: int) -> color {
@@ -675,7 +675,7 @@ export component Segmented inherits Rectangle {
 
 // --- Badge ------------------------------------------------------------------
 
-// A 20px pill label. Variants tint the background at 15% of their colour.
+// A 20px pill label. Variants tint the background at 15% of their color.
 export component Badge inherits Rectangle {
     in property <string> text;
     in property <BadgeVariant> variant: BadgeVariant.neutral;
@@ -756,7 +756,7 @@ export component Card inherits Rectangle {
 
 // The title block of a Card: a 16px semibold title, an optional 13px muted
 // description 4px below it, and 16px of space under the whole header. Children
-// are placed at the right edge (for example buttons), centred on the title.
+// are placed at the right edge (for example buttons), centered on the title.
 export component CardHeader inherits VerticalLayout {
     in property <string> title;
     in property <string> description;
@@ -813,7 +813,7 @@ export component CardHeader inherits VerticalLayout {
 
 // --- Separator --------------------------------------------------------------
 
-// A 1px line in the border colour. Horizontal by default; `vertical` makes it
+// A 1px line in the border color. Horizontal by default; `vertical` makes it
 // a vertical line that fills the height it is given.
 export component Separator inherits Rectangle {
     in property <bool> vertical: false;
@@ -970,10 +970,10 @@ export component Alert inherits Rectangle {
 
 // --- ConfirmDialog ----------------------------------------------------------
 
-// A modal dialog: 420px, centred over the element it is placed in, with a
+// A modal dialog: 420px, centered over the element it is placed in, with a
 // title, a message and right-aligned buttons. Place it as the last child of an
 // element that fills the area it should cover (its own width and height come
-// from its parent). Call show() and close(); `confirmed` and `cancelled` fire
+// from its parent). Call show() and close(); `confirmed` and `canceled` fire
 // on the buttons. The confirm button is destructive by default.
 export component ConfirmDialog inherits Rectangle {
     in property <string> title;
@@ -983,7 +983,7 @@ export component ConfirmDialog inherits Rectangle {
     in property <ButtonVariant> confirm-variant: ButtonVariant.destructive;
     in property <bool> busy: false;
     callback confirmed();
-    callback cancelled();
+    callback canceled();
 
     private property <length> pad: 20px;
 
@@ -1051,7 +1051,7 @@ export component ConfirmDialog inherits Rectangle {
                         size: ButtonSize.md;
                         clicked => {
                             dlg.close();
-                            root.cancelled();
+                            root.canceled();
                         }
                     }
 
@@ -1072,7 +1072,7 @@ export component ConfirmDialog inherits Rectangle {
 
 // --- EmptyState -------------------------------------------------------------
 
-// A centred block for an empty list: a 40px icon circle, a semibold title, one
+// A centered block for an empty list: a 40px icon circle, a semibold title, one
 // line of muted text and an optional secondary button. Put it inside a Card.
 export component EmptyState inherits Rectangle {
     in property <image> icon;
@@ -1150,7 +1150,7 @@ export component EmptyState inherits Rectangle {
 // --- LatencyText ------------------------------------------------------------
 
 // A latency as text: "—" when untested, "timeout" at 0, otherwise "123 ms",
-// coloured green under 200 ms, amber under 500 ms, red from 500 ms.
+// colored green under 200 ms, amber under 500 ms, red from 500 ms.
 export component LatencyText inherits Text {
     in property <int> ms: -1;
 
@@ -1168,7 +1168,7 @@ export component LatencyText inherits Text {
 
 // The title block at the top of a page: a 20px semibold title and an optional
 // 14px muted description 4px below. Children are the page's actions, placed
-// at the right and centred on the title block. The 24px below the header is
+// at the right and centered on the title block. The 24px below the header is
 // the only gap before the page's first block, so a page must not add spacing
 // of its own after the header.
 //

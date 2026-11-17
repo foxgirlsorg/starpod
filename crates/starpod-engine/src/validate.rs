@@ -31,7 +31,7 @@
 //!
 //! > without a `cache_dir` (runtime rebuilds such as `PUT /configs` or
 //! > `--config-string`) there is no containment root, so a `path:` is never
-//! > honoured: http providers fall back to fetching into memory, file
+//! > honored: http providers fall back to fetching into memory, file
 //! > providers hard-error.
 //!
 //! — `meow-config-0.29.0/src/rule_provider.rs:1699-1741`

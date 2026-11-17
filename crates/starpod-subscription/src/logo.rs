@@ -10,7 +10,7 @@
 //! - At most [`LOGO_MAX_BYTES`] (512 KiB) are read. A larger logo is refused,
 //!   and so is one whose `Content-Length` says it is larger.
 //! - The whole download is bounded by [`LOGO_TIMEOUT`] (10 seconds).
-//! - Only PNG, JPEG and SVG are kept. A format is recognised by its magic
+//! - Only PNG, JPEG and SVG are kept. A format is recognized by its magic
 //!   bytes, or by a supported `Content-Type` when the bytes are not sniffable.
 //! - No `Authorization` header is sent: the logo host is not the subscription.
 
@@ -62,7 +62,7 @@ impl LogoFormat {
     }
 }
 
-/// Recognise a supported image by its leading bytes.
+/// Recognize a supported image by its leading bytes.
 pub fn sniff(bytes: &[u8]) -> Option<LogoFormat> {
     const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
     if bytes.starts_with(&PNG_SIGNATURE) {
@@ -83,7 +83,7 @@ pub fn sniff(bytes: &[u8]) -> Option<LogoFormat> {
 /// A downloaded logo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Logo {
-    /// The recognised format.
+    /// The recognized format.
     pub format: LogoFormat,
     /// The image bytes, at most [`LOGO_MAX_BYTES`].
     pub bytes: Vec<u8>,

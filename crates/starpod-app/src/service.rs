@@ -2702,7 +2702,7 @@ impl AppService {
     /// Validate and reload the candidate, if and only if the engine runs.
     async fn apply_if_running(&mut self, composed: &Composed) -> Result<(), AppError> {
         // A change the engine's configuration does not see (the theme, the
-        // background, the accent colour) leaves the engine alone.
+        // background, the accent color) leaves the engine alone.
         if self.running_config.as_ref() == Some(&composed.config) {
             return Ok(());
         }
@@ -3040,7 +3040,7 @@ impl AppService {
     }
 
     /// Remove every known secret from a piece of text, then any URL or
-    /// keyed credential the generic filter recognises.
+    /// keyed credential the generic filter recognizes.
     fn scrub(&self, text: &str) -> String {
         redact_error(&self.redactor.redact(text))
     }

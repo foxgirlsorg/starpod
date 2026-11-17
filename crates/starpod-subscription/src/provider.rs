@@ -96,7 +96,7 @@ pub struct FetchRequest {
 /// The values are computed by the app, which owns the platform probing. This
 /// crate only puts them on the wire, so it stays free of OS calls. Every value
 /// must be printable ASCII, because an HTTP header cannot carry anything else;
-/// the app sanitises them before they reach here.
+/// the app sanitizes them before they reach here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceHeaders {
     /// `x-hwid`: a stable, anonymous device id.
@@ -235,7 +235,7 @@ impl Default for HttpSubscriptionProvider {
     /// A provider with the default timeout and redirect bound.
     ///
     /// A `reqwest::Client` can only fail to build when the TLS backend
-    /// cannot initialise, which is not a condition a running app can do
+    /// cannot initialize, which is not a condition a running app can do
     /// anything about. Rather than panic, this falls back to a client
     /// with the same settings, and the failure surfaces on the first
     /// fetch as a [`ProviderError::Network`].

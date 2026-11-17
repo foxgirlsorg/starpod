@@ -200,7 +200,7 @@ export component SettingsPage inherits Rectangle {
         @image-url("../assets/backgrounds/eru.png"),
     ];
     private property <[string]> background-labels: [@tr("None"), @tr("Matrix"), @tr("Terrain"), @tr("Map"), @tr("Dots"), "Eru"];
-    // The accent colours offered as swatches. The first is the default.
+    // The accent colors offered as swatches. The first is the default.
     private property <[string]> accent-swatches: ["#de6161", "#e8864a", "#d9a441", "#5bb381", "#3fb5a8", "#5b9be0", "#e06c9f"];
     pure function swatch-color(hex: string) -> color {
         if hex == "#e8864a" { return #e8864a; }
@@ -414,7 +414,7 @@ export component SettingsPage inherits Rectangle {
 
                         ListRow {
                             label: @tr("Home background");
-                            description: @tr("Drawn behind the Home page in the accent colour.");
+                            description: @tr("Drawn behind the Home page in the accent color.");
 
                             HorizontalLayout {
                                 spacing: 8px;
@@ -436,7 +436,7 @@ export component SettingsPage inherits Rectangle {
                                         clip: true;
 
                                         // A still preview of each background, made by
-                                        // tools/render_backgrounds.py, in the accent colour.
+                                        // tools/render_backgrounds.py, in the accent color.
                                         if option != "" : Image {
                                             x: 2px;
                                             y: 2px;
@@ -471,7 +471,7 @@ export component SettingsPage inherits Rectangle {
                         Separator {}
 
                         SettingRow {
-                            label: @tr("Accent colour");
+                            label: @tr("Accent color");
                             description: @tr("Used for the power button, selections and the Starpod mark.");
 
                             VerticalLayout {

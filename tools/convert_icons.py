@@ -7,10 +7,10 @@ Only `<path>` maps directly, so this script rewrites the other three into
 equivalent path commands.
 
 Why not ship the SVGs as image resources? Because an image resource is
-rasterised at build time with a fixed colour. The app needs its icons to
+rasterized at build time with a fixed color. The app needs its icons to
 follow the theme — a muted icon on a dark surface, a brand-red icon when a
 subscription is running — and `Path` takes its `stroke` and `fill` as
-properties, so one component serves every colour.
+properties, so one component serves every color.
 
 The output is a `.slint` file with one component per icon, each `inherits
 Path`. The icon's `commands` are the concatenation of its sub-paths, which

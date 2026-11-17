@@ -165,7 +165,7 @@ fn fill(template: &str, args: &[&str]) -> String {
 /// English source text and its Russian translation.
 const RU: &[(&str, &str)] = &[
     (
-        "The accent colour must be written as #rrggbb, for example #de6161",
+        "The accent color must be written as #rrggbb, for example #de6161",
         "Цвет акцента записывается как #rrggbb, например #de6161",
     ),
     // Why Connect is blocked (snapshot.rs).

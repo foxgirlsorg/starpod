@@ -25,7 +25,7 @@ use crate::error::StoreError;
 ///
 /// `FILE_ALL_ACCESS`, from `Win32::Storage::FileSystem`. The value is
 /// `0x001F01FF`, not `0x003FFFFF`: the latter is the "standard access
-/// rights plus everything" mask, and Windows canonicalises the two down to
+/// rights plus everything" mask, and Windows canonicalizes the two down to
 /// the standard rights, so the value actually stored in the ACE is this one.
 #[cfg(windows)]
 const FILE_ALL_ACCESS: u32 = 0x001F_01FF;
@@ -180,7 +180,7 @@ fn restrict_windows(path: &Path) -> Result<(), StoreError> {
     unsafe { InitializeAcl(acl_ptr, acl_size as u32, ACL_REVISION) }
         .map_err(|e| permission_error(path, &format!("could not initialize the ACL: {e}")))?;
 
-    // SAFETY: the ACL was just initialised with room for one ACE of
+    // SAFETY: the ACL was just initialized with room for one ACE of
     // `ace_size` bytes, and the SID is a live, owned SID.
     unsafe {
         AddAccessAllowedAce(acl_ptr, ACL_REVISION, FILE_ALL_ACCESS, sid)

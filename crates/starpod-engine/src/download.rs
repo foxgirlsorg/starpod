@@ -12,7 +12,7 @@
 //!
 //! A downloaded archive is verified against the checksum the release
 //! publishes, **before** it is extracted. A checksum fetched from the same
-//! host as the archive is not a defence against a compromised host, but it
+//! host as the archive is not a defense against a compromised host, but it
 //! does defend against a corrupted download, a truncated transfer and a
 //! proxy that rewrites the archive — and it costs one request.
 //!

@@ -108,7 +108,7 @@ export component ProfilesPage inherits Rectangle {
             "app-managed");
     }
 
-    // The status badge text and colour for a subscription status.
+    // The status badge text and color for a subscription status.
     pure function status-text(status: string) -> string {
         return status == "syncing" ? @tr("Updating…")
             : status == "error" ? @tr("Update failed")

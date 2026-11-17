@@ -1,13 +1,13 @@
 """Render the Home page background patterns.
 
 Each pattern is a white image whose alpha carries the drawing. The app
-colours it with the accent colour (Slint `colorize`), so one file serves
+colors it with the accent color (Slint `colorize`), so one file serves
 every accent.
 
     matrix.png   columns of falling characters
     topo.png     contour lines of a height field, drawn in ASCII
     map.png      the world's land as a dot grid
-    dots.png     a dot grid that fades out from the centre
+    dots.png     a dot grid that fades out from the center
     thumb-*.png  the Settings previews: what Home shows in a portrait
                  window, scaled down, with the strokes thickened to stay visible
 
@@ -186,11 +186,11 @@ def dot_grid():
     step, radius = 22, 1.6
     alpha = Image.new("L", (SIZE, SIZE), 0)
     draw = ImageDraw.Draw(alpha)
-    centre = SIZE / 2
+    center = SIZE / 2
     for y in range(step // 2, SIZE, step):
         for x in range(step // 2, SIZE, step):
             # Full strength in the middle, gone at the edges.
-            distance = math.hypot(x - centre, y - centre) / centre
+            distance = math.hypot(x - center, y - center) / center
             level = max(0.0, 1 - distance) ** 1.3
             if level < 0.03:
                 continue
@@ -203,7 +203,7 @@ def thumbnails():
 
     The tiles are as small as 60x80 and as wide as 120x80, so the previews
     are 240x200 and the tile crops them. Scaling a one-pixel stroke down
-    leaves a faint grey, so the previews get their alpha raised. The map's
+    leaves a faint gray, so the previews get their alpha raised. The map's
     dots are drawn again at the preview's size: shrinking them makes moire.
     """
     from PIL import ImageFilter

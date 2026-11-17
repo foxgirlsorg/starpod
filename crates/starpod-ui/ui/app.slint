@@ -31,7 +31,7 @@ export { AppTray } from "tray.slint";
 export { Design } from "design.slint";
 
 // One row of the sidebar: 36px, 18px icon, 10px gap, 14px label. Icon and
-// label are placed on the row's centre line, so they share one vertical axis.
+// label are placed on the row's center line, so they share one vertical axis.
 component NavItem inherits Rectangle {
     in property <string> label;
     in property <image> icon;
@@ -80,7 +80,7 @@ component NavItem inherits Rectangle {
     }
 }
 
-// The engine phase as a card at the foot of the sidebar: a coloured dot, a
+// The engine phase as a card at the foot of the sidebar: a colored dot, a
 // title and a second line (uptime when running, otherwise the routing mode).
 component StatusBlock inherits Rectangle {
     in property <string> phase: "stopped";
@@ -266,7 +266,7 @@ export component AppWindow inherits Window {
 
     // Popups read the window size from WindowMetrics (see Select).
     // The std-widgets (TextEdit, ScrollView, ListView scrollbars) take their
-    // colours from this palette. The app is dark only, so they follow it.
+    // colors from this palette. The app is dark only, so they follow it.
     init => {
         Palette.color-scheme = ColorScheme.dark;
         WindowMetrics.width = root.width;
@@ -886,7 +886,7 @@ export component AppWindow inherits Window {
         confirmed => {
             Bridge.confirm-install();
         }
-        cancelled => {
+        canceled => {
             Bridge.cancel-install();
         }
     }

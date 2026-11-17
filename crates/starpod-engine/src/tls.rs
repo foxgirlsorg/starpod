@@ -2,7 +2,7 @@
 //!
 //! On the desktop, reqwest checks certificates with the operating system's
 //! verifier (rustls-platform-verifier). On Android that verifier must be
-//! initialised from Java, and Starpod runs as a NativeActivity with no Java
+//! initialized from Java, and Starpod runs as a NativeActivity with no Java
 //! code, so building a client there would abort. Android keeps its trusted
 //! roots as PEM files, so on Android the clients trust exactly those files
 //! instead: the updatable Conscrypt store, or the system store before it.

@@ -259,9 +259,9 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// `text` without terminal colour codes.
+/// `text` without terminal color codes.
 ///
-/// The engine colours its log when it believes it writes to a terminal, and
+/// The engine colors its log when it believes it writes to a terminal, and
 /// on Windows its hidden console counts as one. The Logs page would show the
 /// codes as text (`[2m…[0m`), so the CSI sequences (`ESC [ … final`) go.
 pub fn strip_ansi(text: &str) -> String {
@@ -291,7 +291,7 @@ pub fn strip_ansi(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn colour_codes_are_removed_from_engine_lines() {
+    fn color_codes_are_removed_from_engine_lines() {
         let line = "\u{1b}[2m2026-11-16T20:54:11Z\u{1b}[0m \u{1b}[33m WARN\u{1b}[0m meow: hi";
         assert_eq!(
             super::strip_ansi(line),

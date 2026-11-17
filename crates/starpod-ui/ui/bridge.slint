@@ -133,7 +133,7 @@ export struct SettingsModel {
     close-to-tray: bool,
     // "" = follow the system locale; "en" or "ru" pin the language
     language: string,
-    // The accent colour as #rrggbb; "" = the Starpod red
+    // The accent color as #rrggbb; "" = the Starpod red
     accent-color: string,
     // The Home background: "" (none), "matrix", "topo", "map", "dots" or "eru"
     home-background: string,
@@ -156,7 +156,7 @@ export struct EngineSettingsModel {
     // one CIDR per line
     tun-route-address: string,
     tun-route-exclude-address: string,
-    // IPv6, latency and connection behaviour
+    // IPv6, latency and connection behavior
     ipv6: int,
     unified-delay: int,
     tcp-concurrent: int,
@@ -253,7 +253,7 @@ export struct MemberItem {
 }
 
 // One row of a Select. `detail` is a right-aligned secondary text, for
-// example a latency; `detail-color` colours it.
+// example a latency; `detail-color` colors it.
 export struct SelectItem {
     text: string,
     detail: string,

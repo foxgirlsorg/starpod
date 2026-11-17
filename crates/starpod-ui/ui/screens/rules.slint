@@ -1,7 +1,7 @@
 // The Rules page (docs/design/ui-spec.md section 5.4).
 //
 // Three tabs: your own rules (editable, with an add row and inline edit), the
-// rules that come with the profiles (read-only, virtualised), and the raw
+// rules that come with the profiles (read-only, virtualized), and the raw
 // text editor. The page holds no business logic: every change goes to a
 // Bridge callback, and Rust validates and pushes the result back through
 // `rules-error` and the rule lists.
@@ -743,7 +743,7 @@ export component RulesPage inherits Rectangle {
                     }
 
                     // ------------------------------------------------------------
-                    // From profiles: read-only and virtualised.
+                    // From profiles: read-only and virtualized.
                     // ------------------------------------------------------------
                     if (root.tab == 1) : Card {
                         vertical-stretch: 1;

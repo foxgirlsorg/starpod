@@ -1304,7 +1304,7 @@ msgstr "Версия {} доступна на GitHub. Установка пер�
 msgid "Back to settings"
 msgstr "Назад к настройкам"
 
-msgid "Accent colour"
+msgid "Accent color"
 msgstr "Цвет акцента"
 
 msgid "Used for the power button, selections and the Starpod mark."
@@ -1313,7 +1313,7 @@ msgstr "Кнопка подключения, выделение и значок 
 msgid "Home background"
 msgstr "Фон главной"
 
-msgid "Drawn behind the Home page in the accent colour."
+msgid "Drawn behind the Home page in the accent color."
 msgstr "Рисуется за главной страницей цветом акцента."
 
 msgid "None"

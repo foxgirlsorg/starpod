@@ -1304,7 +1304,7 @@ msgstr ""
 msgid "Back to settings"
 msgstr ""
 
-msgid "Accent colour"
+msgid "Accent color"
 msgstr ""
 
 msgid "Used for the power button, selections and the Starpod mark."
@@ -1313,7 +1313,7 @@ msgstr ""
 msgid "Home background"
 msgstr ""
 
-msgid "Drawn behind the Home page in the accent colour."
+msgid "Drawn behind the Home page in the accent color."
 msgstr ""
 
 msgid "None"

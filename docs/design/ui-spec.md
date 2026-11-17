@@ -9,13 +9,13 @@ a server picker), nothing else from either.
 
 1. **The first screen answers "am I connected, through what?"** One big button, one line of status,
    one picker. Everything else lives on other pages.
-2. **Colour is for state.** Red `#de6161` marks the primary action and "connected / selected". Green
+2. **Color is for state.** Red `#de6161` marks the primary action and "connected / selected". Green
    only for good latency and the status dot when connected. No other hues except amber/red latency
    and destructive.
 3. **Flat surfaces.** Cards are separated from the ground by one tone step plus a 1px border. No
    shadows except on floating things (select popups, dialogs).
 4. **Everything aligns to one 4px grid.** Icons 16px in controls, 18px in the sidebar, always
-   vertically centred on the text they label.
+   vertically centered on the text they label.
 5. **Plain words.** "Profile" = a subscription. "Server" = a node. "Group" = a proxy group. Never
    "payload", "engine-managed", "P1" on a main surface; technical terms only in Settings and tooltips.
 
@@ -61,21 +61,21 @@ All interactive primitives: `opacity: 0.5` and no hover when disabled; a 2px foc
 - **Button** `variant: primary | secondary | outline | ghost | destructive`, `size: sm (28px, pad 10,
   13px) | md (36px, pad 16, 14px) | lg (44px, pad 24, 15px)`, optional leading `icon` (an `image`
   property holding an SVG; 16px, gap 8px), `busy` (shows a spinning ring instead of the icon),
-  `enabled`. Radius 8. Label weight 500, centred both ways. Width = content unless stretched.
+  `enabled`. Radius 8. Label weight 500, centered both ways. Width = content unless stretched.
   - primary: bg primary → hover primary-hover → pressed primary-pressed, text white.
   - secondary: bg secondary → hover `#323236`, text foreground.
   - outline: transparent, 1px input border → hover bg accent.
   - ghost: transparent → hover bg accent.
   - destructive: bg destructive, white text.
-- **IconButton**: square, same sizes (28/36/44), ghost or outline variant, icon 16px centred, a
+- **IconButton**: square, same sizes (28/36/44), ghost or outline variant, icon 16px centered, a
   `tooltip` string shown after 500 ms hover in a small popover above.
-- **Input**: 36px tall, radius 8, 1px `input` border (ring colour when focused), bg transparent,
-  12px horizontal padding, text 14px vertically centred, placeholder `subtle-foreground`. Optional
+- **Input**: 36px tall, radius 8, 1px `input` border (ring color when focused), bg transparent,
+  12px horizontal padding, text 14px vertically centered, placeholder `subtle-foreground`. Optional
   `label` ABOVE (13px, weight 500, foreground, 8px gap) and `error` BELOW (12px destructive, 6px
   gap) and `hint` below (12px muted) when no error. Optional leading icon (search: 16px at x=12, text
   shifted to x=36). `numeric` flag right-aligns nothing — numbers stay left-aligned like shadcn.
 - **Select**: looks exactly like Input (same border, height, padding), value text left, chevron-down
-  16px vertically centred 12px from the right edge. Click opens a PopupWindow directly under the box
+  16px vertically centered 12px from the right edge. Click opens a PopupWindow directly under the box
   (4px gap), same width as the box (or `popup-min-width`), bg popover, 1px border, radius 8, padding
   4, drop shadow `0 8px 24px #00000080`. Items 32px, radius 6, 8px left padding, hover bg accent,
   the current item shows a 16px check on the right. **Max popup height 320px; longer lists scroll**
@@ -89,46 +89,46 @@ All interactive primitives: `opacity: 0.5` and no hover when disabled; a 2px foc
   muted-foreground. Used for rules tabs, log filter.
 - **Badge**: 20px tall, radius full, padding 8, 12px weight 500. variants: neutral (bg secondary,
   muted-fg text), primary (primary-soft bg, primary text), success, warning, destructive (each its
-  colour at 15% alpha bg + full colour text), outline (1px border).
+  color at 15% alpha bg + full color text), outline (1px border).
 - **Card**: bg card, 1px border, radius 12, padding 20. Optional header: title 16px weight 600 +
   description 13px muted, 4px apart, 16px above the body. Optional header-right slot for actions.
-- **Separator**: 1px `border` colour, horizontal or vertical.
+- **Separator**: 1px `border` color, horizontal or vertical.
 - **Progress**: 6px tall, radius full, track secondary, fill primary (or warning ≥ 80%, destructive
   ≥ 95%).
 - **Alert** (banner): radius 8, 1px border, padding 12/16, leading 16px icon, title 14px 600 + text
   13px; variants info (border `border`, icon muted), error (border destructive 40%, bg destructive
   10%, icon destructive), success. Optional close X (ghost IconButton sm). Long text wraps; capped at
   4 lines with a "Show more" ghost button that expands it.
-- **ConfirmDialog**: modal PopupWindow centred, 420px wide, popover bg, radius 12, padding 24, title
+- **ConfirmDialog**: modal PopupWindow centered, 420px wide, popover bg, radius 12, padding 24, title
   18px 600, body 14px muted, buttons right-aligned (outline Cancel, destructive/primary confirm).
   Used for delete profile, delete rule, clear cache.
-- **EmptyState**: centred column inside its card: 40px icon circle (bg secondary, 20px icon
+- **EmptyState**: centered column inside its card: 40px icon circle (bg secondary, 20px icon
   muted-fg), title 15px 600, one line 13px muted, optional button (secondary, md). 24px padding.
 - **Spinner**: 16px ring, 2px stroke, rotating 800 ms linear infinite.
 - **LatencyText**: `-1` → "—" subtle; `0` → "timeout" destructive; `<200` success; `<500` warning;
   else destructive; format "123 ms", tabular.
 - **PageHeader**: title 20px weight 600 foreground, description 14px muted below (4px), optional
-  actions slot right-aligned and vertically centred on the title block. Bottom margin 24px.
+  actions slot right-aligned and vertically centered on the title block. Bottom margin 24px.
 
 ## 4. Shell (`ui/app.slint`)
 
 - Window: min 900×600, preferred 1100×720. Background `background`.
 - **Sidebar** 220px, bg `sidebar`, 1px right border `border`. Padding 12.
   - Brand row 52px: fox mark 22px in primary + "Starpod" 16px weight 600, 8px gap, vertically
-    centred, 8px left padding.
+    centered, 8px left padding.
   - Nav (12px below brand): items 36px, radius 8, padding-left 10, icon 18px + 10px gap + label 14px
     weight 500. Inactive: icon & label muted-foreground, hover bg `#18181b` + foreground. Active: bg
-    `#1f1f23`, label foreground, icon primary. No coloured fill.
+    `#1f1f23`, label foreground, icon primary. No colored fill.
   - Pages in this order: **Home** (house/power icon), **Profiles** (layers/list icon), **Proxies**
     (server icon), **Rules** (route icon), **Logs** (scroll-text icon), then a flexible spacer, then
     **Settings** (settings icon) at the bottom above the status block.
-  - **Status block** at the bottom: a card-coloured rounded rect (radius 8, padding 10/12): 8px dot
+  - **Status block** at the bottom: a card-colored rounded rect (radius 8, padding 10/12): 8px dot
     (success when running, warning while starting/stopping, destructive when failed, subtle when
     stopped) + "Connected" / "Connecting…" / "Disconnecting…" / "Not connected" / "Failed" 13px 500;
     second line 12px muted: uptime when running ("Up 01:23:45"), otherwise the mode ("Rule mode").
 - **Content area**: scrolls vertically (one ScrollView per page, not the whole shell). Padding 32px
   left/right, 28px top, 32px bottom. Content column max width 920px, left-aligned in the area (Home
-  is the exception: centred). Global error/success banner (Bridge.banner-*) appears as an Alert at
+  is the exception: centered). Global error/success banner (Bridge.banner-*) appears as an Alert at
   the top of the content area, above the page, with a close button.
 - `Bridge.active-page`: 0 Home, 1 Profiles, 2 Proxies, 3 Rules, 4 Logs, 5 Settings.
 
@@ -136,7 +136,7 @@ All interactive primitives: `opacity: 0.5` and no hover when disabled; a 2px foc
 
 ### 5.1 Home (`screens/home.slint`) — only three things
 
-A centred column, width 440px, vertically centred in the content area when it fits (top-aligned
+A centered column, width 440px, vertically centered in the content area when it fits (top-aligned
 with 48px top padding when the window is short; never overlapping).
 
 1. **Announcements** (only when `Bridge.announcements` is non-empty): one Alert-like card per
@@ -144,7 +144,7 @@ with 48px top padding when the window is short; never overlapping).
    megaphone icon in primary, title row = the profile's title (13px 600), text below (14px
    foreground, wraps, up to 6 lines then "Show more"), and if `support-url` or `web-url` is set a
    row of ghost sm buttons "Support" / "Open website" that call `Bridge.open-url(url)`.
-2. **Connect button**: a 168px circle, centred.
+2. **Connect button**: a 168px circle, centered.
    - stopped/failed: bg card, 2px border `input`, power icon 56px muted-foreground; hover border
      primary and icon foreground.
    - starting/stopping: border primary 2px, icon primary, the whole button's icon pulses opacity
@@ -163,9 +163,9 @@ with 48px top padding when the window is short; never overlapping).
 3. **Picker card** (40px below the status, only when `Bridge.groups` is non-empty): Card padding 16,
    two Selects stacked with labels:
    - "Group": every group's name (`Bridge.groups[i].name`); default = `Bridge.primary-group`. The
-     chosen group is local UI state (`home-group` property, initialised from `primary-group`).
+     chosen group is local UI state (`home-group` property, initialized from `primary-group`).
    - "Server": the chosen group's members, each item text = member name, detail = latency text in
-     its latency colour. Value = the group's `selected`. Selecting calls
+     its latency color. Value = the group's `selected`. Selecting calls
      `Bridge.select-member(group, member)`. Disabled (with hint "Chosen automatically") when the
      group kind is not `select`.
    - Under the selects, a ghost sm button with a gauge icon: "Test latency" (`Bridge.test-latency()`,
@@ -229,7 +229,7 @@ Nothing else on Home: no stats, no mode switch, no cards of numbers.
     add-row layout with Save/Cancel), trash.
   - Empty: EmptyState "No rules of your own" / "Profile rules still apply. Add one to override
     them."
-- **From profiles** tab: read-only `ListView` (virtualised; there can be thousands) in a Card,
+- **From profiles** tab: read-only `ListView` (virtualized; there can be thousands) in a Card,
   rows 36px: kind Badge · value · → target. Header line above: "{m} rules from your profiles,
   applied after yours." Error rows show a destructive dot and the error as tooltip text below.
 - **Edit as text** tab: a monospace TextEdit, 13px, min height 360px, bg `muted`, radius 8; under
@@ -241,7 +241,7 @@ Nothing else on Home: no stats, no mode switch, no cards of numbers.
   (tooltip "Copy all"), IconButton outline trash (tooltip "Clear").
 - Segmented filter: All | Info | Warnings | Errors (bound to `log-level-filter`: all/info/warn/error).
 - Card with no padding containing a `ListView`, fills the remaining height (min 400px). Rows: time
-  12px subtle (monospace, 72px), level 12px 600 coloured (INFO muted, WARN warning, ERROR
+  12px subtle (monospace, 72px), level 12px 600 colored (INFO muted, WARN warning, ERROR
   destructive, DEBUG subtle; 52px), source 12px muted (90px, elide), message 13px foreground
   (monospace, wraps). 6px vertical row padding.
 - Empty: EmptyState "No logs yet".
@@ -250,7 +250,7 @@ Nothing else on Home: no stats, no mode switch, no cards of numbers.
 
 - PageHeader "Settings". Sections as Cards with a header title, 16px apart. Inside a card, rows
   separated by Separators; each row min 60px, padding 12/0: left block (label 14px 500 + 13px muted
-  description, 2px gap, wraps) and right control, fixed 220px wide, vertically centred on the row.
+  description, 2px gap, wraps) and right control, fixed 220px wide, vertically centered on the row.
   Switches are right-aligned in that 220px box.
 - **Connection**: Routing (Select: "Rule-based" rule / "Global" global / "Direct" direct; desc "Rule
   -based follows your rules; Global sends everything through the selected server; Direct uses no

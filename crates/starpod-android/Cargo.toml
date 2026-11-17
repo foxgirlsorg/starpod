@@ -21,7 +21,7 @@ starpod-app = { workspace = true }
 starpod-store = { workspace = true }
 starpod-engine = { workspace = true }
 slint = { workspace = true, features = ["backend-android-activity-06"] }
-# Slint's Android backend needs the activity flavour chosen here: NativeActivity,
+# Slint's Android backend needs the activity flavor chosen here: NativeActivity,
 # which needs no Java code in the APK.
 android-activity = { version = "0.6", features = ["native-activity"] }
 tokio = { workspace = true }

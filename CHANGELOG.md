@@ -20,7 +20,7 @@ All notable changes to Starpod are recorded here. The format follows
 - One subscription is in use at a time, and only its announcements show.
 - The window is portrait. Navigation is a drawer behind the menu button.
 - Home pins the profile card and news to the top and the server picker to the
-  bottom, with the connect button centred between them.
+  bottom, with the connect button centered between them.
 - Proxies: the routing mode and switches share one row; groups start collapsed
   and remember the ones you open; Expand all and Collapse all are gone.
 - Settings opens on a list of its sections with icons; each section has a back

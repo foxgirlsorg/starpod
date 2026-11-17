@@ -6,7 +6,7 @@
 //!
 //! The point of these tests is the part the mock provider cannot check:
 //! that the header actually arrives, that a `401` is reported as
-//! *unauthorised* rather than as a generic status, and that the
+//! *unauthorized* rather than as a generic status, and that the
 //! `Authorization` header is sent when one was asked for.
 
 use starpod_subscription::error::ProviderError;
@@ -146,7 +146,7 @@ async fn a_url_carrying_a_token_is_fetched_verbatim() {
 }
 
 #[tokio::test]
-async fn a_401_is_reported_as_unauthorised() {
+async fn a_401_is_reported_as_unauthorized() {
     let server = MockServer::start().await;
     Mock::given(path("/sub"))
         .respond_with(ResponseTemplate::new(401))
@@ -170,7 +170,7 @@ async fn a_401_is_reported_as_unauthorised() {
 }
 
 #[tokio::test]
-async fn a_403_is_reported_as_unauthorised() {
+async fn a_403_is_reported_as_unauthorized() {
     let server = MockServer::start().await;
     Mock::given(path("/sub"))
         .respond_with(ResponseTemplate::new(403))

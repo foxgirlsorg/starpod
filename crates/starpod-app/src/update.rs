@@ -803,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn a_store_or_package_manager_install_is_recognised() {
+    fn a_store_or_package_manager_install_is_recognized() {
         let cases = [
             (
                 r"C:\Users\a\scoop\apps\starpod\current\starpod.exe",

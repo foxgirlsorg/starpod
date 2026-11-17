@@ -117,7 +117,7 @@ public class MainActivity extends NativeActivity {
             } else if (status == PackageInstaller.STATUS_SUCCESS) {
                 // Android installed the update and restarts the app; nothing to report.
             } else if (status == PackageInstaller.STATUS_FAILURE_ABORTED) {
-                updateFailed("The update was cancelled");
+                updateFailed("The update was canceled");
             } else if (status == PackageInstaller.STATUS_FAILURE_CONFLICT
                     || status == PackageInstaller.STATUS_FAILURE_INCOMPATIBLE) {
                 updateFailed("Android did not install the update: it is not signed like the installed Starpod");

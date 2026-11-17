@@ -177,9 +177,9 @@ export component HomePage inherits Rectangle {
             vertical-stretch: 1;
             alignment: center;
 
-            // The 440px column, centred in the page, in three parts: the
+            // The 440px column, centered in the page, in three parts: the
             // profile card and the news at the top, the server picker at the
-            // bottom, and the connect button with its status centred in the
+            // bottom, and the connect button with its status centered in the
             // space between. A short window scrolls instead of squeezing it.
             stack := VerticalLayout {
                 horizontal-stretch: 0;
@@ -428,7 +428,7 @@ export component HomePage inherits Rectangle {
                     }
 
                     // The spinning arc while starting or stopping: a 100-degree
-                    // arc, 3px wide, centred on the button's 148px ring. The
+                    // arc, 3px wide, centered on the button's 148px ring. The
                     // arc is drawn at the top and the wrapper turns it once a
                     // second. It fades out over 200ms once connected, so it
                     // does not vanish abruptly.
@@ -441,7 +441,7 @@ export component HomePage inherits Rectangle {
                         transform-rotation: root.transitioning ? mod(animation-tick() / 1s, 1) * 360deg : 0deg;
                         animate opacity { duration: 200ms; }
 
-                        // Stroke centred 1.5px in from the edge, so it stays inside the 148px box.
+                        // Stroke centered 1.5px in from the edge, so it stays inside the 148px box.
                         Path {
                             commands: "M 74 1.5 A 72.5 72.5 0 0 1 145.4 86.6";
                             fill: transparent;

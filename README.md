@@ -34,7 +34,7 @@ The engine is [meow-rs](https://github.com/meow-rs/meow-rs) v0.29.0. It is downl
 - **Safe state handling**: corrupt state files are moved aside, never deleted, and Starpod starts from defaults.
 - **Over-the-air updates** from GitHub Releases, checked against the release checksum.
 
-Full behaviour, limits and edge cases are in the [user guide](docs/USER_GUIDE.md).
+Full behavior, limits and edge cases are in the [user guide](docs/USER_GUIDE.md).
 
 ## How it works
 

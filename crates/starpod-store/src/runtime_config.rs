@@ -29,7 +29,7 @@
 //! The engine's configuration type is `meow_config::raw::RawConfig`, which
 //! is `#[serde(rename_all = "kebab-case")]` (`meow-config-0.29.0/src/raw.rs:183-184`)
 //! and has **no `deny_unknown_fields`**. The app's own domain types use
-//! snake_case field names, so serialising them directly would emit
+//! snake_case field names, so serializing them directly would emit
 //! `mixed_port`, `allow_lan`, `log_level`, `proxy_groups` — **none of which
 //! the engine reads**.
 //!
@@ -88,7 +88,7 @@ pub struct WrittenConfig {
 /// permissions.
 ///
 /// The YAML is written verbatim: the caller has already produced it, and
-/// re-serialising it here would risk changing the bytes the engine is about
+/// re-serializing it here would risk changing the bytes the engine is about
 /// to validate. ARCHITECTURE §1.3 is explicit that the app writes the YAML to
 /// disk and then hands the *path* to the engine, so that `meow -t` validates
 /// the exact same bytes that will be loaded.

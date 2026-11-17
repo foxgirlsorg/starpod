@@ -15,7 +15,7 @@ env:
   CARGO_TERM_COLOR: always
 
 # Cancel superseded runs for the same branch or pull request. Tag builds are
-# never cancelled, so a release run always finishes.
+# never canceled, so a release run always finishes.
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}

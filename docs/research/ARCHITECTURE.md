@@ -203,8 +203,8 @@ validates targets itself before applying a configuration — see §3.4 ③ Layer
 
 2. **Logic rules** — `AND,((RULE1),(RULE2)),TARGET`, `OR,(...)`, `NOT,(...)`. The parser detects
    `AND`/`OR`/`NOT` **before** the naive comma split, because their payloads contain
-   parenthesised sub-rules whose commas would otherwise be split incorrectly. Sub-rules are
-   parenthesised; nesting is bounded by `MAX_LOGIC_DEPTH` (64).
+   parenthesized sub-rules whose commas would otherwise be split incorrectly. Sub-rules are
+   parenthesized; nesting is bounded by `MAX_LOGIC_DEPTH` (64).
 
    > **An inner rule has no target — this is the sharpest detail in the whole grammar, and it was
    > wrong in an earlier draft of this document.** Inside a logic group the engine splices a
@@ -226,12 +226,12 @@ validates targets itself before applying a configuration — see §3.4 ③ Layer
    > final leg), and rejects a `DOMAIN-REGEX` inner payload containing a comma (the naive split
    > would truncate it).
 
-3. **`RULE-SET,<provider>,<target>[,flags]`** — **two fields after the type, and the behaviour is
-   NOT in the rule line.** The behaviour (`domain` | `ipcidr` | `classical`) comes from the
+3. **`RULE-SET,<provider>,<target>[,flags]`** — **two fields after the type, and the behavior is
+   NOT in the rule line.** The behavior (`domain` | `ipcidr` | `classical`) comes from the
    *rule-provider's* own definition (`RawRuleProvider.behavior`, `raw.rs:722`), not from the rule.
    The rule line names the provider and the target. An unknown provider is a hard error:
    `"unknown rule-provider '{name}'"`. The parser warns when `src` is applied to a
-   `domain`-behaviour provider, where it has no effect.
+   `domain`-behavior provider, where it has no effect.
 
    > **Correction to an earlier draft of this document**, which described the payload as
    > `RULE-SET,<provider>,<behavior>,<target>`. That is wrong, and it would have produced a
@@ -375,7 +375,7 @@ Verified against the vendored `slint-1.18.1` / `i-slint-core-1.18.1` source:
 - `slint::spawn_local` (`slint/lib.rs:355`) — spawn onto the Slint event loop.
 - `VecModel` / `ModelRc` (`i-slint-core/model.rs:506-660`).
 - **tokio interop:** tokio futures need an `async_compat::Compat` wrapper when driven from the
-  Slint thread; `#[tokio::main]` is discouraged in favour of `tokio::task::block_in_place(slint::run_event_loop)`.
+  Slint thread; `#[tokio::main]` is discouraged in favor of `tokio::task::block_in_place(slint::run_event_loop)`.
 - `slint::BackendSelector` for backend choice.
 
 ### 1.11 foxgirls design tokens
@@ -556,7 +556,7 @@ struct FetchResponse {
 ```
 
 Implementations:
-- `HttpSubscriptionProvider` — plain HTTPS GET, follows redirects (bounded), honours the
+- `HttpSubscriptionProvider` — plain HTTPS GET, follows redirects (bounded), honors the
   `subscription-userinfo` header, applies size limits and a timeout.
 - `LocalFileProvider` — reads a YAML file from disk (for testing and for users with a local
   profile).
@@ -627,7 +627,7 @@ bytes → sniff format → YAML parse → shape check → per-entry validation �
 
 - **Sniff:** if the body parses as YAML with a `proxies:` or `proxy-groups:` key → YAML path.
   Otherwise if it base64-decodes to something that then parses as YAML → base64-wrapped YAML
-  (a very common panel behaviour). Otherwise → reject with a clear error.
+  (a very common panel behavior). Otherwise → reject with a clear error.
 - **Validation** (untrusted input, GOAL.md §6): every node is checked for a known protocol, a
   non-empty server, a port in 1..=65535, a name that does not collide with another node, and
   required credential fields present. Invalid nodes are **skipped and counted**, not fatal — but
@@ -686,7 +686,7 @@ warns about. Two types make the distinction unrepresentable rather than merely d
   `RuleType::as_str`**, so an unsupported kind cannot be constructed.
 - `RuleTarget` → the built-in outbound's name, or the resolved display name of a node/group.
 - Flags → `,no-resolve` / `,src`, appended only when set, and `src` implies `no-resolve`.
-- `And`/`Or`/`Not` → `AND,((R1),(R2)),TARGET` with nested parenthesisation, where each `Ri` is an
+- `And`/`Or`/`Not` → `AND,((R1),(R2)),TARGET` with nested parenthesization, where each `Ri` is an
   **inner** rule and therefore carries no target.
 
 **Round-trip guarantee:** the translator emits only strings meow's parser accepts, and the app
@@ -1001,7 +1001,7 @@ can fix, and it is recorded here rather than papered over.
 `meow.exe -t -f <candidate.yaml>` exits 0 on success and non-zero with a message on failure.
 This is the app's **authoritative** pre-apply validation and it uses the engine's own parser, so
 there is no second grammar to keep in sync. The app surfaces the engine's stderr to the Logs
-screen and a summarised form in the UI.
+screen and a summarized form in the UI.
 
 **Cost:** one process spawn per validation. For an interactive edit that is noticeable, so the app
 validates on a debounce (~400 ms) rather than on every keystroke, and the UI shows an inline
@@ -1222,7 +1222,7 @@ by accident.
 A hand-written Slint component library mirroring the foxgirls tokens 1:1:
 
 ```
-ui/theme.slint      — all colour/typography/spacing tokens as global singletons
+ui/theme.slint      — all color/typography/spacing tokens as global singletons
 ui/primitives.slint — AppButton, AppInput, AppSelect, AppSwitch, AppBadge,
                       AppCard, AppSeparator, AppIcon, AppStatusDot, AppSpinner
 ui/icons/           — ~20 Lucide-derived glyphs as vector Path geometry
@@ -1243,8 +1243,8 @@ ui/layout.slint     — AppShell (sidebar + content), SectionHeader, EmptyState,
   Slint `Path` geometry (or `svg` image resources). ~20 icons suffice:
   dashboard, servers, rules, settings, logs, refresh, power, chevrons, check, x, alert,
   globe, search, plus, trash, edit, lock.
-- **The logo:** the foxgirls fox-head mark is a pure vector (two SVG paths, single colour). It is
-  recreated as Slint `Path`/`PathLayout` geometry, rendered in `#de6161`, so it recolours with the
+- **The logo:** the foxgirls fox-head mark is a pure vector (two SVG paths, single color). It is
+  recreated as Slint `Path`/`PathLayout` geometry, rendered in `#de6161`, so it recolors with the
   theme.
 
 ### 6.2 The five screens
@@ -1321,7 +1321,7 @@ export component AppTray inherits SystemTrayIcon {
 }
 ```
 
-Its documented API (`icon`, `tooltip`, `title`, `visible`, `clicked`) and its behaviour are
+Its documented API (`icon`, `tooltip`, `title`, `visible`, `clicked`) and its behavior are
 exactly what this design needs:
 
 - **A visible `SystemTrayIcon` keeps the Slint event loop alive on its own**, exactly like a
@@ -1353,7 +1353,7 @@ hypothetical one.
 
 **The tray is not available on every environment** — a Linux desktop without a StatusNotifier host
 has no tray. The app must degrade gracefully: if the tray cannot be created, closing the window
-**stops the engine and exits** (the old behaviour), and the app says so once, at startup. This is
+**stops the engine and exits** (the old behavior), and the app says so once, at startup. This is
 a real cross-platform hazard, not a hypothetical one.
 
 **Autostart at login** is *not* in v1 (it was not among the user's decisions), but the Settings
@@ -1413,7 +1413,7 @@ GOAL.md §7. Every layer is testable without network or engine.
 | `starpod-subscription` | **parsing/validation** | fixtures: valid YAML, base64-wrapped YAML, malformed YAML, wrong shape, empty, oversized, duplicate names, invalid port, unknown protocol |
 | `starpod-subscription` | **network failure & expiry** | a mock provider (trait impl returning canned responses) — 401, 404, 500, timeout, connection reset, missing `subscription-userinfo`, expired `expire` |
 | `starpod-subscription` | **both modes** | app-managed: the quota header is surfaced; engine-managed: the quota column is absent, not zero — an assertion that the UI model has no quota field for that row |
-| `starpod-subscription` | **cache behaviour** | last-valid cache kept on failure; expired subscription detected from `expire` |
+| `starpod-subscription` | **cache behavior** | last-valid cache kept on failure; expired subscription detected from `expire` |
 | `starpod-store` | **persistence & migrations** | round-trip, corrupt file → warning + default, missing file, schema upgrade path, secret separation |
 | `starpod-engine` | **release download/verify** | a local fixture server; **sha256 mismatch → fail closed**; archive-with-top-level-dir layout; **`wintun.dll` ends up beside `meow.exe`** (the TUN prerequisite) |
 | `starpod-engine` | **REST client** | a mock HTTP server (e.g. `wiremock`) for 401/400/404/500 and the `PUT /configs` body shapes |
@@ -1469,7 +1469,7 @@ of the command construction and by manual verification. This is the honest limit
 | R10 | **Windows rename-over-existing** for atomic writes and for the engine binary swap. | Low | Use `ReplaceFileW` via the `windows` crate; or write-new-then-`MoveFileExW(MOVEFILE_REPLACE_EXISTING)`. |
 | R11 | **Engine-managed subscriptions lose the quota/expiry header.** | Medium — a visible gap in the Servers screen. | The UI shows "managed by the engine" in place of the quota bar rather than a zero or a guess. The Servers screen never displays a number the app does not have. |
 | R12 | **Engine-managed subscriptions can shadow a user node, and meow does not restore it.** | Medium — silent data loss | Detected by snapshotting the user's node names across refreshes (§4.6), reported on the Servers screen, with an offer to convert the subscription to app-managed mode. |
-| R13 | **Two subscription modes means two code paths that can drift.** | Medium | Both modes funnel into the *same* `SubscriptionPayload` → `NormalizedConfig` → YAML pipeline; only the *fetch* differs. The difference in observable behaviour (quota present/absent, rule order, payload format) is confined to one module and documented in §3.2.1's table, which is used as the test matrix. |
+| R13 | **Two subscription modes means two code paths that can drift.** | Medium | Both modes funnel into the *same* `SubscriptionPayload` → `NormalizedConfig` → YAML pipeline; only the *fetch* differs. The difference in observable behavior (quota present/absent, rule order, payload format) is confined to one module and documented in §3.2.1's table, which is used as the test matrix. |
 | R14 | **The tray may be unavailable** (Linux without a StatusNotifier host). | Low–medium | The app degrades gracefully: closing the window then stops the engine and exits, and the app says so once at startup. §6.4. |
 | R15 | **The app can be killed and orphan the engine.** | Medium — a leaked proxy process after a crash | Ownership marker + adoption on next start, plus a panic hook that stops the child before exit. §6.4. |
 

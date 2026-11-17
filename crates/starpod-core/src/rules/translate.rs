@@ -94,7 +94,7 @@ pub fn translate_inner(rule: &InnerRule) -> String {
     }
 }
 
-/// Write a logic group's parenthesised body: `((sub),(sub))`.
+/// Write a logic group's parenthesized body: `((sub),(sub))`.
 fn translate_group(sub_rules: &[InnerRule], out: &mut String) {
     out.push('(');
     for (i, sub) in sub_rules.iter().enumerate() {
@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn a_logic_rule_translates_to_the_parenthesised_group_form() {
+    fn a_logic_rule_translates_to_the_parenthesized_group_form() {
         let rule = RuleSpec::Logic {
             kind: LogicKind::And,
             sub_rules: vec![

@@ -263,7 +263,7 @@ Each archive holds one folder named after the artifact. The folder contains the 
 - **When it runs:** pushes to `main`, pull requests, tags matching `v*`, and manual runs (`workflow_dispatch`). Every run uploads its archives and checksums as workflow artifacts, kept for 14 days.
 - **How it builds:** `cargo build --release --locked -p starpod-app --target <triple>` with Rust 1.92.0. `--locked` fails the build if `Cargo.lock` is out of date. The Linux packages from section 2.1 are installed on the Linux job. The build job does not run tests, clippy or fmt; `ci.yml` does that.
 - **Why Ubuntu 22.04:** the Linux binary links against the glibc of the build machine, so the older image produces a binary that runs on more distributions.
-- **Concurrency:** a newer run on the same branch or pull request cancels the older one. Tag runs are never cancelled.
+- **Concurrency:** a newer run on the same branch or pull request cancels the older one. Tag runs are never canceled.
 - **Permissions:** the workflow defaults to `contents: read`. Only the release job has `contents: write`.
 
 **Cutting a release**

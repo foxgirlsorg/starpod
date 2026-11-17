@@ -281,7 +281,7 @@ pub fn latency_text(ms: i32) -> String {
     }
 }
 
-/// A latency's colour: grey untested, red timed out, green under 200 ms,
+/// A latency's color: gray untested, red timed out, green under 200 ms,
 /// amber under 500 ms, red from 500 ms.
 pub fn latency_color(ms: i32) -> Color {
     match ms {
@@ -825,7 +825,7 @@ pub struct SettingsInput {
     pub close_to_tray: bool,
     /// The saved language: `""` follows the system, `"en"` or `"ru"` pins it.
     pub language: String,
-    /// The accent colour typed or picked: `#rrggbb`, or `""` for the default.
+    /// The accent color typed or picked: `#rrggbb`, or `""` for the default.
     pub accent_color: String,
     /// The Home background picked, `""` for none.
     pub home_background: String,
@@ -864,9 +864,9 @@ impl SettingsInput {
     }
 }
 
-/// The saved accent colour for a form value: `#rrggbb` in lower case, or
+/// The saved accent color for a form value: `#rrggbb` in lower case, or
 /// `""` for the default. The `#` is optional and `#rgb` is widened. The
-/// default colour itself is saved as `""`, so a later change of the default
+/// default color itself is saved as `""`, so a later change of the default
 /// reaches users who never picked one.
 pub fn normalize_accent_color(text: &str) -> Result<String, AppError> {
     let hex = text.trim().trim_start_matches('#').to_ascii_lowercase();
@@ -878,13 +878,13 @@ pub fn normalize_accent_color(text: &str) -> Result<String, AppError> {
         6 => hex,
         _ => {
             return Err(invalid(crate::i18n::t(
-                "The accent colour must be written as #rrggbb, for example #de6161",
+                "The accent color must be written as #rrggbb, for example #de6161",
             )));
         }
     };
     if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(invalid(crate::i18n::t(
-            "The accent colour must be written as #rrggbb, for example #de6161",
+            "The accent color must be written as #rrggbb, for example #de6161",
         )));
     }
     let color = format!("#{hex}");
@@ -895,7 +895,7 @@ pub fn normalize_accent_color(text: &str) -> Result<String, AppError> {
     })
 }
 
-/// The accent colour as a Slint colour. Anything unreadable is the default.
+/// The accent color as a Slint color. Anything unreadable is the default.
 pub fn accent_slint_color(text: &str) -> slint::Color {
     let hex = text.trim_start_matches('#');
     let parsed = (hex.len() == 6)

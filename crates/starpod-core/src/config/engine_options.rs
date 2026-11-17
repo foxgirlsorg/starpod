@@ -28,7 +28,7 @@ const MAX_DELAY_TIMEOUT_MS: u32 = 60_000;
 /// The fewest log lines the app may keep.
 const MIN_LOG_RETENTION: u32 = 100;
 /// The most log lines the app may keep. The engine's log buffer holds this
-/// many, so a larger setting could not be honoured.
+/// many, so a larger setting could not be honored.
 const MAX_LOG_RETENTION: u32 = 2_000;
 /// The longest keep-alive interval, in seconds (one day).
 const MAX_KEEP_ALIVE_SECS: u32 = 86_400;
@@ -501,7 +501,7 @@ mod tests {
             dns.extra.get("fake-ip-filter-mode"),
             Some(&serde_json::Value::String("blacklist".to_string()))
         );
-        let back = serde_json::to_value(&dns).expect("serialises");
+        let back = serde_json::to_value(&dns).expect("serializes");
         assert_eq!(back["fake-ip-filter-mode"], "blacklist");
     }
 
