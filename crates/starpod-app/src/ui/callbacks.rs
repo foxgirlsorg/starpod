@@ -249,7 +249,12 @@ fn wire_servers(bridge: &Bridge<'_>, ctx: &Ctx) {
             &c,
             "Switching the subscription…",
             Sink::Banner,
-            move |s| async move { s.lock().await.set_active_subscription(&id).await },
+            move |s| async move {
+                let mut svc = s.lock().await;
+                svc.set_active_subscription(&id).await?;
+                ping_profile(&mut svc).await;
+                Ok(())
+            },
         );
     });
 
@@ -397,7 +402,17 @@ async fn add_subscription_flow(
     if mode == starpod_core::SubscriptionMode::AppManaged {
         svc.refresh_subscription(&id).await?;
     }
+    ping_profile(&mut svc).await;
     Ok(())
+}
+
+/// Test every server of the profile in use once, so a new or newly chosen
+/// profile shows its latencies without the user asking. A failed test is
+/// logged, not reported: the change itself worked.
+async fn ping_profile(svc: &mut AppService) {
+    if let Err(error) = svc.test_latency().await {
+        warn!(%error, "the latency test after a profile change failed");
+    }
 }
 
 fn wire_rules(bridge: &Bridge<'_>, ctx: &Ctx) {
