@@ -4,6 +4,17 @@ All notable changes to Starpod are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-11-17
+
+### Changed
+
+- The engine follows its newest release. A first install takes the newest
+  engine on the chosen channel, and at start Starpod installs a newer one when
+  it is out, reconnecting if the proxy was on. When the release list cannot be
+  read, a first install falls back to meow 0.29.0.
+- The Android APK packs the newest stable engine at build time, and reports
+  that version.
+
 ## [1.0.0] - 2026-11-17
 
 ### Added

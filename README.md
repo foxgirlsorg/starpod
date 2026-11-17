@@ -7,7 +7,7 @@
 **A proxy client for desktop and Android, built on the meow-rs engine.**
 
 [![Website](https://img.shields.io/badge/Website-foxgirls.org-de6161?style=flat-square)](https://foxgirls.org)
-[![Release](https://img.shields.io/badge/Release-1.0.0-de6161?style=flat-square)](https://github.com/foxgirlsorg/starpod/releases)
+[![Release](https://img.shields.io/badge/Release-1.1.0-de6161?style=flat-square)](https://github.com/foxgirlsorg/starpod/releases)
 [![Rust](https://img.shields.io/badge/Rust-1.92-de6161?style=flat-square&logo=rust&logoColor=white)](rust-toolchain.toml)
 [![License](https://img.shields.io/badge/License-MIT-de6161?style=flat-square)](LICENSE)
 
