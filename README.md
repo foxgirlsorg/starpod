@@ -57,13 +57,15 @@ Other targets named in the engine download table (Linux and Windows arm64, macOS
 
 ## Download
 
-Release archives are on the [GitHub Releases](https://github.com/foxgirlsorg/starpod/releases) page:
+Builds are on the [GitHub Releases](https://github.com/foxgirlsorg/starpod/releases) page, as an installer or a portable archive:
 
-- `starpod-windows-x86_64.zip`
-- `starpod-linux-x86_64.tar.gz`
-- `starpod-macos-aarch64.tar.gz`
+| Platform | Installer | Portable |
+|---|---|---|
+| Windows x86_64 | `starpod-windows-x86_64-setup.exe` | `starpod-windows-x86_64-portable.zip` |
+| Linux x86_64 | `starpod-linux-x86_64-setup.deb` | `starpod-linux-x86_64-portable.tar.gz` |
+| macOS Apple silicon | `starpod-macos-aarch64-setup.dmg` | `starpod-macos-aarch64-portable.tar.gz` |
 
-Each archive has a `.sha256` checksum. The archives are unsigned and there is no installer yet. Autostart is implemented; TUN elevation and some platform paths have not been run on real machines. See the [known limitations](docs/DEVELOPMENT.md#5-known-limitations-and-remaining-work).
+Each file has a `.sha256` checksum. The Windows installer installs for the current user and needs no administrator rights. The portable archives run from any folder, and the built-in updater keeps them current. Nothing is code-signed yet, so Windows SmartScreen and macOS Gatekeeper warn on first launch. TUN elevation and some platform paths have not been run on real machines. See the [known limitations](docs/DEVELOPMENT.md#5-known-limitations-and-remaining-work).
 
 On first run, install the engine from the Dashboard or Settings screen.
 

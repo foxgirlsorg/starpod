@@ -254,11 +254,11 @@ CI does not run the ignored real-engine test, does not build a release, and does
 
 | Artifact | Runner | Target |
 |---|---|---|
-| `starpod-windows-x86_64.zip` | `windows-latest` | `x86_64-pc-windows-msvc` |
-| `starpod-linux-x86_64.tar.gz` | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` |
-| `starpod-macos-aarch64.tar.gz` | `macos-14` | `aarch64-apple-darwin` |
+| `starpod-windows-x86_64-portable.zip`, `-setup.exe` | `windows-latest` | `x86_64-pc-windows-msvc` |
+| `starpod-linux-x86_64-portable.tar.gz`, `-setup.deb` | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` |
+| `starpod-macos-aarch64-portable.tar.gz`, `-setup.dmg` | `macos-14` | `aarch64-apple-darwin` |
 
-Each archive holds one folder named after the artifact. The folder contains the binary (`starpod.exe` on Windows), `README.md`, and any license file present in the repository (`LICENSE*`, and `crates/starpod-app/assets/TWEMOJI-LICENSE.txt` once it is committed). Each archive has a `.sha256` file next to it, produced with `sha256sum` (or `shasum -a 256` on macOS).
+Each archive holds one folder named after the artifact. The folder contains the binary (`starpod.exe` on Windows), `README.md`, and any license file present in the repository (`LICENSE*`, and `crates/starpod-app/assets/TWEMOJI-LICENSE.txt` once it is committed). Each job also builds an installer from `packaging/`: an Inno Setup per-user installer on Windows (`packaging/windows/starpod.iss`), a `.deb` built with `dpkg-deb` on Linux (`packaging/linux/starpod.desktop`), and an unsigned `Starpod.app` in a `.dmg` on macOS (`packaging/macos/Info.plist`). The updater only ever downloads the portable archive. Each file has a `.sha256` file next to it, produced with `sha256sum` (or `shasum -a 256` on macOS).
 
 - **When it runs:** pushes to `main`, pull requests, tags matching `v*`, and manual runs (`workflow_dispatch`). Every run uploads its archives and checksums as workflow artifacts, kept for 14 days.
 - **How it builds:** `cargo build --release --locked -p starpod-app --target <triple>` with Rust 1.92.0. `--locked` fails the build if `Cargo.lock` is out of date. The Linux packages from section 2.1 are installed on the Linux job. The build job does not run tests, clippy or fmt; `ci.yml` does that.

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Starpod
+Comment=Desktop proxy client
+Exec=/usr/bin/starpod
+Icon=starpod
+Terminal=false
+Categories=Network;
+StartupWMClass=starpod

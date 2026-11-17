@@ -125,18 +125,36 @@ pub async fn fetch_latest_release() -> Result<Release, String> {
 
 // ----- the over-the-air install -----------------------------------------------
 
-/// The archive `build.yml` publishes for this platform, or `None` where no
+/// The archives `build.yml` publishes for this platform, as `(portable,
+/// legacy)`: the portable archive the update installs from, and the name
+/// releases up to 0.0.3 used, before `-portable` was added. `None` where no
 /// build is published.
-pub fn archive_name() -> Option<&'static str> {
+fn platform_archives() -> Option<(&'static str, &'static str)> {
     if cfg!(all(windows, target_arch = "x86_64")) {
-        Some("starpod-windows-x86_64.zip")
+        Some((
+            "starpod-windows-x86_64-portable.zip",
+            "starpod-windows-x86_64.zip",
+        ))
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        Some("starpod-linux-x86_64.tar.gz")
+        Some((
+            "starpod-linux-x86_64-portable.tar.gz",
+            "starpod-linux-x86_64.tar.gz",
+        ))
     } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        Some("starpod-macos-aarch64.tar.gz")
+        Some((
+            "starpod-macos-aarch64-portable.tar.gz",
+            "starpod-macos-aarch64.tar.gz",
+        ))
     } else {
         None
     }
+}
+
+/// The portable archive `build.yml` publishes for this platform, or `None`
+/// where no build is published. The installers (`-setup`) are never used
+/// for an update.
+pub fn archive_name() -> Option<&'static str> {
+    platform_archives().map(|(portable, _)| portable)
 }
 
 /// The app binary's file name inside the archive.
@@ -165,6 +183,18 @@ pub fn pick_assets<'a>(
             "release {} has no checksum for {archive}, so it cannot be checked",
             release.version
         )),
+    }
+}
+
+/// The platform's archive and its checksum, from the release. The portable
+/// name is preferred; a release that predates `-portable` is taken by its
+/// legacy name. If neither is there, the error names the portable archive.
+pub fn pick_platform_assets(release: &Release) -> Result<(&ReleaseAsset, &ReleaseAsset), String> {
+    let (portable, legacy) = platform_archives()
+        .ok_or_else(|| "no Starpod build is published for this computer".to_string())?;
+    match pick_assets(release, portable) {
+        Ok(pair) => Ok(pair),
+        Err(error) => pick_assets(release, legacy).map_err(|_| error),
     }
 }
 
@@ -300,8 +330,8 @@ pub async fn download_update(
     staging: &Path,
     progress: impl Fn(u8) + Send + Sync,
 ) -> Result<PathBuf, String> {
-    let archive = archive_name().ok_or("no Starpod build is published for this computer")?;
-    let (archive_asset, checksum_asset) = pick_assets(release, archive)?;
+    let (archive_asset, checksum_asset) = pick_platform_assets(release)?;
+    let archive = archive_asset.name.as_str();
     let client = reqwest::Client::builder()
         .timeout(DOWNLOAD_TIMEOUT)
         .build()
@@ -410,6 +440,35 @@ mod tests {
     }
 
     #[test]
+    fn the_portable_archive_is_chosen_over_installers_and_legacy_names() {
+        let (portable, legacy) = platform_archives().expect("a published platform");
+        let setup = "starpod-x86_64-setup.exe";
+        let with = |names: &[&str]| {
+            let mut all: Vec<String> = Vec::new();
+            for name in names {
+                all.push(name.to_string());
+                all.push(format!("{name}.sha256"));
+            }
+            let refs: Vec<&str> = all.iter().map(String::as_str).collect();
+            release_with(&refs)
+        };
+
+        // The portable archive wins even when the legacy one is also there.
+        let both = with(&[legacy, portable, setup]);
+        let (archive, checksum) = pick_platform_assets(&both).unwrap();
+        assert_eq!(archive.name, portable);
+        assert_eq!(checksum.name, format!("{portable}.sha256"));
+
+        // A release from before `-portable` is still installed from its name.
+        let old = with(&[legacy]);
+        assert_eq!(pick_platform_assets(&old).unwrap().0.name, legacy);
+
+        // An installer alone is never an update.
+        let installer_only = with(&[setup]);
+        assert!(pick_platform_assets(&installer_only).is_err());
+    }
+
+    #[test]
     fn a_checksum_line_gives_its_hash() {
         let hash = "a".repeat(64);
         assert_eq!(parse_checksum(&format!("{hash}  starpod.zip\n")), Ok(hash));
@@ -490,6 +549,7 @@ mod tests {
 
         let archive = archive_name().expect("a published platform");
         let mut bytes = Vec::new();
+        // The fixture uses the portable name, which is what the update picks.
         if archive.ends_with(".zip") {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
             zip.start_file(
