@@ -1364,5 +1364,5 @@ msgstr ""
 msgid "About"
 msgstr ""
 
-msgid "Made by foxgirls. Source code, releases and issues are on GitHub."
+msgid "Made by foxgirls.org. Source code, releases and issues are on GitHub."
 msgstr ""
