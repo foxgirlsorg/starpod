@@ -134,6 +134,12 @@ pub fn post(update: impl FnOnce(&mut UiState) + Send + 'static) {
     }
 }
 
+/// Show `message` as an error banner. Any thread; for platform code outside
+/// the UI, such as Android's installer reporting a failed update.
+pub fn show_error(message: String) {
+    post(move |ui| ui.show_banner(Banner::error(message)));
+}
+
 /// Run `update` against the UI state now. Only call this on the Slint thread.
 pub fn with_ui(update: impl FnOnce(&mut UiState)) {
     UI.with(|cell| match cell.borrow_mut().as_mut() {
@@ -702,14 +708,21 @@ pub fn spawn_install_update(ctx: &Ctx) {
                 post(move |ui| ui.set_busy_message(&format!("Downloading the update… {percent}%")));
             })
             .await?;
+            if cfg!(target_os = "android") {
+                // Android installs it, after asking; the app is replaced and
+                // restarted by Android, not here.
+                update::install_apk(&new)?;
+                return Ok(None);
+            }
             let current = std::env::current_exe()
                 .map_err(|error| format!("the running Starpod could not be found: {error}"))?;
             update::replace_binary(&current, &new)?;
-            Ok((current, release.version))
+            Ok(Some((current, release.version)))
         }
         .await;
         match result {
-            Ok((current, version)) => {
+            Ok(None) => post(|ui| ui.end_busy()),
+            Ok(Some((current, version))) => {
                 info!(%version, "update installed; restarting");
                 update::schedule_relaunch(current);
                 post(|ui| ui.end_busy());

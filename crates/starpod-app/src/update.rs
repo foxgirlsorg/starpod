@@ -9,6 +9,10 @@
 //! it in place of the running one. The app then quits and starts the new
 //! binary. The release is not signed, so the checksum catches a damaged
 //! download, not a compromised release.
+//!
+//! On Android the update is the release's APK, checked the same way and
+//! handed to Android's installer ([`AndroidHooks`]), which asks the user and
+//! checks that it is signed with the same key as the installed app.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -150,14 +154,53 @@ fn platform_archives() -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// The APK `build.yml` publishes for Android.
+pub const ANDROID_APK: &str = "starpod-android.apk";
+
+/// Hands an APK to Android's installer; see [`AndroidHooks::install`].
+pub type InstallApk = dyn Fn(&Path) -> Result<(), String> + Send + Sync;
+
+/// What the Android app gives the update code, which cannot reach Java on
+/// its own.
+pub struct AndroidHooks {
+    /// The package of the app that installed Starpod, if Android knows it.
+    pub installer: Option<String>,
+    /// Hand a downloaded APK to Android's installer. Returns once Android
+    /// has it; Android then asks the user.
+    pub install: Box<InstallApk>,
+}
+
+static ANDROID: std::sync::OnceLock<AndroidHooks> = std::sync::OnceLock::new();
+
+/// Set the Android hooks, once, at start.
+pub fn set_android_hooks(hooks: AndroidHooks) {
+    let _ = ANDROID.set(hooks);
+}
+
+/// Whether Starpod was installed straight from an APK (opened from a
+/// browser or a file manager, which Android's own installer installs, or
+/// `adb install`) rather than by a store or an updater such as F-Droid,
+/// Obtainium or Google Play, which then delivers the updates itself.
+pub fn android_installed_directly(installer: Option<&str>) -> bool {
+    match installer {
+        None | Some("") | Some("com.android.shell") => true,
+        // com.android.packageinstaller, com.google.android.packageinstaller
+        // and the phone makers' own, such as com.miui.packageinstaller.
+        Some(package) => package.ends_with(".packageinstaller"),
+    }
+}
+
 /// The store or package manager that installed Starpod, if one did. It then
 /// delivers the updates, so Starpod never checks for, offers or installs
-/// one itself: replacing its files would fight the package manager, and on
-/// a phone a new version comes from wherever the APK came from (a store
-/// such as F-Droid, an updater such as Obtainium, or a new download).
+/// one itself: replacing its files would fight the package manager, and an
+/// APK from a store is signed with the store's key, which Android would
+/// refuse to replace with ours.
 pub fn package_manager() -> Option<&'static str> {
     if cfg!(target_os = "android") {
-        return Some("Android");
+        return match ANDROID.get() {
+            Some(hooks) if android_installed_directly(hooks.installer.as_deref()) => None,
+            _ => Some("an app store"),
+        };
     }
     if std::env::var_os("FLATPAK_ID").is_some() {
         return Some("Flatpak");
@@ -232,6 +275,9 @@ pub fn pick_assets<'a>(
 /// name is preferred; a release that predates `-portable` is taken by its
 /// legacy name. If neither is there, the error names the portable archive.
 pub fn pick_platform_assets(release: &Release) -> Result<(&ReleaseAsset, &ReleaseAsset), String> {
+    if cfg!(target_os = "android") {
+        return pick_assets(release, ANDROID_APK);
+    }
     let (portable, legacy) = platform_archives()
         .ok_or_else(|| "no Starpod build is published for this computer".to_string())?;
     match pick_assets(release, portable) {
@@ -386,7 +432,21 @@ pub async fn download_update(
             "the download does not match the release's checksum; nothing was installed".to_string(),
         );
     }
+    if cfg!(target_os = "android") {
+        std::fs::create_dir_all(staging)
+            .map_err(|error| format!("the download could not be saved: {error}"))?;
+        let apk = staging.join(ANDROID_APK);
+        std::fs::write(&apk, &bytes)
+            .map_err(|error| format!("the download could not be saved: {error}"))?;
+        return Ok(apk);
+    }
     extract_binary(archive, &bytes, staging)
+}
+
+/// Hand the APK at `apk` to Android's installer.
+pub fn install_apk(apk: &Path) -> Result<(), String> {
+    let hooks = ANDROID.get().ok_or("this build cannot install an update")?;
+    (hooks.install)(apk)
 }
 
 /// The path the running binary is moved to while the new one takes its place.
@@ -779,6 +839,28 @@ mod tests {
         ];
         for (path, linux, expected) in cases {
             assert_eq!(package_manager_for(path, linux), expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn only_a_direct_android_install_updates_itself() {
+        for direct in [
+            None,
+            Some("com.android.shell"),
+            Some("com.google.android.packageinstaller"),
+            Some("com.android.packageinstaller"),
+            Some("com.miui.packageinstaller"),
+        ] {
+            assert!(android_installed_directly(direct), "{direct:?}");
+        }
+        for store in [
+            "org.fdroid.fdroid",
+            "dev.imranr.obtainium",
+            "com.android.vending",
+            "com.aurora.store",
+            "com.looker.droidify",
+        ] {
+            assert!(!android_installed_directly(Some(store)), "{store}");
         }
     }
 }

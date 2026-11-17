@@ -11,9 +11,10 @@
 //!   cache directories under it, and nothing else in the workspace needs to
 //!   know about Android.
 //! - Logs go to logcat (tag `starpod`) as well as to the log file.
-//! - There is no tray, no global shortcuts, no self-update and no
-//!   single-instance channel: Android starts one activity and updates come
-//!   as a new APK.
+//! - There is no tray, no global shortcuts and no single-instance channel:
+//!   Android starts one activity. An app installed straight from an APK
+//!   updates itself through Android's installer ([`update`]); one a store
+//!   installed is updated by that store.
 //! - The engine is the static musl Linux build of meow, installed from the
 //!   app like on the desktop. The app targets API 28 so it may run a binary
 //!   from its own data directory.
@@ -22,6 +23,8 @@
 
 #![cfg(target_os = "android")]
 
+mod java;
+mod update;
 mod vpn;
 
 use std::ffi::{CString, c_char, c_int};
@@ -88,8 +91,14 @@ fn run(app: &AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
         Ok::<_, starpod_app::AppError>(service.into_shared())
     })?;
     info!("service opened and loaded");
-    if let Err(error) = vpn::install(app, runtime.handle(), service.clone()) {
-        error!(%error, "the VPN could not be set up");
+    match java::init(app) {
+        Ok(()) => {
+            update::init();
+            if let Err(error) = vpn::install(runtime.handle(), service.clone()) {
+                error!(%error, "the VPN could not be set up");
+            }
+        }
+        Err(error) => error!(%error, "the Java bridge could not be set up"),
     }
     let outcome = ui::run(
         runtime.handle().clone(),

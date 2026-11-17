@@ -12,16 +12,14 @@
 //! engine runs and stops it when the engine stops. A tunnel that fails or is
 //! closed by the system stops the proxy and says why.
 
-use std::ffi::c_void;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use jni::objects::{GlobalRef, JClass, JObject, JString};
+use jni::JNIEnv;
+use jni::objects::{JClass, JString};
 use jni::sys::jint;
-use jni::{JNIEnv, JavaVM, NativeMethod};
-use slint::android::AndroidApp;
 use starpod_app::{PhoneTunnel, SharedAppService};
 use tokio::runtime::Handle;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use tun2proxy::{ArgDns, Args, CancellationToken, ProxyParameters};
 
 /// The tunnel's MTU, as the Java side sets it.
@@ -32,9 +30,6 @@ static VPN: OnceLock<Arc<Vpn>> = OnceLock::new();
 
 /// The app's VPN.
 pub struct Vpn {
-    vm: JavaVM,
-    /// The activity, which owns the Java calls `startVpn` and `stopVpn`.
-    activity: GlobalRef,
     runtime: Handle,
     service: SharedAppService,
     state: Mutex<State>,
@@ -48,41 +43,13 @@ struct State {
     running: Option<CancellationToken>,
 }
 
-/// Set up the VPN for `service`: register the native methods the activity
-/// calls back, and make the VPN the service's phone tunnel.
-pub fn install(
-    app: &AndroidApp,
-    runtime: &Handle,
-    service: SharedAppService,
-) -> Result<(), String> {
-    // SAFETY: the pointers are the process's JavaVM and the activity object,
-    // valid for as long as the activity is; the activity is held by a global
-    // reference from here on.
-    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }.map_err(|e| e.to_string())?;
-    let mut env = vm
-        .attach_current_thread_permanently()
-        .map_err(|e| e.to_string())?;
-    let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
-    let global = env.new_global_ref(&activity).map_err(|e| e.to_string())?;
-    let class = env.get_object_class(&activity).map_err(|e| e.to_string())?;
-    let methods = [
-        NativeMethod {
-            name: "vpnReady".into(),
-            sig: "(I)V".into(),
-            fn_ptr: vpn_ready as *mut c_void,
-        },
-        NativeMethod {
-            name: "vpnFailed".into(),
-            sig: "(Ljava/lang/String;)V".into(),
-            fn_ptr: vpn_failed as *mut c_void,
-        },
-    ];
-    env.register_native_methods(&class, &methods)
-        .map_err(|e| format!("the VPN methods could not be registered: {e}"))?;
-
+/// Make the VPN the service's phone tunnel. The Java bridge
+/// ([`crate::java::init`]) must be set up first.
+pub fn install(runtime: &Handle, service: SharedAppService) -> Result<(), String> {
+    if crate::java::get().is_none() {
+        return Err("the Java bridge is not set up".to_string());
+    }
     let vpn = Arc::new(Vpn {
-        vm,
-        activity: global,
         runtime: runtime.clone(),
         service: service.clone(),
         state: Mutex::new(State::default()),
@@ -96,12 +63,8 @@ pub fn install(
 impl Vpn {
     /// Call one of the activity's `()V` methods.
     fn call(&self, method: &str) {
-        let outcome = self
-            .vm
-            .attach_current_thread_permanently()
-            .and_then(|mut env| env.call_method(self.activity.as_obj(), method, "()V", &[]));
-        if let Err(error) = outcome {
-            error!(%error, method, "the VPN call failed");
+        if let Some(java) = crate::java::get() {
+            java.call_void(method);
         }
     }
 
@@ -213,14 +176,14 @@ unsafe extern "C" {
 }
 
 /// `MainActivity.vpnReady(int)`.
-extern "system" fn vpn_ready(_env: JNIEnv, _class: JClass, fd: jint) {
+pub extern "system" fn vpn_ready(_env: JNIEnv, _class: JClass, fd: jint) {
     if let Some(vpn) = VPN.get() {
         vpn.ready(fd);
     }
 }
 
 /// `MainActivity.vpnFailed(String)`.
-extern "system" fn vpn_failed(mut env: JNIEnv, _class: JClass, reason: JString) {
+pub extern "system" fn vpn_failed(mut env: JNIEnv, _class: JClass, reason: JString) {
     let reason: String = env
         .get_string(&reason)
         .map(Into::into)
