@@ -756,11 +756,17 @@ export component AppWindow inherits Window {
                             height: parent.height;
                             spacing: 8px;
 
-                            Image {
-                                width: 14px;
-                                height: 14px;
-                                source: @image-url("assets/icons/download.svg");
-                                colorize: Design.primary;
+                            // A horizontal layout would pin the icon to the top of the row;
+                            // centering it vertically puts it on the text's center line.
+                            VerticalLayout {
+                                alignment: center;
+
+                                Image {
+                                    width: 14px;
+                                    height: 14px;
+                                    source: @image-url("assets/icons/download.svg");
+                                    colorize: Design.primary;
+                                }
                             }
 
                             EmojiText {
