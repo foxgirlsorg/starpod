@@ -6,12 +6,16 @@
 // The list fills the window below the header and the toolbar, so the page
 // does not use PageFrame: a ScrollView around a ListView would give the list
 // no height to scroll in.
+//
+// Narrow windows (under 680px) get their own arrangement of the toolbar and
+// of each row. Both read the window width, not their own, for the same reason
+// as SettingRow: the width of the element depends on the layout it picks.
 
 import { Design } from "../design.slint";
 import { Bridge, ConnectionItem, SelectItem } from "../bridge.slint";
 import {
     Button, ButtonVariant, ButtonSize, IconButton, Input, Select, Segmented,
-    Switch, ConfirmDialog, EmptyState, PageHeader
+    Switch, ConfirmDialog, EmptyState, PageHeader, WindowMetrics
 } from "../primitives.slint";
 import { EmojiText } from "../emoji-text.slint";
 import { ListView } from "std-widgets.slint";
@@ -61,13 +65,61 @@ component TrafficLine inherits HorizontalLayout {
     }
 }
 
-// One connection: the host and process on the first line; the chain and the
-// matched rule, muted, on the second; then the traffic, the duration and, on
-// the active tab, the button that closes it.
+// The transfer of one direction on a narrow row: a small arrow, then the total
+// and the speed. They use the mono face, so the digits keep their widths and
+// the figures in the rows line up; they take only the width they need, since
+// the row has no room for the fixed columns of the table.
+component CompactTraffic inherits HorizontalLayout {
+    in property <image> icon;
+    in property <string> total;
+    in property <string> speed;
+
+    spacing: 4px;
+
+    VerticalLayout {
+        alignment: center;
+        width: 10px;
+
+        Image {
+            width: 10px;
+            height: 10px;
+            source: root.icon;
+            colorize: Design.muted-foreground;
+        }
+    }
+
+    Text {
+        text: root.total;
+        color: Design.muted-foreground;
+        font-family: Design.font-mono;
+        font-size: Design.font-xs;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+
+    Text {
+        text: root.speed;
+        color: Design.muted-foreground;
+        font-family: Design.font-mono;
+        font-size: Design.font-xs;
+        vertical-alignment: center;
+        wrap: no-wrap;
+    }
+}
+
+// One connection. Wide windows show a table row: the host and process on the
+// first line, the chain and the matched rule on the second, then the traffic,
+// the duration and, on the active tab, the button that closes it. Narrow
+// windows show a two-line card-row instead: the host, the duration and the
+// close button on the first line; the process, the chain and the rule, then
+// the transfer, on the second. The host gets the first line to itself, so it
+// is not squeezed into a sliver.
 component ConnectionRow inherits Rectangle {
     in property <ConnectionItem> item;
     in property <bool> closable: false;
     callback close-clicked(string);
+
+    private property <bool> narrow: WindowMetrics.width < 680px;
 
     height: 64px;
     background: ta.has-hover ? Design.card-hover : transparent;
@@ -78,7 +130,134 @@ component ConnectionRow inherits Rectangle {
         mouse-cursor: default;
     }
 
-    HorizontalLayout {
+    if (root.narrow) : HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: 16px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            min-width: 0px;
+            spacing: 2px;
+
+            HorizontalLayout {
+                height: 20px;
+                spacing: 8px;
+
+                EmojiText {
+                    runs: root.item.host-runs;
+                    fallback: root.item.host;
+                    font-size: Design.font-base;
+                    font-weight: 500;
+                    color: Design.foreground;
+                    wrap: false;
+                    horizontal-stretch: 1;
+                    min-width: 0px;
+                }
+
+                Text {
+                    text: root.item.duration;
+                    color: Design.muted-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-xs;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+
+            // The chain comes before the rule, and has the room: it is the
+            // route the connection takes, and the rule is the hint after it.
+            HorizontalLayout {
+                height: 16px;
+                spacing: 6px;
+
+                if (root.item.process != "") : Text {
+                    text: root.item.process;
+                    color: Design.muted-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-xs;
+                    max-width: 96px;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+
+                if (root.item.process != "") : Text {
+                    text: "·";
+                    color: Design.subtle-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-xs;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                }
+
+                EmojiText {
+                    runs: root.item.chain-runs;
+                    fallback: root.item.chain;
+                    font-size: Design.font-xs;
+                    color: Design.muted-foreground;
+                    wrap: false;
+                    horizontal-stretch: 1;
+                    min-width: 0px;
+                }
+
+                if (root.item.rule != "") : Text {
+                    text: root.item.rule;
+                    color: Design.subtle-foreground;
+                    font-family: Design.font-family;
+                    font-size: Design.font-xs;
+                    horizontal-stretch: 0;
+                    max-width: 96px;
+                    min-width: 0px;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+        }
+
+        // The transfer, down over up, on the right of both lines.
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            spacing: 2px;
+
+            CompactTraffic {
+                icon: @image-url("../assets/icons/arrow-down.svg");
+                total: root.item.download;
+                speed: root.item.download-speed;
+            }
+
+            CompactTraffic {
+                icon: @image-url("../assets/icons/arrow-up.svg");
+                total: root.item.upload;
+                speed: root.item.upload-speed;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+
+            if (root.closable) : IconButton {
+                icon: @image-url("../assets/icons/x.svg");
+                size: ButtonSize.sm;
+                tooltip: @tr("Close this connection");
+                clicked => {
+                    root.close-clicked(root.item.id);
+                }
+            }
+        }
+    }
+
+    if (!root.narrow) : HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
         padding-left: 16px;
         padding-right: 12px;
         padding-top: 8px;
@@ -210,6 +389,8 @@ export component ConnectionsPage inherits Rectangle {
     private property <int> tab: 0;
     private property <[ConnectionItem]> shown: root.tab == 0 ? Bridge.connections : Bridge.closed-connections;
     private property <bool> not-running: Bridge.engine-phase != "running";
+    // Read from the window, not from this page, for the reason in ConnectionRow.
+    private property <bool> narrow: WindowMetrics.width < 680px;
 
     private property <[SelectItem]> sort-items: [
         { text: @tr("Newest"), detail: "", detail-color: Design.muted-foreground, text-runs: [] },
@@ -240,8 +421,9 @@ export component ConnectionsPage inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: 32px;
-        padding-right: 32px;
+        // Narrow windows give up some of the side margin for the toolbar and rows.
+        padding-left: root.narrow ? 16px : 32px;
+        padding-right: root.narrow ? 16px : 32px;
         padding-top: 28px;
         padding-bottom: 32px;
 
@@ -259,15 +441,24 @@ export component ConnectionsPage inherits Rectangle {
             }
 
             // The toolbar: the filter, the sort, the pause switch and Close all.
+            // A grid, so the narrow arrangement can move the controls without
+            // copying them. Wide windows keep one row. Narrow windows give the
+            // filter a row of its own and put the other three on the right of
+            // the next, each at its own width, so Close all keeps its full
+            // width instead of running past the edge.
             VerticalLayout {
                 spacing: 12px;
                 padding-bottom: 16px;
 
-                HorizontalLayout {
-                    spacing: 8px;
-                    height: 36px;
+                GridLayout {
+                    spacing-horizontal: 8px;
+                    spacing-vertical: 8px;
+                    vertical-stretch: 0;
 
                     Input {
+                        row: 0;
+                        col: 0;
+                        colspan: root.narrow ? 4 : 1;
                         preferred-width: 260px;
                         min-width: 160px;
                         horizontal-stretch: 1;
@@ -276,15 +467,26 @@ export component ConnectionsPage inherits Rectangle {
                         text <=> Bridge.connections-filter;
                     }
 
+                    // Pushes the three controls of the second row to the right.
+                    if (root.narrow) : Rectangle {
+                        row: 1;
+                        col: 0;
+                        horizontal-stretch: 1;
+                    }
+
                     Select {
+                        row: root.narrow ? 1 : 0;
+                        col: 1;
                         items: root.sort-items;
                         current-index <=> Bridge.connections-sort;
-                        preferred-width: 140px;
+                        preferred-width: root.narrow ? 124px : 140px;
                         horizontal-stretch: 0;
-                        popup-min-width: 140px;
+                        popup-min-width: root.narrow ? 124px : 140px;
                     }
 
                     HorizontalLayout {
+                        row: root.narrow ? 1 : 0;
+                        col: 2;
                         spacing: 8px;
                         horizontal-stretch: 0;
 
@@ -315,6 +517,8 @@ export component ConnectionsPage inherits Rectangle {
                     }
 
                     Button {
+                        row: root.narrow ? 1 : 0;
+                        col: 3;
                         text: @tr("Close all");
                         variant: ButtonVariant.destructive-outline;
                         size: ButtonSize.md;
