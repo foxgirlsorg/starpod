@@ -582,12 +582,13 @@ export component ProxiesPage inherits Rectangle {
                 }
 
                 HorizontalLayout {
-                    spacing: 16px;
+                    spacing: root.narrow ? 10px : 16px;
                     height: 36px;
 
                     HorizontalLayout {
                         spacing: 8px;
-                        horizontal-stretch: 0;
+                        horizontal-stretch: root.narrow ? 1 : 0;
+                        min-width: 0px;
 
                         VerticalLayout {
                             alignment: center;
@@ -611,20 +612,20 @@ export component ProxiesPage inherits Rectangle {
                                 height: 20px;
                                 vertical-alignment: center;
                                 wrap: no-wrap;
+                                overflow: elide;
+                                min-width: 0px;
                             }
                         }
                     }
 
-                    Rectangle {
+                    if (!root.narrow) : Rectangle {
                         horizontal-stretch: 1;
                     }
 
-                }
-
-                if (root.narrow) : HorizontalLayout {
-                    alignment: start;
-
-                    Segmented {
+                    // In a narrow window the sort shares this row.
+                    if (root.narrow) : Segmented {
+                        horizontal-stretch: 0;
+                        item-padding: 8px;
                         options: [@tr("Default"), @tr("Latency"), @tr("Name")];
                         current-index <=> Bridge.proxies-sort;
                     }

@@ -611,6 +611,9 @@ export component Switch inherits Rectangle {
 export component Segmented inherits Rectangle {
     in property <[string]> options;
     in-out property <int> current-index: 0;
+    // The space on each side of an option's label; smaller where a row is
+    // tight, such as beside another control on a phone.
+    in property <length> item-padding: 12px;
     callback selected(int);
 
     height: 36px;
@@ -626,13 +629,13 @@ export component Segmented inherits Rectangle {
         for option[i] in root.options : Rectangle {
             height: 30px;
             border-radius: Design.radius-sm;
-            preferred-width: item-text.preferred-width + 24px;
+            preferred-width: item-text.preferred-width + 2 * root.item-padding;
             background: root.current-index == i ? Design.background : transparent;
 
             item-text := Text {
-                x: 12px;
+                x: root.item-padding;
                 y: 0px;
-                width: parent.width - 24px;
+                width: parent.width - 2 * root.item-padding;
                 height: parent.height;
                 text: option;
                 color: root.current-index == i ? Design.foreground : Design.muted-foreground;
