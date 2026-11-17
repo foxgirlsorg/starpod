@@ -4,7 +4,7 @@
 
 <h1>STARPOD</h1>
 
-**A cross-platform desktop proxy client for the meow-rs engine.**
+**A proxy client for desktop and Android, built on the meow-rs engine.**
 
 [![Website](https://img.shields.io/badge/Website-foxgirls.org-de6161?style=flat-square)](https://foxgirls.org)
 [![Release](https://img.shields.io/badge/Release-0.0.3-de6161?style=flat-square)](https://github.com/foxgirlsorg/starpod/releases)
@@ -17,7 +17,7 @@
 
 Starpod fetches your proxy subscriptions, merges them with your own servers and rules, checks the result with the engine, and runs the engine as a supervised child process. You choose a server, connect, and it stays out of the way.
 
-The engine is [meow-rs](https://github.com/meow-rs/meow-rs) v0.29.0. It is downloaded from its release page the first time you install it, so Starpod does not bundle it. The interface is built with [Slint](https://slint.dev) and follows the visual identity of [foxgirls.org](https://foxgirls.org).
+The engine is [meow-rs](https://github.com/meow-rs/meow-rs) v0.29.0. On the desktop it is downloaded from its release page the first time you install it, and checked against the release's checksum. On Android it is packed inside the APK. The interface is built with [Slint](https://slint.dev) and follows the visual identity of [foxgirls.org](https://foxgirls.org).
 
 ## Features
 
@@ -32,7 +32,8 @@ The engine is [meow-rs](https://github.com/meow-rs/meow-rs) v0.29.0. It is downl
 - **Verified engine install**: the download is checked against the release's SHA-256 file.
 - **Runtime control**: start, stop, reload, live node selection and per-node latency tests through the engine's REST controller.
 - **Safe state handling**: corrupt state files are moved aside, never deleted, and Starpod starts from defaults.
-- **Over-the-air updates** from GitHub Releases, checked against the release checksum.
+- **Android as a VPN**: on a phone, Starpod carries every app's traffic through Android's VPN service. There is no system proxy or TUN setting to manage.
+- **Over-the-air updates** from GitHub Releases, checked against the release checksum. A copy installed by a store or package manager (WinGet, Scoop, Homebrew, Flatpak, Snap, F-Droid, Obtainium, Google Play and others) is updated by it instead, so Starpod hides its own updater there.
 
 Full behavior, limits and edge cases are in the [user guide](docs/USER_GUIDE.md).
 
@@ -52,6 +53,7 @@ Connecting needs at least one subscription that supplies servers. Starpod refuse
 | Windows | `x86_64` | Built and tested in CI |
 | Linux | `x86_64` | Built and tested in CI |
 | macOS | `aarch64` (Apple silicon) | Built and tested in CI |
+| Android 8+ | `arm64-v8a`, `x86_64` | Built in CI; arm64 run on a real phone |
 
 Other targets named in the engine download table (Linux and Windows arm64, macOS x86_64) are not in CI and are not supported.
 
@@ -66,11 +68,11 @@ Builds are on the [GitHub Releases](https://github.com/foxgirlsorg/starpod/relea
 | macOS Apple silicon | `starpod-macos-aarch64-setup.dmg` | `starpod-macos-aarch64-portable.tar.gz` |
 | Android (arm64, x86_64) | `starpod-android.apk` | — |
 
-On Android, install the APK (allow installs from your browser or file manager), then install the engine from the Home screen. Starpod connects as a VPN, which carries every app's traffic: Android asks for the VPN permission the first time you connect, and again if it has been taken away.
+On Android, install the APK (allow installs from your browser or file manager). The engine comes with it. Starpod connects as a VPN, which carries every app's traffic: Android asks for the VPN permission the first time you connect, and again if it has been taken away. An APK installed this way updates itself; Android asks you to confirm each update.
 
-Each file has a `.sha256` checksum. The Windows installer installs for the current user and needs no administrator rights. The portable archives run from any folder, and the built-in updater keeps them current. Nothing is code-signed yet, so Windows SmartScreen and macOS Gatekeeper warn on first launch. TUN elevation and some platform paths have not been run on real machines. See the [known limitations](docs/DEVELOPMENT.md#5-known-limitations-and-remaining-work).
+Each file has a `.sha256` checksum. The Windows installer installs for the current user and needs no administrator rights. The portable archives run from any folder, and the built-in updater keeps them current. The desktop builds are not code-signed yet, so Windows SmartScreen and macOS Gatekeeper warn on first launch. TUN elevation and some platform paths have not been run on real machines. See the [known limitations](docs/DEVELOPMENT.md#5-known-limitations-and-remaining-work).
 
-On first run, install the engine from the Dashboard or Settings screen.
+On the desktop, install the engine from the Home or Settings screen on first run.
 
 ## Build from source
 
@@ -98,6 +100,16 @@ To produce an unsigned Windows binary without a host toolchain:
 docker compose run --rm windows   # writes dist/starpod.exe
 ```
 
+### Android
+
+Needs the Android SDK and NDK, a JDK 11 or newer, and `cargo-ndk`; the full list is at the top of the script. No Gradle is involved.
+
+```sh
+bash tools/build-android.sh       # writes target/android/starpod.apk
+```
+
+Without a keystore it signs with a local debug key. CI signs with the release key when the `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_ALIAS` secrets are set.
+
 ## Workspace
 
 | Crate | Purpose |
@@ -108,6 +120,7 @@ docker compose run --rm windows   # writes dist/starpod.exe
 | `starpod-engine` | Engine download and checksum, YAML emitter, `meow -t` validation, process supervisor, REST client. |
 | `starpod-app` | UI-free service layer, the `starpod` binary and its Slint glue. |
 | `starpod-ui` | Slint components, design tokens, icons, and the bridge between Rust and the UI. |
+| `starpod-android` | The Android app: the native activity, the VPN tunnel and the APK updater. |
 
 ## Documentation
 
@@ -117,7 +130,6 @@ docker compose run --rm windows   # writes dist/starpod.exe
 
 ## Credits
 
-- Made by [foxgirls.org](https://foxgirls.org).
 - The engine is [meow-rs](https://github.com/meow-rs/meow-rs).
 - Emoji graphics are [Twemoji](https://github.com/jdecked/twemoji) (CC-BY 4.0), bundled as `crates/starpod-app/assets/twemoji.bin`. See `crates/starpod-app/assets/TWEMOJI-LICENSE.txt`.
 
