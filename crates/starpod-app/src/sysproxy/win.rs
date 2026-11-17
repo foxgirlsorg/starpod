@@ -533,7 +533,10 @@ mod tests {
     fn live_manual_proxy_round_trip() {
         let before = Windows.capture().unwrap();
         println!("before, WinINet: {:?}", query_lan().unwrap());
-        println!("before, registry ProxyEnable: {:?}", read(INTERNET_SETTINGS, PROXY_ENABLE).unwrap());
+        println!(
+            "before, registry ProxyEnable: {:?}",
+            read(INTERNET_SETTINGS, PROXY_ENABLE).unwrap()
+        );
         {
             let _restore = Restore(before.clone());
             let plan = Plan {
@@ -545,11 +548,17 @@ mod tests {
             let warnings = Windows.apply(&plan).unwrap();
             println!("applied, warnings: {warnings:?}");
             println!("applied, WinINet: {:?}", query_lan().unwrap());
-            println!("applied, registry ProxyEnable: {:?}", read(INTERNET_SETTINGS, PROXY_ENABLE).unwrap());
+            println!(
+                "applied, registry ProxyEnable: {:?}",
+                read(INTERNET_SETTINGS, PROXY_ENABLE).unwrap()
+            );
         }
         let after = query_lan().unwrap();
         println!("restored, WinINet: {after:?}");
-        println!("restored, registry ProxyEnable: {:?}", read(INTERNET_SETTINGS, PROXY_ENABLE).unwrap());
+        println!(
+            "restored, registry ProxyEnable: {:?}",
+            read(INTERNET_SETTINGS, PROXY_ENABLE).unwrap()
+        );
         assert_eq!(Lan::from_settings(&before).unwrap(), Some(after));
     }
 }
