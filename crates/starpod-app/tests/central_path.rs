@@ -1307,9 +1307,12 @@ async fn removing_one_of_two_subscriptions_keeps_a_running_proxy_on_the_other() 
     let snapshot = service.snapshot();
     assert_eq!(snapshot.engine.phase, EnginePhase::Running);
     assert_eq!(snapshot.connect_blocked, None);
+    // The second subscription was already the one in use, so the engine's
+    // configuration is unchanged and the engine is left alone.
     assert!(
-        matches!(engine.calls().last(), Some(Call::Reload(_))),
-        "the running proxy is reloaded on the remaining subscription"
+        matches!(engine.calls().last(), Some(Call::Start(_))),
+        "neither stopped nor reloaded: {:?}",
+        engine.calls().len()
     );
     assert!(
         snapshot
@@ -2425,4 +2428,31 @@ async fn a_phone_tunnel_follows_the_engine_and_a_failed_one_stops_the_proxy() {
         service.snapshot().notice.map(|(_, text)| text),
         Some("The VPN was turned off".to_string())
     );
+}
+
+#[tokio::test]
+async fn a_display_only_preference_leaves_the_running_engine_alone() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+    service.connect().await.unwrap();
+    let before = engine.calls().len();
+
+    let mut prefs = service.user_state().preferences.clone();
+    prefs.accent_color = "#4ade80".to_string();
+    prefs.home_background = "eru".to_string();
+    service.save_preferences(prefs).await.unwrap();
+
+    assert_eq!(
+        engine.calls().len(),
+        before,
+        "neither validated nor reloaded: {:?}",
+        &engine.calls()[before..]
+    );
+    assert_eq!(service.user_state().preferences.accent_color, "#4ade80");
 }

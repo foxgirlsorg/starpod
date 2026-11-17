@@ -181,6 +181,10 @@ pub struct AppService {
     latencies: BTreeMap<String, Option<u32>>,
     /// The member each group uses now, as the running engine reports it
     /// (group name to member name). Empty while the engine is not running.
+    /// The configuration the running engine was started or last reloaded
+    /// with, when this run knows it. A change that builds the same one
+    /// leaves the engine alone.
+    running_config: Option<RuntimeConfig>,
     live_selected: BTreeMap<String, String>,
     warnings: Vec<String>,
     /// Warnings about engine-managed subscriptions, from the last engine
@@ -259,6 +263,7 @@ impl AppService {
             engine_status: EngineStatus::default(),
             engine_error: None,
             handle: None,
+            running_config: None,
             notice: None,
             app_log: VecDeque::new(),
             installed_engine,
@@ -2044,6 +2049,7 @@ impl AppService {
         // Latencies were measured against a proxy that is now gone.
         self.latencies.clear();
         self.sync_system_proxy().await;
+        self.running_config = Some(composed.config.clone());
         Ok(())
     }
 
@@ -2072,6 +2078,7 @@ impl AppService {
         state.preferences = prefs;
         self.commit_user(state).await
     }
+        self.running_config = None;
 
     async fn select_node_inner(&mut self, node_id: &str) -> Result<(), AppError> {
         let current = self.compose_current()?;
@@ -2694,6 +2701,11 @@ impl AppService {
     /// not returned: the proxy runs, on the engine's own first member.
     async fn assert_default_selection(&mut self, default: Option<&(String, String)>) {
         let Some((group, member)) = default else {
+        // A change the engine's configuration does not see (the theme, the
+        // background, the accent colour) leaves the engine alone.
+        if self.running_config.as_ref() == Some(&composed.config) {
+            return Ok(());
+        }
             return;
         };
         if !self.engine_status.phase.is_running() {
@@ -2709,6 +2721,7 @@ impl AppService {
 
     // ----- engine-managed subscriptions (ARCHITECTURE §4.6, R12) ---------------
 
+        self.running_config = Some(composed.config.clone());
     /// Check the engine-managed subscriptions, as the background loop does
     /// every 30 seconds.
     ///
