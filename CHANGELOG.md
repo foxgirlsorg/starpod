@@ -4,6 +4,25 @@ All notable changes to Starpod are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- An update dialog opens at every start that finds a newer release, with
+  **Download** and **Later**.
+- Proxy groups marked `hidden: true` in a config are left out of the Proxies
+  page and the tray. They still route traffic, and rules can still use them.
+- A subscription's name is optional. Left empty, it is taken from the
+  provider's title, then the file name the provider sends, then the domain.
+- Native crashes on Windows (an access violation, a stack overflow) leave a
+  crash report too.
+
+### Fixed
+
+- Stopping the engine on Windows could end Starpod itself with no crash
+  report, most often after a latency test while disconnected.
+- The update button's icon in the sidebar sat above the text's center line.
+
 ## [1.2.0] - 2026-11-17
 
 ### Added
