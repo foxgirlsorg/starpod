@@ -101,14 +101,34 @@ component AnnouncementCard inherits Rectangle {
 export component HomePage inherits Rectangle {
     // "stopped" and "failed" look alike; "starting" and "stopping" pulse.
     private property <bool> running: Bridge.engine-phase == "running";
-    private property <bool> transitioning: Bridge.engine-phase == "starting" || Bridge.engine-phase == "stopping";
+    // What a press asked for, until the action finishes: 1 connecting, 2
+    // disconnecting. The engine reports "starting" only once it is
+    // launched, so without this the button would sit still while the app
+    // asks for the VPN permission, checks the configuration and starts it.
+    private property <int> pending: 0;
+    private property <bool> connecting: root.pending == 1 || Bridge.engine-phase == "starting";
+    private property <bool> disconnecting: root.pending == 2 || Bridge.engine-phase == "stopping";
+    private property <bool> transitioning: root.connecting || root.disconnecting;
+    // The press is over once the action ends or the engine settles.
+    private property <bool> busy: Bridge.busy;
+    private property <string> phase: Bridge.engine-phase;
+    changed busy => {
+        if (!root.busy) {
+            root.pending = 0;
+        }
+    }
+    changed phase => {
+        if (root.phase == "running" || root.phase == "stopped" || root.phase == "failed") {
+            root.pending = 0;
+        }
+    }
     private property <bool> blocked: !root.running && Bridge.connect-blocked-reason != "";
     private property <bool> clickable: !root.blocked && !root.transitioning;
     private property <bool> hovered: ta.has-hover && root.clickable;
 
-    private property <string> status-title: root.running ? @tr("Connected")
-        : Bridge.engine-phase == "starting" ? @tr("Connecting…")
-        : Bridge.engine-phase == "stopping" ? @tr("Disconnecting…")
+    private property <string> status-title: root.disconnecting ? @tr("Disconnecting…")
+        : root.connecting ? @tr("Connecting…")
+        : root.running ? @tr("Connected")
         : Bridge.engine-phase == "failed" ? @tr("Couldn't connect")
         : @tr("Not connected");
     private property <string> status-line: root.running ? (Bridge.mobile ? @tr("Up {}", Bridge.uptime) : @tr("Up {} · {}", Bridge.uptime, Bridge.listen-address))
@@ -623,8 +643,10 @@ export component HomePage inherits Rectangle {
             return;
         }
         if (root.running) {
+            root.pending = 2;
             Bridge.disconnect();
         } else if (root.clickable) {
+            root.pending = 1;
             Bridge.connect();
         }
     }
