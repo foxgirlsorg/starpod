@@ -44,56 +44,55 @@ component LogRow inherits HorizontalLayout {
         return Design.muted-foreground;
     }
 
-    HorizontalLayout {
-        padding-top: 6px;
-        padding-bottom: 6px;
-        padding-left: 16px;
-        padding-right: 16px;
-        spacing: 12px;
-        alignment: start;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    padding-left: 16px;
+    padding-right: 16px;
+    spacing: 12px;
+    alignment: start;
 
-        Text {
-            width: 72px;
-            text: root.entry.time;
-            color: Design.subtle-foreground;
-            font-family: Design.font-mono;
-            font-size: Design.font-xs;
-            vertical-alignment: top;
-            wrap: no-wrap;
-            overflow: elide;
-        }
+    // No width: the time keeps its natural width, so the whole timestamp shows.
+    Text {
+        text: root.entry.time;
+        color: Design.subtle-foreground;
+        font-family: Design.font-mono;
+        font-size: Design.font-xs;
+        vertical-alignment: top;
+        wrap: no-wrap;
+    }
 
-        Text {
-            // Wide enough for the Russian "ОТЛАДКА" as well as "DEBUG".
-            width: 72px;
-            text: root.level-text(root.entry.level);
-            color: root.level-color(root.entry.level);
-            font-family: Design.font-family;
-            font-size: Design.font-xs;
-            font-weight: 600;
-            vertical-alignment: top;
-            wrap: no-wrap;
-        }
+    Text {
+        // Wide enough for the Russian "ОТЛАДКА" as well as "DEBUG".
+        width: 72px;
+        text: root.level-text(root.entry.level);
+        color: root.level-color(root.entry.level);
+        font-family: Design.font-family;
+        font-size: Design.font-xs;
+        font-weight: 600;
+        vertical-alignment: top;
+        wrap: no-wrap;
+    }
 
-        EmojiText {
-            width: 90px;
-            runs: root.entry.source-runs;
-            fallback: root.entry.source;
-            color: Design.muted-foreground;
-            font-size: Design.font-xs;
-            wrap: false;
-        }
+    EmojiText {
+        width: 90px;
+        runs: root.entry.source-runs;
+        fallback: root.entry.source;
+        color: Design.muted-foreground;
+        font-size: Design.font-xs;
+        wrap: false;
+    }
 
-        EmojiText {
-            horizontal-stretch: 1;
-            min-width: 0px;
-            runs: root.entry.message-runs;
-            fallback: root.entry.message;
-            color: Design.foreground;
-            font-family: Design.font-mono;
-            font-size: Design.font-base;
-            wrap: false;
-        }
+    EmojiText {
+        // Never shorter than the message itself: a line is read whole, and the
+        // list scrolls sideways when the window is narrower.
+        horizontal-stretch: 1;
+        min-width: self.preferred-width;
+        runs: root.entry.message-runs;
+        fallback: root.entry.message;
+        color: Design.foreground;
+        font-family: Design.font-mono;
+        font-size: Design.font-base;
+        wrap: false;
     }
 }
 
@@ -223,12 +222,20 @@ export component LogsPage inherits Rectangle {
                         vertical-stretch: 1;
                         inner-padding: 0px;
 
-                        ListView {
+                        // Scrolls both ways. The content is as wide as the widest
+                        // line (each row's minimum width), so a long message scrolls
+                        // sideways. A plain for, not a ListView: a ListView only
+                        // scrolls vertically.
+                        ScrollView {
                             vertical-stretch: 1;
                             horizontal-stretch: 1;
 
-                            for log in Bridge.logs : LogRow {
-                                entry: log;
+                            VerticalLayout {
+                                alignment: start;
+
+                                for log in Bridge.logs : LogRow {
+                                    entry: log;
+                                }
                             }
                         }
                     }
