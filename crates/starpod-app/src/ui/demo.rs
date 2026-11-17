@@ -79,7 +79,7 @@ pub fn apply(bridge: &Bridge<'_>) {
     bridge.set_current_node(FRANKFURT.into());
     bridge.set_current_node_runs(runs_model(FRANKFURT));
     bridge.set_uptime("01:12:09".into());
-    bridge.set_listen_address("127.0.0.1:7890".into());
+    bridge.set_server_address("203.0.113.10".into());
     bridge.set_banner_message("".into());
     bridge.set_banner_kind("info".into());
 

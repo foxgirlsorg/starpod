@@ -91,8 +91,10 @@ pub struct AppSnapshot {
     pub engine: EngineView,
     /// The effective routing mode.
     pub mode: ProxyMode,
-    /// The address the HTTP proxy is expected to listen on, if it has a port.
-    pub listen_address: Option<String>,
+    /// The IP address of the server in use, without a port. A host name is
+    /// shown until it resolves. `None` when not connected, or when the node
+    /// in use has no server.
+    pub server_address: Option<String>,
     /// The node the user selected, if it is in the current configuration.
     pub current_node: Option<NodeView>,
     /// Every subscription the user added.

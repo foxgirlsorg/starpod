@@ -13,6 +13,7 @@ All notable changes to Starpod are recorded here. The format follows
 ### Changed
 
 - Latency tests always go through the engine, also when you're not connected, and test servers in parallel.
+- Home shows the IP of the server in use instead of the local proxy address.
 
 ## [1.1.0] - 2026-11-17
 

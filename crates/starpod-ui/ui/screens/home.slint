@@ -131,7 +131,7 @@ export component HomePage inherits Rectangle {
         : root.running ? @tr("Connected")
         : Bridge.engine-phase == "failed" ? @tr("Couldn't connect")
         : @tr("Not connected");
-    private property <string> status-line: root.running ? (Bridge.mobile ? @tr("Up {}", Bridge.uptime) : @tr("Up {} · {}", Bridge.uptime, Bridge.listen-address))
+    private property <string> status-line: root.running ? (Bridge.server-address == "" ? @tr("Up {}", Bridge.uptime) : @tr("Up {} · {}", Bridge.uptime, Bridge.server-address))
         : root.blocked ? Bridge.connect-blocked-reason
         : Bridge.engine-phase == "failed" ? Bridge.engine-error
         : "";

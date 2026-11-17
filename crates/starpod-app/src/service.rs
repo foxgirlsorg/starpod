@@ -76,6 +76,11 @@ const STOPPED_FOR_NO_SERVERS: &str = "The proxy was stopped because no subscript
 const LOG_CAPACITY: usize = 500;
 /// The longest subscription name the app accepts.
 const MAX_LABEL_CHARS: usize = 80;
+/// How many nested groups are followed to find the node in use. Bounds the walk
+/// in case a configuration's groups refer to each other.
+const MAX_GROUP_DEPTH: usize = 8;
+/// How long a host name lookup for the server address may take.
+const SERVER_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 /// Node raw fields that hold credentials, so their values are scrubbed.
 const SECRET_NODE_KEYS: &[&str] = &[
     "password",
@@ -235,6 +240,9 @@ pub struct AppService {
     /// refresh has servers. Putting it in use before then would leave the
     /// running proxy with no servers, and stop it.
     activate_after_refresh: Option<String>,
+    /// The server in use, as `(host name, IP address)`, once the host name
+    /// has been resolved. Set by [`AppService::refresh_server_address`].
+    server_ip: Option<(String, String)>,
 }
 
 impl AppService {
@@ -293,6 +301,7 @@ impl AppService {
             phone_tunnel_up: false,
             updates: watch::channel(AppSnapshot::default()).0,
             activate_after_refresh: None,
+            server_ip: None,
         };
         service.publish();
         service
@@ -510,19 +519,6 @@ impl AppService {
             .map(|config| config.mode)
             .unwrap_or_else(|| prefs.mode.unwrap_or_default());
 
-        let listen_address = built.and_then(|config| {
-            config.mixed_port.or(config.port).map(|port| {
-                let bind = config.bind_address.clone().unwrap_or_else(|| {
-                    if config.allow_lan {
-                        "0.0.0.0".to_string()
-                    } else {
-                        "127.0.0.1".to_string()
-                    }
-                });
-                format!("{bind}:{port}")
-            })
-        });
-
         // On a phone the proxy is connected once its VPN is up; until then
         // it is still connecting.
         let tunnel_pending = self.phone_tunnel_port.is_some() && !self.phone_tunnel_up;
@@ -544,6 +540,13 @@ impl AppService {
             }),
         };
 
+        // The server in use is shown only while connected.
+        let server_address = if engine.phase.is_running() {
+            built.and_then(|config| self.server_address(config, prefs))
+        } else {
+            None
+        };
+
         let retention = self.state.preferences.effective_log_retention_lines() as usize;
         let engine_log_lines = self
             .engine
@@ -558,7 +561,7 @@ impl AppService {
             geo_updated_at: prefs.geo_updated_at,
             engine,
             mode,
-            listen_address,
+            server_address,
             current_node,
             subscriptions,
             nodes,
@@ -3048,6 +3051,74 @@ impl AppService {
             .cloned()
     }
 
+    /// The server of the node in use, with its port: the primary group's
+    /// selection, followed through nested groups until it reaches a node.
+    /// `None` when the chain ends at a built-in or the node has no server.
+    fn server_in_use(
+        &self,
+        config: &RuntimeConfig,
+        prefs: &UserPreferences,
+    ) -> Option<(String, Option<u16>)> {
+        let mut name = self.built_primary.clone()?;
+        for _ in 0..MAX_GROUP_DEPTH {
+            let group = config
+                .proxy_groups
+                .iter()
+                .find(|group| group.name == name)?;
+            let member = self.selected_member(group, prefs)?;
+            if let Some(node) = config.proxies.iter().find(|node| node.name == member) {
+                return node.server.clone().map(|server| (server, node.port));
+            }
+            name = member;
+        }
+        None
+    }
+
+    /// The server address the Home page shows: the server in use as an IP
+    /// literal, else its resolved IP, else its host name while unresolved.
+    fn server_address(&self, config: &RuntimeConfig, prefs: &UserPreferences) -> Option<String> {
+        let (host, _) = self.server_in_use(config, prefs)?;
+        if is_ip_literal(&host) {
+            return Some(host.trim_matches(['[', ']']).to_string());
+        }
+        match &self.server_ip {
+            Some((resolved, ip)) if *resolved == host => Some(ip.clone()),
+            _ => Some(host),
+        }
+    }
+
+    /// The host name and port of the server in use, when the proxy is running
+    /// and the host name is not resolved yet. `None` otherwise.
+    fn server_to_resolve(&self) -> Option<(String, u16)> {
+        if !self.engine_status.phase.is_running() {
+            return None;
+        }
+        let config = self.built.as_ref()?;
+        let (host, port) = self.server_in_use(config, &self.state.preferences)?;
+        let resolved = matches!(&self.server_ip, Some((known, _)) if *known == host);
+        if is_ip_literal(&host) || resolved {
+            return None;
+        }
+        Some((host, port.unwrap_or(443)))
+    }
+
+    /// Resolve the host name of the server in use, if it is not resolved yet,
+    /// and publish the result. The lookup runs without the service lock held,
+    /// so DNS does not hold up other actions. A failed or slow lookup leaves
+    /// the host name shown; the next snapshot change tries again.
+    pub async fn refresh_server_address(service: &SharedAppService) {
+        let target = service.lock().await.server_to_resolve();
+        let Some((host, port)) = target else {
+            return;
+        };
+        let Some(ip) = resolve_ipv4_preferred(&host, port).await else {
+            return;
+        };
+        let mut guard = service.lock().await;
+        guard.server_ip = Some((host, ip));
+        guard.publish();
+    }
+
     /// The last latency test's result for a member, looked up by the node's
     /// name. A group or a built-in has no test of its own.
     fn member_latency(&self, config: &RuntimeConfig, member: &str) -> Latency {
@@ -3289,6 +3360,29 @@ fn core_quota(quota: &starpod_subscription::SubscriptionQuota) -> CoreQuota {
 
 fn new_id() -> String {
     Uuid::new_v4().to_string()
+}
+
+/// Whether `host` is an IP address, with or without the brackets of an IPv6 literal.
+fn is_ip_literal(host: &str) -> bool {
+    host.trim_matches(['[', ']'])
+        .parse::<std::net::IpAddr>()
+        .is_ok()
+}
+
+/// The IPv4 address `host` resolves to, else its first address. `None` when
+/// the lookup fails or takes longer than [`SERVER_LOOKUP_TIMEOUT`].
+async fn resolve_ipv4_preferred(host: &str, port: u16) -> Option<String> {
+    let lookup = tokio::net::lookup_host((host, port));
+    let addresses: Vec<std::net::SocketAddr> = tokio::time::timeout(SERVER_LOOKUP_TIMEOUT, lookup)
+        .await
+        .ok()?
+        .ok()?
+        .collect();
+    addresses
+        .iter()
+        .find(|address| address.is_ipv4())
+        .or(addresses.first())
+        .map(|address| address.ip().to_string())
 }
 
 fn now_unix() -> i64 {

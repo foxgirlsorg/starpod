@@ -18,7 +18,7 @@ use std::time::Duration;
 use crate::deeplink::{self, InstallRequest};
 use crate::instance::Forwarded;
 use crate::update::{self, Release};
-use crate::{AppSnapshot, SharedAppService};
+use crate::{AppService, AppSnapshot, SharedAppService};
 use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
 use starpod_core::config::{DEFAULT_MIXED_PORT, DEFAULT_SOCKS_PORT};
 use starpod_core::{SubscriptionMode, UserPreferences, timestamp};
@@ -832,6 +832,17 @@ async fn watch_engine_subscriptions(service: SharedAppService) {
     }
 }
 
+/// Resolve the server address shown on Home whenever the snapshot changes, so
+/// a connect or a new selection is picked up. See
+/// [`AppService::refresh_server_address`].
+async fn watch_server_address(service: SharedAppService) {
+    let mut updates = service.lock().await.subscribe();
+    AppService::refresh_server_address(&service).await;
+    while updates.changed().await.is_ok() {
+        AppService::refresh_server_address(&service).await;
+    }
+}
+
 /// Read the engine's state every [`ENGINE_POLL_INTERVAL`].
 async fn poll_engine(service: SharedAppService) {
     let mut tick = tokio::time::interval(ENGINE_POLL_INTERVAL);
@@ -1039,6 +1050,7 @@ pub fn run(
     runtime.spawn(poll_engine(service.clone()));
     runtime.spawn(poll_connections(service.clone()));
     runtime.spawn(watch_engine_subscriptions(service.clone()));
+    runtime.spawn(watch_server_address(service.clone()));
     // The engine follows its newest release: a newer one is installed at start.
     runtime.spawn({
         let service = service.clone();

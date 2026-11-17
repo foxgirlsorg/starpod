@@ -156,7 +156,7 @@ with 48px top padding when the window is short; never overlapping).
    - Click: running → `Bridge.disconnect()`, stopped/failed → `Bridge.connect()`.
    - Below the button (20px): status title 20px weight 600 ("Connected" / "Not connected" /
      "Connecting…" / "Disconnecting…" / "Couldn't connect"), then 6px below a 13px muted line:
-     running → "Up {uptime} · {listen-address}"; blocked → the blocked reason, plus one primary md
+     running → "Up {uptime} · {server-address}" (the address is left out when empty); blocked → the blocked reason, plus one primary md
      button 12px below: "Install engine" (`Bridge.install-engine()`, busy while busy) when the engine
      is missing, otherwise "Add a profile" (switches to page 1); failed → the engine error in
      destructive 13px, max 3 lines.

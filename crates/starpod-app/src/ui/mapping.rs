@@ -1621,7 +1621,7 @@ fn set_engine(bridge: &Bridge<'_>, snap: &AppSnapshot) {
             .unwrap_or_default()
             .into(),
     );
-    bridge.set_listen_address(snap.listen_address.clone().unwrap_or_default().into());
+    bridge.set_server_address(snap.server_address.clone().unwrap_or_default().into());
 }
 
 fn set_servers(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
