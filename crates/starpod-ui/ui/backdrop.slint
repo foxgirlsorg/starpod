@@ -7,38 +7,109 @@
 
 import { Design } from "design.slint";
 
+// One layer of the rain: a column set that falls at its own speed.
+component RainLayer inherits Image {
+    // How far it has fallen, within one tile.
+    in property <length> fallen;
+    in property <length> tile;
+
+    // Whole pixels, so the characters stay sharp while they fall.
+    // Its width and height (the page's, plus one tile) are set where it is used.
+    y: round((root.fallen - root.tile) / 1px) * 1px;
+    // Drawn at its own size and repeated, so the characters stay sharp and
+    // the size of a glyph does not depend on the window.
+    image-fit: preserve;
+    horizontal-tiling: repeat;
+    vertical-tiling: repeat;
+    horizontal-alignment: center;
+    vertical-alignment: top;
+    colorize: Design.primary;
+    // The layers hold different columns, so they hardly overlap and each can
+    // carry the pattern's opacity.
+    opacity: 0.38;
+}
+
 export component Backdrop inherits Rectangle {
     // "" (none), "matrix", "topo", "map", "dots" or "eru"
     in property <string> kind;
 
     clip: true;
 
-    if root.kind == "matrix" : Image {
+    // The ASCII patterns move: the rain falls, the terrain drifts. Each
+    // image tiles without a seam and is drawn one tile larger than the page,
+    // shifted by an offset that wraps at the tile's size, so the motion never
+    // jumps. A timer moves them 30 times a second, and only while one shows.
+    private property <bool> moving: root.kind == "matrix" || root.kind == "topo";
+    // Whole tiles, in logical pixels (an image pixel is one logical pixel).
+    private property <length> rain-tile: 1400px;
+    private property <length> topo-width: 1400px;
+    private property <length> topo-height: 1404px;
+    // How far each rain layer and the terrain have moved, within one tile.
+    private property <length> rain-0: 0px;
+    private property <length> rain-1: 0px;
+    private property <length> rain-2: 0px;
+    private property <length> drift-x: 0px;
+    private property <length> drift-y: 0px;
+
+    Timer {
+        interval: 33ms;
+        running: root.moving;
+        triggered => {
+            if (root.kind == "matrix") {
+                // Falling 22, 34 and 50 pixels a second.
+                root.rain-0 = mod(root.rain-0 + 0.73px, root.rain-tile);
+                root.rain-1 = mod(root.rain-1 + 1.12px, root.rain-tile);
+                root.rain-2 = mod(root.rain-2 + 1.65px, root.rain-tile);
+            } else {
+                // Drifting 10 pixels a second, mostly sideways.
+                root.drift-x = mod(root.drift-x + 0.3px, root.topo-width);
+                root.drift-y = mod(root.drift-y + 0.12px, root.topo-height);
+            }
+        }
+    }
+
+    if root.kind == "matrix" : Rectangle {
         width: 100%;
         height: 100%;
-        source: @image-url("assets/backgrounds/matrix.png");
-        // Drawn at its own size and repeated, so the characters stay sharp
-        // and the size of a glyph does not depend on the window.
-        image-fit: preserve;
-        horizontal-tiling: repeat;
-        vertical-tiling: repeat;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        colorize: Design.primary;
-        opacity: 0.38;
+
+        RainLayer {
+            source: @image-url("assets/backgrounds/matrix-0.png");
+            fallen: root.rain-0;
+            tile: root.rain-tile;
+            width: parent.width;
+            height: parent.height + root.rain-tile;
+        }
+
+        RainLayer {
+            source: @image-url("assets/backgrounds/matrix-1.png");
+            fallen: root.rain-1;
+            tile: root.rain-tile;
+            width: parent.width;
+            height: parent.height + root.rain-tile;
+        }
+
+        RainLayer {
+            source: @image-url("assets/backgrounds/matrix-2.png");
+            fallen: root.rain-2;
+            tile: root.rain-tile;
+            width: parent.width;
+            height: parent.height + root.rain-tile;
+        }
     }
 
     if root.kind == "topo" : Image {
-        width: 100%;
-        height: 100%;
+        x: round((root.drift-x - root.topo-width) / 1px) * 1px;
+        y: round((root.drift-y - root.topo-height) / 1px) * 1px;
+        width: parent.width + root.topo-width;
+        height: parent.height + root.topo-height;
         source: @image-url("assets/backgrounds/topo.png");
         // Drawn at its own size and repeated, so the characters stay sharp
         // and the size of a glyph does not depend on the window.
         image-fit: preserve;
         horizontal-tiling: repeat;
         vertical-tiling: repeat;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+        horizontal-alignment: left;
+        vertical-alignment: top;
         colorize: Design.primary;
         opacity: 0.5;
     }
