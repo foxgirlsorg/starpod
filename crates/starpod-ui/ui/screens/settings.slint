@@ -627,8 +627,8 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
 
-                    // On a phone a new version comes as a new APK.
-                    if (!Bridge.mobile) : Card {
+                    // A store or package manager delivers the updates.
+                    if (Bridge.self-update) : Card {
                         CardHeader {
                             title: @tr("Updates");
                         }

@@ -495,7 +495,7 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    if (Bridge.update-available) : Rectangle {
+                    if (Bridge.self-update && Bridge.update-available) : Rectangle {
                         height: 28px;
                         border-radius: Design.radius-md;
                         background: update-ta.has-hover ? Design.card-hover : transparent;

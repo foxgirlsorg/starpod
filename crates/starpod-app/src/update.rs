@@ -150,6 +150,48 @@ fn platform_archives() -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// The store or package manager that installed Starpod, if one did. It then
+/// delivers the updates, so Starpod never checks for, offers or installs
+/// one itself: replacing its files would fight the package manager, and on
+/// a phone a new version comes from wherever the APK came from (a store
+/// such as F-Droid, an updater such as Obtainium, or a new download).
+pub fn package_manager() -> Option<&'static str> {
+    if cfg!(target_os = "android") {
+        return Some("Android");
+    }
+    if std::env::var_os("FLATPAK_ID").is_some() {
+        return Some("Flatpak");
+    }
+    if std::env::var_os("SNAP").is_some() {
+        return Some("Snap");
+    }
+    let exe = std::env::current_exe().ok()?;
+    package_manager_for(&exe.to_string_lossy(), cfg!(target_os = "linux"))
+}
+
+/// [`package_manager`] for the executable at `path`. On Linux (`linux`),
+/// anything under `/usr` but outside `/usr/local` belongs to the system's
+/// package manager (the `.deb`, a distribution package, the AUR).
+pub fn package_manager_for(path: &str, linux: bool) -> Option<&'static str> {
+    let path = path.replace('\\', "/").to_ascii_lowercase();
+    const KNOWN: [(&str, &str); 7] = [
+        ("/scoop/apps/", "Scoop"),
+        ("/winget/packages/", "WinGet"),
+        ("/windowsapps/", "Microsoft Store"),
+        ("/cellar/", "Homebrew"),
+        ("/caskroom/", "Homebrew"),
+        ("/nix/store/", "Nix"),
+        ("/snap/", "Snap"),
+    ];
+    if let Some((_, name)) = KNOWN.iter().find(|(part, _)| path.contains(part)) {
+        return Some(name);
+    }
+    if linux && path.starts_with("/usr/") && !path.starts_with("/usr/local/") {
+        return Some("the system package manager");
+    }
+    None
+}
+
 /// The portable archive `build.yml` publishes for this platform, or `None`
 /// where no build is published. The installers (`-setup`) are never used
 /// for an update.
@@ -698,5 +740,45 @@ mod tests {
     fn a_release_body_without_a_tag_is_an_error() {
         assert!(parse_release(r#"{"html_url": "https://example.test"}"#).is_err());
         assert!(parse_release("not json").is_err());
+    }
+
+    #[test]
+    fn a_store_or_package_manager_install_is_recognised() {
+        let cases = [
+            (
+                r"C:\Users\a\scoop\apps\starpod\current\starpod.exe",
+                false,
+                Some("Scoop"),
+            ),
+            (
+                r"C:\Users\a\AppData\Local\Microsoft\WinGet\Packages\starpod\starpod.exe",
+                false,
+                Some("WinGet"),
+            ),
+            (
+                r"C:\Program Files\WindowsApps\Starpod_1.0\starpod.exe",
+                false,
+                Some("Microsoft Store"),
+            ),
+            (
+                "/opt/homebrew/Cellar/starpod/1.0/bin/starpod",
+                false,
+                Some("Homebrew"),
+            ),
+            ("/nix/store/abc-starpod/bin/starpod", true, Some("Nix")),
+            ("/usr/bin/starpod", true, Some("the system package manager")),
+            // Starpod's own installer, the portable archive and a manual copy.
+            (
+                r"C:\Users\a\AppData\Local\Programs\Starpod\starpod.exe",
+                false,
+                None,
+            ),
+            ("/home/a/starpod/starpod", true, None),
+            ("/usr/local/bin/starpod", true, None),
+            ("/usr/bin/starpod", false, None),
+        ];
+        for (path, linux, expected) in cases {
+            assert_eq!(package_manager_for(path, linux), expected, "{path}");
+        }
     }
 }

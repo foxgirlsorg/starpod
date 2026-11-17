@@ -368,6 +368,10 @@ export global Bridge {
     // Running on a phone (Android): no tray, no login start, no global
     // shortcuts and no self-update, so their settings are hidden.
     in property <bool> mobile: false;
+    // Starpod may update itself: false when a store or package manager
+    // installed it (and always on a phone), which then hides every update
+    // control.
+    in property <bool> self-update: true;
     // This build's version, for the About card.
     in property <string> app-version;
 

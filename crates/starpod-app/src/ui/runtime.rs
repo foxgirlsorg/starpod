@@ -652,9 +652,8 @@ impl UiState {
 /// Check GitHub for a newer release. A manual check always runs. The startup
 /// check runs only while the user keeps the setting on.
 pub fn spawn_update_check(ctx: &Ctx, manual: bool) {
-    // On Android a new version comes as a new APK; the app does not update
-    // itself.
-    if cfg!(target_os = "android") {
+    // A store or package manager delivers the updates (always on Android).
+    if update::package_manager().is_some() {
         return;
     }
     let service = ctx.service.clone();
@@ -683,6 +682,9 @@ pub fn spawn_update_check(ctx: &Ctx, manual: bool) {
 /// Download and install the newest release, then quit and start it. Runs
 /// only when the user asks. A failure changes nothing and says why.
 pub fn spawn_install_update(ctx: &Ctx) {
+    if update::package_manager().is_some() {
+        return;
+    }
     let ctx = ctx.clone();
     let service = ctx.service.clone();
     ctx.runtime.clone().spawn(async move {
@@ -939,6 +941,9 @@ pub fn run(
     window
         .global::<Bridge>()
         .set_mobile(cfg!(target_os = "android"));
+    window
+        .global::<Bridge>()
+        .set_self_update(update::package_manager().is_none());
     window
         .global::<Bridge>()
         .set_app_version(env!("CARGO_PKG_VERSION").into());
