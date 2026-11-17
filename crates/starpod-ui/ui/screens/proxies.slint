@@ -307,10 +307,13 @@ export component ProxiesPage inherits Rectangle {
                                 horizontal-stretch: 1;
                             }
 
-                            if (root.running && Bridge.session-traffic-visible) : HorizontalLayout {
+                            // Always there, dimmed while disconnected, so the
+                            // card keeps its shape.
+                            if (Bridge.session-traffic-visible) : HorizontalLayout {
                                 horizontal-stretch: 1;
                                 min-width: 0px;
                                 alignment: end;
+                                opacity: root.running ? 1 : 0.5;
                                 spacing: 12px;
 
                                 HorizontalLayout {
