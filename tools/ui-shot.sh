@@ -17,7 +17,9 @@
 # With --empty: /work/shots/<page>-empty-<width>x<height>.png.
 # Sizes: 480x840 (the preferred portrait window) and 760x900, or the
 # space-separated list in STARPOD_SHOT_SIZES. STARPOD_UI_NAV=1 (the drawer
-# open) and STARPOD_UI_SETTINGS=0..10 (a Settings section) pass through. Each shot gets its own Xvfb and a fresh temporary
+# open), STARPOD_UI_SETTINGS=0..10 (a Settings section) and STARPOD_UI_BACKGROUND
+# (a Home background, e.g. topo) pass through. STARPOD_SHOT_WAIT is the seconds
+# to wait before each capture (default 2; raise it when large images decode). Each shot gets its own Xvfb and a fresh temporary
 # HOME (with XDG dirs under it), so the user's real data is never touched.
 # Exit status is 1 if any shot failed; the other shots are still taken.
 set -euo pipefail
@@ -151,7 +153,7 @@ shoot() {
 
     DISPLAY="$display" xdotool windowmove --sync "$wid" 0 0 || true
     DISPLAY="$display" xdotool windowsize --sync "$wid" "$w" "$h" || true
-    sleep 2
+    sleep "${STARPOD_SHOT_WAIT:-2}"
 
     if ! DISPLAY="$display" import -window root "$file"; then
         echo "FAIL $page ${w}x${h}: capture failed" >&2

@@ -752,6 +752,7 @@ pub fn settings_model(prefs: &UserPreferences) -> SettingsModel {
         close_to_tray: prefs.close_to_tray,
         language: prefs.language.as_str().into(),
         accent_color: prefs.accent_color.as_str().into(),
+        home_background: prefs.home_background.as_str().into(),
     }
 }
 
@@ -825,6 +826,8 @@ pub struct SettingsInput {
     pub language: String,
     /// The accent colour typed or picked: `#rrggbb`, or `""` for the default.
     pub accent_color: String,
+    /// The Home background picked, `""` for none.
+    pub home_background: String,
 }
 
 impl SettingsInput {
@@ -855,6 +858,7 @@ impl SettingsInput {
             close_to_tray: model.close_to_tray,
             language: model.language.to_string(),
             accent_color: model.accent_color.to_string(),
+            home_background: model.home_background.to_string(),
         }
     }
 }
@@ -898,6 +902,17 @@ pub fn accent_slint_color(text: &str) -> slint::Color {
         .flatten()
         .unwrap_or(0x00de_6161);
     slint::Color::from_rgb_u8((parsed >> 16) as u8, (parsed >> 8) as u8, parsed as u8)
+}
+
+/// The saved Home background for a form value: one of
+/// [`starpod_core::domain::HOME_BACKGROUNDS`], or `""` (none) for anything else.
+pub fn normalize_home_background(text: &str) -> String {
+    let text = text.trim();
+    if starpod_core::domain::HOME_BACKGROUNDS.contains(&text) {
+        text.to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// The saved language for a form value: `"en"` or `"ru"`, or `""` for the
@@ -1069,6 +1084,7 @@ pub fn build_preferences(
         close_to_tray: input.close_to_tray,
         language: normalize_language(&input.language),
         accent_color: normalize_accent_color(&input.accent_color)?,
+        home_background: normalize_home_background(&input.home_background),
         ..current.clone()
     })
 }
@@ -1752,6 +1768,14 @@ fn set_shell(bridge: &Bridge<'_>, snap: &AppSnapshot) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_home_backgrounds_save_as_none() {
+        assert_eq!(normalize_home_background("topo"), "topo");
+        assert_eq!(normalize_home_background(" eru "), "eru");
+        assert_eq!(normalize_home_background("lava"), "");
+        assert_eq!(normalize_home_background(""), "");
+    }
 
     #[test]
     fn accent_colours_are_normalized_and_the_default_saves_as_empty() {

@@ -1309,3 +1309,24 @@ msgstr ""
 
 msgid "Used for the power button, selections and the Starpod mark."
 msgstr ""
+
+msgid "Home background"
+msgstr ""
+
+msgid "Drawn behind the Home page in the accent colour."
+msgstr ""
+
+msgid "None"
+msgstr ""
+
+msgid "Matrix"
+msgstr ""
+
+msgid "Terrain"
+msgstr ""
+
+msgid "Map"
+msgstr ""
+
+msgid "Dots"
+msgstr ""

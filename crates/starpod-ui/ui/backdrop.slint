@@ -1,0 +1,92 @@
+// The picture behind the Home page.
+//
+// The patterns are white images whose alpha holds the drawing (made by
+// tools/render_backgrounds.py). `colorize` paints them in the accent colour,
+// so they follow the user's accent. "eru" is a picture, shown as it is under
+// a scrim that keeps the page's text readable.
+
+import { Design } from "design.slint";
+
+export component Backdrop inherits Rectangle {
+    // "" (none), "matrix", "topo", "map", "dots" or "eru"
+    in property <string> kind;
+
+    clip: true;
+
+    if root.kind == "matrix" : Image {
+        width: 100%;
+        height: 100%;
+        source: @image-url("assets/backgrounds/matrix.png");
+        // Drawn at its own size and repeated, so the characters stay sharp
+        // and the size of a glyph does not depend on the window.
+        image-fit: preserve;
+        horizontal-tiling: repeat;
+        vertical-tiling: repeat;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        colorize: Design.primary;
+        opacity: 0.38;
+    }
+
+    if root.kind == "topo" : Image {
+        width: 100%;
+        height: 100%;
+        source: @image-url("assets/backgrounds/topo.png");
+        // Drawn at its own size and repeated, so the characters stay sharp
+        // and the size of a glyph does not depend on the window.
+        image-fit: preserve;
+        horizontal-tiling: repeat;
+        vertical-tiling: repeat;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        colorize: Design.primary;
+        opacity: 0.5;
+    }
+
+    // The map fills the page, centred on the meridian, and is cropped at the
+    // sides of a tall window rather than shrunk to a strip.
+    if root.kind == "map" : Image {
+        width: 100%;
+        height: 100%;
+        source: @image-url("assets/backgrounds/map.png");
+        image-fit: cover;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        colorize: Design.primary;
+        opacity: 0.3;
+    }
+
+    if root.kind == "dots" : Image {
+        width: 100%;
+        height: 100%;
+        source: @image-url("assets/backgrounds/dots.png");
+        // At its own size, centred: the dots fade out towards its edges.
+        image-fit: preserve;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        colorize: Design.primary;
+        opacity: 0.45;
+    }
+
+    // Eru fills the page, centred both ways, and is cropped only where the
+    // page's shape differs from the picture's.
+    if root.kind == "eru" : Rectangle {
+        width: 100%;
+        height: 100%;
+
+        Image {
+            width: 100%;
+            height: 100%;
+            source: @image-url("assets/backgrounds/eru.png");
+            image-fit: cover;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: Design.background.with-alpha(0.45);
+        }
+    }
+}

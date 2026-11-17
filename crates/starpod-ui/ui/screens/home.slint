@@ -11,6 +11,7 @@ import {
     IconButton, Progress
 } from "../primitives.slint";
 import { ScrollView } from "std-widgets.slint";
+import { Backdrop } from "../backdrop.slint";
 
 // An announcement of a profile: the megaphone and the title, the text (six
 // lines, then "Show more") and the link when the provider sent one.
@@ -166,6 +167,13 @@ export component HomePage inherits Rectangle {
                 root.sel-index = i;
             }
         }
+    }
+
+    // The background the user picked in Settings, under everything else.
+    Backdrop {
+        width: parent.width;
+        height: parent.height;
+        kind: Bridge.settings.home-background;
     }
 
     ScrollView {

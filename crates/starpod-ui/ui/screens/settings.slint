@@ -188,6 +188,17 @@ export component SettingsPage inherits Rectangle {
         { text: "Русский", detail: "", detail-color: Design.muted-foreground },
     ];
     private property <[string]> language-values: ["", "en", "ru"];
+    // The Home backgrounds offered, and their names.
+    private property <[string]> background-options: ["", "matrix", "topo", "map", "dots", "eru"];
+    private property <[image]> background-previews: [
+        @image-url(""),
+        @image-url("../assets/backgrounds/thumb-matrix.png"),
+        @image-url("../assets/backgrounds/thumb-topo.png"),
+        @image-url("../assets/backgrounds/thumb-map.png"),
+        @image-url("../assets/backgrounds/thumb-dots.png"),
+        @image-url("../assets/backgrounds/eru.png"),
+    ];
+    private property <[string]> background-labels: [@tr("None"), @tr("Matrix"), @tr("Terrain"), @tr("Map"), @tr("Dots"), "Eru"];
     // The accent colours offered as swatches. The first is the default.
     private property <[string]> accent-swatches: ["#de6161", "#e8864a", "#d9a441", "#5bb381", "#3fb5a8", "#5b9be0", "#e06c9f"];
     pure function swatch-color(hex: string) -> color {
@@ -390,6 +401,64 @@ export component SettingsPage inherits Rectangle {
                                 revision: root.rev;
                                 committed(v) => {
                                     root.draft.language = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Home background");
+                            description: @tr("Drawn behind the Home page in the accent colour.");
+
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                for option[i] in root.background-options : VerticalLayout {
+                                    private property <bool> picked: root.draft.home-background == option;
+                                    // Equal tiles: the label never widens its tile.
+                                    horizontal-stretch: 1;
+                                    preferred-width: 1px;
+                                    spacing: 6px;
+
+                                    Rectangle {
+                                        height: 80px;
+                                        min-width: 40px;
+                                        border-radius: Design.radius-md;
+                                        background: Design.background;
+                                        border-width: parent.picked ? 2px : 1px;
+                                        border-color: parent.picked ? Design.primary : tile-touch.has-hover ? Design.input : Design.border;
+                                        clip: true;
+
+                                        // A still preview of each background, made by
+                                        // tools/render_backgrounds.py, in the accent colour.
+                                        if option != "" : Image {
+                                            x: 2px;
+                                            y: 2px;
+                                            width: parent.width - 4px;
+                                            height: parent.height - 4px;
+                                            source: root.background-previews[i];
+                                            image-fit: cover;
+                                            colorize: option == "eru" ? transparent : Design.primary;
+                                        }
+
+                                        tile-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.draft.home-background = option;
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: root.background-labels[i];
+                                        color: parent.picked ? Design.foreground : Design.muted-foreground;
+                                        font-family: Design.font-family;
+                                        font-size: Design.font-xs;
+                                        horizontal-alignment: center;
+                                        overflow: elide;
+                                        min-width: 0px;
+                                    }
                                 }
                             }
                         }

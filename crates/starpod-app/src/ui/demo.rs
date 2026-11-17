@@ -253,6 +253,9 @@ pub fn apply(bridge: &Bridge<'_>) {
         close_to_tray: true,
         language: String::new().into(),
         accent_color: String::new().into(),
+        home_background: std::env::var("STARPOD_UI_BACKGROUND")
+            .unwrap_or_default()
+            .into(),
     });
     bridge.set_settings_error("".into());
     bridge.set_secret_backend("Windows Credential Manager".into());

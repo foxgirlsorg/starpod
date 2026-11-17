@@ -630,7 +630,15 @@ pub struct UserPreferences {
     /// as `""`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub accent_color: String,
+    /// The picture behind the Home page: `""` for none, or one of
+    /// [`HOME_BACKGROUNDS`]. Files written before this field existed load as
+    /// `""`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub home_background: String,
 }
+
+/// The Home page backgrounds, by the name the preferences store.
+pub const HOME_BACKGROUNDS: &[&str] = &["matrix", "topo", "map", "dots", "eru"];
 
 /// The accent colour used when the user has not picked one.
 pub const DEFAULT_ACCENT_COLOR: &str = "#de6161";
@@ -741,6 +749,7 @@ impl Default for UserPreferences {
             close_to_tray: true,
             language: String::new(),
             accent_color: String::new(),
+            home_background: String::new(),
             engine: EngineOptions::default(),
             delay_test_url: None,
             delay_test_timeout_ms: None,

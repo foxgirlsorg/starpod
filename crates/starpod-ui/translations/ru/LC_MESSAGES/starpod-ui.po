@@ -1309,3 +1309,24 @@ msgstr "Цвет акцента"
 
 msgid "Used for the power button, selections and the Starpod mark."
 msgstr "Кнопка подключения, выделение и значок Starpod."
+
+msgid "Home background"
+msgstr "Фон главной"
+
+msgid "Drawn behind the Home page in the accent colour."
+msgstr "Рисуется за главной страницей цветом акцента."
+
+msgid "None"
+msgstr "Нет"
+
+msgid "Matrix"
+msgstr "Матрица"
+
+msgid "Terrain"
+msgstr "Рельеф"
+
+msgid "Map"
+msgstr "Карта"
+
+msgid "Dots"
+msgstr "Точки"
