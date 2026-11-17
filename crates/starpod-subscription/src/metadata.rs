@@ -147,6 +147,10 @@ pub struct SubscriptionMetadata {
     /// The message is redacted at the point it is created — a provider
     /// error can carry a URL, and a URL carries the token.
     pub last_error: Option<String>,
+    /// Whether the name was not given by the user. Such a name is replaced on
+    /// refresh by the provider's title, or else the address's domain (see
+    /// [`name_for_provider`]).
+    pub auto_named: bool,
 }
 
 impl SubscriptionMetadata {
@@ -162,6 +166,7 @@ impl SubscriptionMetadata {
             node_count: 0,
             group_count: 0,
             last_error: None,
+            auto_named: false,
         }
     }
 
@@ -228,8 +233,46 @@ impl SubscriptionMetadata {
             expand_proxy_groups: None,
             device_limit: false,
             local: false,
+            auto_named: self.auto_named,
         }
     }
+}
+
+/// The longest subscription name the app keeps, in characters.
+pub const MAX_LABEL_CHARS: usize = 80;
+
+/// Trim a name and cap it at [`MAX_LABEL_CHARS`] characters.
+pub fn cap_label(text: &str) -> String {
+    text.trim()
+        .chars()
+        .take(MAX_LABEL_CHARS)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+/// The host of a subscription address, without a leading `www.`.
+///
+/// This is the name a subscription gets when neither the user nor the
+/// provider gave one. `None` when the address has no host.
+pub fn domain_name(address: &str) -> Option<String> {
+    let url = reqwest::Url::parse(address.trim()).ok()?;
+    let host = url.host_str()?;
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    let name = cap_label(host);
+    (!name.is_empty()).then_some(name)
+}
+
+/// The name a subscription takes when the user gave none: the provider's
+/// title (`profile-title` or the `content-disposition` file name, already
+/// read into [`ProfileInfo::title`]), else the domain of the address.
+pub fn name_for_provider(profile: &ProfileInfo, address: &str) -> Option<String> {
+    profile
+        .title
+        .as_deref()
+        .map(cap_label)
+        .filter(|name| !name.is_empty())
+        .or_else(|| domain_name(address))
 }
 
 /// The longest announcement the app keeps, in characters.
@@ -800,5 +843,108 @@ mod tests {
             "attachment; filename*=latin1''%E9.yaml",
         ));
         assert_eq!(info.title, None, "a non-UTF-8 charset is not decoded");
+    }
+
+    fn name_from(response: &FetchResponse, address: &str) -> Option<String> {
+        name_for_provider(&ProfileInfo::from_response(response), address)
+    }
+
+    #[test]
+    fn a_plain_profile_title_names_the_subscription() {
+        let response = response_with("profile-title", "  Foxgirls VPN  ");
+        assert_eq!(
+            name_from(&response, "https://example.com/sub").as_deref(),
+            Some("Foxgirls VPN")
+        );
+    }
+
+    #[test]
+    fn a_base64_profile_title_is_decoded_before_it_names_the_subscription() {
+        let encoded = format!("base64:{}", BASE64_STANDARD.encode("Фоксгёрлз VPN"));
+        let response = response_with("profile-title", &encoded);
+        assert_eq!(
+            name_from(&response, "https://example.com/sub").as_deref(),
+            Some("Фоксгёрлз VPN")
+        );
+    }
+
+    #[test]
+    fn a_plain_content_disposition_file_name_names_the_subscription() {
+        let response = response_with(
+            "content-disposition",
+            "attachment; filename=\"My Airport.yaml\"",
+        );
+        assert_eq!(
+            name_from(&response, "https://example.com/sub").as_deref(),
+            Some("My Airport")
+        );
+    }
+
+    #[test]
+    fn an_extended_content_disposition_file_name_is_percent_decoded() {
+        let response = response_with(
+            "content-disposition",
+            "attachment; filename*=UTF-8''My%20Airport.yml",
+        );
+        assert_eq!(
+            name_from(&response, "https://example.com/sub").as_deref(),
+            Some("My Airport")
+        );
+
+        let response = response_with(
+            "content-disposition",
+            "attachment; filename=\"fallback.txt\"; filename*=UTF-8''%D0%A2%D0%B5%D1%81%D1%82.txt",
+        );
+        assert_eq!(
+            name_from(&response, "https://example.com/sub").as_deref(),
+            Some("Тест"),
+            "the extended form wins over the plain one"
+        );
+    }
+
+    #[test]
+    fn the_profile_title_wins_over_the_file_name() {
+        let response = FetchResponse::new(b"body".to_vec())
+            .with_header("profile-title", "Title")
+            .with_header("content-disposition", "attachment; filename=\"File.yaml\"");
+        assert_eq!(
+            name_from(&response, "https://example.com/sub").as_deref(),
+            Some("Title")
+        );
+    }
+
+    #[test]
+    fn without_a_provider_name_the_domain_names_the_subscription() {
+        let response = FetchResponse::new(b"body".to_vec());
+        assert_eq!(
+            name_from(&response, "https://example.com/sub?token=x").as_deref(),
+            Some("example.com")
+        );
+    }
+
+    #[test]
+    fn a_leading_www_is_dropped_from_the_domain() {
+        assert_eq!(
+            domain_name("https://www.example.com/sub").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(
+            domain_name("https://wwwexample.com/sub").as_deref(),
+            Some("wwwexample.com"),
+            "only a www. label is dropped"
+        );
+        assert_eq!(domain_name("not an address"), None);
+    }
+
+    #[test]
+    fn a_long_name_is_capped_by_characters() {
+        let long = "я".repeat(MAX_LABEL_CHARS + 20);
+        let name = name_from(
+            &response_with("profile-title", &long),
+            "https://example.com/sub",
+        )
+        .expect("a name");
+        assert_eq!(name.chars().count(), MAX_LABEL_CHARS);
+        assert_eq!(cap_label("  Airport  "), "Airport");
     }
 }

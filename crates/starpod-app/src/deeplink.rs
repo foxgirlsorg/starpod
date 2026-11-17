@@ -43,11 +43,6 @@ impl InstallRequest {
             .and_then(|url| url.host_str().map(str::to_string))
             .unwrap_or_default()
     }
-
-    /// The label the subscription gets: the suggested name, or else the host.
-    pub fn label(&self) -> String {
-        self.name.clone().unwrap_or_else(|| self.host())
-    }
 }
 
 /// Why a deep link was refused. None of these messages repeats the link.
@@ -139,7 +134,6 @@ mod tests {
         assert_eq!(request.url, "https://example.com/sub");
         assert_eq!(request.name.as_deref(), Some("Work"));
         assert_eq!(request.host(), "example.com");
-        assert_eq!(request.label(), "Work");
     }
 
     #[test]
@@ -167,7 +161,7 @@ mod tests {
     fn the_name_is_optional_and_an_empty_name_is_none() {
         let without = parse(&format!("starpod://install-config?url={SUB}")).unwrap();
         assert_eq!(without.name, None);
-        assert_eq!(without.label(), "example.com");
+        assert_eq!(without.host(), "example.com");
 
         let empty = parse(&format!("starpod://install-config?url={SUB}&name=%20%20")).unwrap();
         assert_eq!(empty.name, None);

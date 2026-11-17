@@ -433,6 +433,7 @@ mod tests {
             expand_proxy_groups: None,
             device_limit: false,
             local: false,
+            auto_named: false,
         }
     }
 

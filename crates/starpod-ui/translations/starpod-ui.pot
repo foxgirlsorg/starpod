@@ -335,7 +335,7 @@ msgstr ""
 msgid "Name"
 msgstr ""
 
-msgid "Optional — taken from the link"
+msgid "Optional — taken from the provider or the domain"
 msgstr ""
 
 msgid "Advanced"

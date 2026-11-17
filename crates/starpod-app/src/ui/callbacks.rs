@@ -122,7 +122,8 @@ async fn install_subscription_flow(
     if let Some(id) = svc.subscription_id_for_url(&request.url) {
         return svc.refresh_subscription(&id).await;
     }
-    let label = request.label();
+    // An empty name lets the service take the provider's name, then the domain.
+    let label = request.name.unwrap_or_default();
     let id = svc
         .add_subscription(label, request.url, None, SubscriptionMode::AppManaged)
         .await?;

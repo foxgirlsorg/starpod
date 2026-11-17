@@ -794,6 +794,7 @@ mod tests {
                 expand_proxy_groups: None,
                 device_limit: false,
                 local: false,
+                auto_named: false,
             }],
             url_keys: vec![SecretRef {
                 subscription_id: "sub-1".to_string(),

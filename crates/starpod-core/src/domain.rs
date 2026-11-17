@@ -1118,6 +1118,12 @@ pub struct Subscription {
     /// source file in the data directory, and a refresh re-parses that file.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub local: bool,
+    /// Whether the name was not given by the user and has not been settled
+    /// yet. The first refresh then takes the provider's title, or else the
+    /// address's domain, and clears this. A name the user typed is never
+    /// replaced.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_named: bool,
 }
 
 /// Who fetches a subscription.

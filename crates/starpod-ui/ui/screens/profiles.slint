@@ -235,7 +235,7 @@ export component ProfilesPage inherits Rectangle {
 
                         Input {
                             label: @tr("Name");
-                            placeholder: root.source-index == 0 ? @tr("Optional — taken from the link") : @tr("Optional");
+                            placeholder: root.source-index == 0 ? @tr("Optional — taken from the provider or the domain") : @tr("Optional");
                             text <=> root.draft-name;
                         }
 

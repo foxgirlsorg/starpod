@@ -43,7 +43,7 @@ use starpod_store::{
     UserState, open_secret_store,
 };
 use starpod_subscription::logo::fetch_logo;
-use starpod_subscription::metadata::DEFAULT_INTERVAL_SECS;
+use starpod_subscription::metadata::{DEFAULT_INTERVAL_SECS, MAX_LABEL_CHARS, domain_name};
 use starpod_subscription::pipeline::parse_payload;
 use starpod_subscription::{
     FetchRequest, HttpSubscriptionProvider, RefreshOutcome, SubscriptionCacheSet,
@@ -74,8 +74,6 @@ const STOPPED_FOR_NO_SERVERS: &str = "The proxy was stopped because no subscript
 
 /// How many lines of the app's own log are kept.
 const LOG_CAPACITY: usize = 500;
-/// The longest subscription name the app accepts.
-const MAX_LABEL_CHARS: usize = 80;
 /// How many nested groups are followed to find the node in use. Bounds the walk
 /// in case a configuration's groups refer to each other.
 const MAX_GROUP_DEPTH: usize = 8;
@@ -1376,17 +1374,6 @@ impl AppService {
         header: Option<String>,
         mode: SubscriptionMode,
     ) -> Result<String, AppError> {
-        let label = label.trim().to_string();
-        if label.is_empty() {
-            return Err(AppError::Invalid(
-                "give the subscription a name".to_string(),
-            ));
-        }
-        if label.chars().count() > MAX_LABEL_CHARS {
-            return Err(AppError::Invalid(format!(
-                "the name is longer than {MAX_LABEL_CHARS} characters"
-            )));
-        }
         let url = url.trim().to_string();
         if !is_subscription_url(&url) {
             return Err(AppError::Invalid(
@@ -1394,6 +1381,24 @@ impl AppService {
                     .to_string(),
             ));
         }
+        // A name the user leaves empty is taken from the provider on the first
+        // refresh. Until then, the address's domain stands in for it.
+        let typed = label.trim().to_string();
+        let auto_named = typed.is_empty();
+        let label = if auto_named {
+            domain_name(&url).ok_or_else(|| {
+                AppError::Invalid(
+                    "the subscription address must be an http:// or https:// address with a host"
+                        .to_string(),
+                )
+            })?
+        } else if typed.chars().count() > MAX_LABEL_CHARS {
+            return Err(AppError::Invalid(format!(
+                "the name is longer than {MAX_LABEL_CHARS} characters"
+            )));
+        } else {
+            typed
+        };
         let header = header
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
@@ -1435,6 +1440,7 @@ impl AppService {
             expand_proxy_groups: None,
             device_limit: false,
             local: false,
+            auto_named,
         });
         meta.url_keys.push(SecretRef {
             subscription_id: id.clone(),
@@ -1517,6 +1523,7 @@ impl AppService {
             expand_proxy_groups: None,
             device_limit: false,
             local: true,
+            auto_named: false,
         });
 
         let mut state = self.state.clone();
@@ -1798,6 +1805,7 @@ impl AppService {
         let mut metadata =
             SubscriptionMetadata::new(subscription.id.clone(), subscription.label.clone());
         metadata.mode = subscription.mode;
+        metadata.auto_named = subscription.auto_named;
         metadata.interval_secs = subscription.interval_secs;
         metadata.last_updated = subscription
             .last_updated
@@ -1812,6 +1820,7 @@ impl AppService {
         match outcome {
             RefreshOutcome::Refreshed {
                 payload,
+                label: namespace_label,
                 quota,
                 profile,
                 ..
@@ -1836,6 +1845,13 @@ impl AppService {
                 if let Some(entry) = meta.subscriptions.iter_mut().find(|entry| entry.id == id) {
                     entry.last_updated = timestamp::format(now);
                     entry.last_error = None;
+                    // Equal to the stored name, unless the name was not given
+                    // by the user: then the first refresh takes the provider's
+                    // title. It is kept after that, since the server names are
+                    // namespaced by it and a rename would lose the user's
+                    // server choices.
+                    entry.label = namespace_label.clone();
+                    entry.auto_named = false;
                     entry.quota = quota.as_ref().map(core_quota);
                     entry.node_count = node_count;
                     entry.group_count = group_count;
@@ -1870,8 +1886,7 @@ impl AppService {
                     .write_subscription_cache(id, &bytes)
                     .map_err(|error| AppError::Storage(self.scrub(&error.to_string())))?;
                 self.log(format!(
-                    "refreshed “{}”: {node_count} nodes, {group_count} groups",
-                    subscription.label
+                    "refreshed “{namespace_label}”: {node_count} nodes, {group_count} groups"
                 ));
                 // The first refresh of a subscription the user just added puts
                 // it in use. This is the user's choice made when adding it, not

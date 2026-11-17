@@ -335,8 +335,8 @@ msgstr "Адрес подписки"
 msgid "Name"
 msgstr "Имя"
 
-msgid "Optional — taken from the link"
-msgstr "Необязательно — берётся из ссылки"
+msgid "Optional — taken from the provider or the domain"
+msgstr "Необязательно — берётся от провайдера или из домена"
 
 msgid "Advanced"
 msgstr "Дополнительно"

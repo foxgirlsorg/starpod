@@ -23,7 +23,7 @@ use starpod_core::SubscriptionPayload;
 
 use crate::cache::SubscriptionCache;
 use crate::error::SubscriptionError;
-use crate::metadata::{ProfileInfo, SubscriptionMetadata, SubscriptionQuota};
+use crate::metadata::{ProfileInfo, SubscriptionMetadata, SubscriptionQuota, name_for_provider};
 use crate::pipeline::{PayloadFormat, parse_payload};
 use crate::provider::{FetchRequest, FetchResponse, SubscriptionProvider};
 
@@ -34,6 +34,10 @@ pub enum RefreshOutcome {
     Refreshed {
         /// The validated payload.
         payload: Box<SubscriptionPayload>,
+        /// The name the payload is namespaced with. It is the name the
+        /// metadata carried, except for a subscription without a user-given
+        /// name, which takes the provider's title (or else the domain).
+        label: String,
         /// The format the body was in.
         format: PayloadFormat,
         /// The quota the server reported, if it reported one.
@@ -130,11 +134,20 @@ pub async fn refresh(
         };
     }
 
-    match parse_payload(&response.body, &metadata.id, &metadata.label) {
+    // A name the user did not type follows the provider's title, and falls
+    // back to the domain when the provider sent no title.
+    let label = if metadata.auto_named {
+        name_for_provider(&profile, &request.url).unwrap_or_else(|| metadata.label.clone())
+    } else {
+        metadata.label.clone()
+    };
+
+    match parse_payload(&response.body, &metadata.id, &label) {
         Ok(parsed) => {
             cache.store(parsed.payload.clone(), now);
             RefreshOutcome::Refreshed {
                 payload: Box::new(parsed.payload),
+                label,
                 format: parsed.format,
                 quota,
                 profile,
