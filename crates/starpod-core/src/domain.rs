@@ -625,6 +625,25 @@ pub struct UserPreferences {
     /// pins it. Files written before this field existed load as `""`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub language: String,
+    /// The accent colour as `#rrggbb`. `""` means the Starpod red,
+    /// [`DEFAULT_ACCENT_COLOR`]. Files written before this field existed load
+    /// as `""`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accent_color: String,
+}
+
+/// The accent colour used when the user has not picked one.
+pub const DEFAULT_ACCENT_COLOR: &str = "#de6161";
+
+impl UserPreferences {
+    /// The accent colour to paint with: the saved one, or the default.
+    pub fn effective_accent_color(&self) -> &str {
+        if self.accent_color.is_empty() {
+            DEFAULT_ACCENT_COLOR
+        } else {
+            &self.accent_color
+        }
+    }
 }
 
 /// How the system proxy is configured.
@@ -721,6 +740,7 @@ impl Default for UserPreferences {
             auto_close_connections_on_switch: true,
             close_to_tray: true,
             language: String::new(),
+            accent_color: String::new(),
             engine: EngineOptions::default(),
             delay_test_url: None,
             delay_test_timeout_ms: None,

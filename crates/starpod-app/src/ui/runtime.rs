@@ -23,7 +23,7 @@ use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
 use starpod_core::config::{DEFAULT_MIXED_PORT, DEFAULT_SOCKS_PORT};
 use starpod_core::{SubscriptionMode, UserPreferences, timestamp};
 use starpod_subscription::RefreshSchedule;
-use starpod_ui::{AppTray, AppWindow, Bridge};
+use starpod_ui::{AppTray, AppWindow, Bridge, Design};
 use tokio::sync::watch;
 use tracing::{info, warn};
 
@@ -495,6 +495,11 @@ impl UiState {
         let language = crate::i18n::effective(&prefs.language);
         if let Err(error) = slint::select_bundled_translation(language.tag()) {
             warn!(?error, "the interface language could not be selected");
+        }
+        let accent = super::mapping::accent_slint_color(prefs.effective_accent_color());
+        self.window.global::<Design>().set_primary(accent);
+        if let Some(tray) = &self.tray {
+            tray.global::<Design>().set_primary(accent);
         }
         self.each_bridge(|bridge| {
             bridge.set_check_updates(check_updates);

@@ -29,12 +29,13 @@ export global Design {
     in property <color> accent: #27272a;
 
     // --- brand and state ----------------------------------------------------
-    // primary action, selection, connected
+    // primary action, selection, connected. The accent colour: Rust sets it
+    // from the user's choice, and the shades below follow it.
     in property <color> primary: #de6161;
-    in property <color> primary-hover: #e57a7a;
-    in property <color> primary-pressed: #c95454;
+    out property <color> primary-hover: self.primary.mix(#ffffff, 0.85);
+    out property <color> primary-pressed: self.primary.mix(#000000, 0.9);
     // selected tile fill, connected ring (12% alpha)
-    in property <color> primary-soft: #de61611f;
+    out property <color> primary-soft: self.primary.with-alpha(0.12);
     in property <color> primary-foreground: #ffffff;
     // latency under 200 ms, connected dot
     in property <color> success: #4ade80;
@@ -43,7 +44,7 @@ export global Design {
     // errors, delete, latency 500 ms and up, timeout
     in property <color> destructive: #ef4444;
     // focus ring
-    in property <color> ring: #de6161;
+    out property <color> ring: self.primary;
 
     // --- text ---------------------------------------------------------------
     in property <color> foreground: #fafafa;

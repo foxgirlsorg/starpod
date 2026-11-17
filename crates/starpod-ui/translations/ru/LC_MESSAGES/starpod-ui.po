@@ -1303,3 +1303,9 @@ msgstr "Версия {} доступна на GitHub. Установка пер�
 
 msgid "Back to settings"
 msgstr "Назад к настройкам"
+
+msgid "Accent colour"
+msgstr "Цвет акцента"
+
+msgid "Used for the power button, selections and the Starpod mark."
+msgstr "Кнопка подключения, выделение и значок Starpod."

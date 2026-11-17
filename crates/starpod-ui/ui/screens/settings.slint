@@ -188,6 +188,17 @@ export component SettingsPage inherits Rectangle {
         { text: "Русский", detail: "", detail-color: Design.muted-foreground },
     ];
     private property <[string]> language-values: ["", "en", "ru"];
+    // The accent colours offered as swatches. The first is the default.
+    private property <[string]> accent-swatches: ["#de6161", "#e8864a", "#d9a441", "#5bb381", "#3fb5a8", "#5b9be0", "#e06c9f"];
+    pure function swatch-color(hex: string) -> color {
+        if hex == "#e8864a" { return #e8864a; }
+        if hex == "#d9a441" { return #d9a441; }
+        if hex == "#5bb381" { return #5bb381; }
+        if hex == "#3fb5a8" { return #3fb5a8; }
+        if hex == "#5b9be0" { return #5b9be0; }
+        if hex == "#e06c9f" { return #e06c9f; }
+        return #de6161;
+    }
 
     // Hotkey placeholders show the format; the row's description says how to clear one.
     private property <string> hotkey-example: "Ctrl+Alt+KeyS";
@@ -379,6 +390,58 @@ export component SettingsPage inherits Rectangle {
                                 revision: root.rev;
                                 committed(v) => {
                                     root.draft.language = v;
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Accent colour");
+                            description: @tr("Used for the power button, selections and the Starpod mark.");
+
+                            VerticalLayout {
+                                spacing: 8px;
+                                min-width: 204px;
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    for swatch in root.accent-swatches : Rectangle {
+                                        private property <bool> picked: root.draft.accent-color == swatch
+                                            || (swatch == "#de6161" && root.draft.accent-color == "");
+                                        width: 24px;
+                                        height: 24px;
+                                        border-radius: 12px;
+                                        background: root.swatch-color(swatch);
+                                        border-width: self.picked ? 2px : 0px;
+                                        border-color: Design.foreground;
+
+                                        Rectangle {
+                                            width: 100%;
+                                            height: 100%;
+                                            border-radius: 12px;
+                                            background: swatch-touch.has-hover && !parent.picked ? #ffffff26 : transparent;
+                                        }
+
+                                        swatch-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.draft.accent-color = swatch == "#de6161" ? "" : swatch;
+                                                root.rev += 1;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                DraftText {
+                                    value: root.draft.accent-color;
+                                    revision: root.rev;
+                                    placeholder: "#de6161";
+                                    committed(v) => {
+                                        root.draft.accent-color = v;
+                                    }
                                 }
                             }
                         }

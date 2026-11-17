@@ -1303,3 +1303,9 @@ msgstr ""
 
 msgid "Back to settings"
 msgstr ""
+
+msgid "Accent colour"
+msgstr ""
+
+msgid "Used for the power button, selections and the Starpod mark."
+msgstr ""

@@ -252,6 +252,7 @@ pub fn apply(bridge: &Bridge<'_>) {
         auto_connect: false,
         close_to_tray: true,
         language: String::new().into(),
+        accent_color: String::new().into(),
     });
     bridge.set_settings_error("".into());
     bridge.set_secret_backend("Windows Credential Manager".into());
