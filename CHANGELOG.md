@@ -4,6 +4,50 @@ All notable changes to Starpod are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-11-17
+
+### Added
+
+- **Android app** (`org.foxgirls.starpod`, Android 8+, arm64 and x86_64). It
+  connects through Android's VPN service, so every app's traffic goes through
+  the proxy. Android asks for the VPN permission on the first connect, and
+  again if it has been taken away. The engine ships inside the APK. Targets
+  Android 15 (API 35).
+- An APK installed directly updates itself over the air; Android asks you to
+  confirm each update.
+- A bottom dock on phones: Home, Profiles, Proxies, Settings and More, which
+  holds Connections, Rules and Logs.
+- Home backgrounds: matrix, terrain, map, dots and Eru, in the accent color.
+  Matrix and terrain are animated.
+- A configurable accent color, defaulting to `#de6161`.
+- Add a profile from a pasted config, and edit any profile's content.
+- **Restart engine** in Settings > Engine.
+- An About card with the version and a link to GitHub.
+- Installers next to the portable archives, for Windows, Linux and macOS.
+
+### Changed
+
+- Every page fits a phone-width window: 16px margins, page header buttons on
+  the title row, the Proxies routing card and server sort on one row each, and
+  narrow layouts for Rules and Connections.
+- The connect button animates while connecting or disconnecting, from the
+  moment it is pressed.
+- A change that leaves the engine's configuration as it is no longer reloads or
+  restarts the engine, so changing the theme or other display settings is
+  instant.
+- Copies installed by a store or package manager (WinGet, Scoop, Homebrew,
+  Flatpak, Snap, F-Droid, Obtainium, Google Play and others) leave updates to
+  it, and hide Starpod's own updater.
+- Tapping the tab of the page you are on takes it back to its start.
+- Every server is tested once when a profile is added or put in use.
+- Log lines scroll sideways instead of being cut off.
+- The interface and documentation use American English.
+
+### Fixed
+
+- The Windows system proxy is set through WinINet, so it takes effect.
+- Select fields have a solid background over Home's picture.
+
 ## [0.0.3] - 2026-11-17
 
 ### Added
