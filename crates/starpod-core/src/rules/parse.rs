@@ -15,7 +15,7 @@
 //!   reproducing the truncation;
 //! - `MATCH` takes a single target and no payload;
 //! - `SUB-RULE` takes a single field and rejects trailing ones;
-//! - the logic rules take a parenthesised group list and a target, and the
+//! - the logic rules take a parenthesized group list and a target, and the
 //!   target is the *last* comma-separated field after the group;
 //! - **an inner rule has no target**: the engine splices a placeholder
 //!   adapter into every entry of a logic group and discards it, and reads

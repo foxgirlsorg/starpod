@@ -228,6 +228,7 @@ pub fn subscription_item(view: &SubscriptionView) -> SubscriptionItem {
         quota_used_fraction: fraction,
         quota_text: text.into(),
         expires: expires.into(),
+        local: view.local,
     }
 }
 
@@ -280,7 +281,7 @@ pub fn latency_text(ms: i32) -> String {
     }
 }
 
-/// A latency's colour: grey untested, red timed out, green under 200 ms,
+/// A latency's color: gray untested, red timed out, green under 200 ms,
 /// amber under 500 ms, red from 500 ms.
 pub fn latency_color(ms: i32) -> Color {
     match ms {
@@ -751,6 +752,8 @@ pub fn settings_model(prefs: &UserPreferences) -> SettingsModel {
         auto_connect: prefs.auto_connect_on_start,
         close_to_tray: prefs.close_to_tray,
         language: prefs.language.as_str().into(),
+        accent_color: prefs.accent_color.as_str().into(),
+        home_background: prefs.home_background.as_str().into(),
     }
 }
 
@@ -822,6 +825,10 @@ pub struct SettingsInput {
     pub close_to_tray: bool,
     /// The saved language: `""` follows the system, `"en"` or `"ru"` pins it.
     pub language: String,
+    /// The accent color typed or picked: `#rrggbb`, or `""` for the default.
+    pub accent_color: String,
+    /// The Home background picked, `""` for none.
+    pub home_background: String,
 }
 
 impl SettingsInput {
@@ -851,7 +858,61 @@ impl SettingsInput {
             auto_connect: model.auto_connect,
             close_to_tray: model.close_to_tray,
             language: model.language.to_string(),
+            accent_color: model.accent_color.to_string(),
+            home_background: model.home_background.to_string(),
         }
+    }
+}
+
+/// The saved accent color for a form value: `#rrggbb` in lower case, or
+/// `""` for the default. The `#` is optional and `#rgb` is widened. The
+/// default color itself is saved as `""`, so a later change of the default
+/// reaches users who never picked one.
+pub fn normalize_accent_color(text: &str) -> Result<String, AppError> {
+    let hex = text.trim().trim_start_matches('#').to_ascii_lowercase();
+    if hex.is_empty() {
+        return Ok(String::new());
+    }
+    let hex = match hex.len() {
+        3 => hex.chars().flat_map(|c| [c, c]).collect(),
+        6 => hex,
+        _ => {
+            return Err(invalid(crate::i18n::t(
+                "The accent color must be written as #rrggbb, for example #de6161",
+            )));
+        }
+    };
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(invalid(crate::i18n::t(
+            "The accent color must be written as #rrggbb, for example #de6161",
+        )));
+    }
+    let color = format!("#{hex}");
+    Ok(if color == starpod_core::domain::DEFAULT_ACCENT_COLOR {
+        String::new()
+    } else {
+        color
+    })
+}
+
+/// The accent color as a Slint color. Anything unreadable is the default.
+pub fn accent_slint_color(text: &str) -> slint::Color {
+    let hex = text.trim_start_matches('#');
+    let parsed = (hex.len() == 6)
+        .then(|| u32::from_str_radix(hex, 16).ok())
+        .flatten()
+        .unwrap_or(0x00de_6161);
+    slint::Color::from_rgb_u8((parsed >> 16) as u8, (parsed >> 8) as u8, parsed as u8)
+}
+
+/// The saved Home background for a form value: one of
+/// [`starpod_core::domain::HOME_BACKGROUNDS`], or `""` (none) for anything else.
+pub fn normalize_home_background(text: &str) -> String {
+    let text = text.trim();
+    if starpod_core::domain::HOME_BACKGROUNDS.contains(&text) {
+        text.to_string()
+    } else {
+        String::new()
     }
 }
 
@@ -1023,6 +1084,8 @@ pub fn build_preferences(
         auto_connect_on_start: input.auto_connect,
         close_to_tray: input.close_to_tray,
         language: normalize_language(&input.language),
+        accent_color: normalize_accent_color(&input.accent_color)?,
+        home_background: normalize_home_background(&input.home_background),
         ..current.clone()
     })
 }
@@ -1706,6 +1769,32 @@ fn set_shell(bridge: &Bridge<'_>, snap: &AppSnapshot) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_home_backgrounds_save_as_none() {
+        assert_eq!(normalize_home_background("topo"), "topo");
+        assert_eq!(normalize_home_background(" eru "), "eru");
+        assert_eq!(normalize_home_background("lava"), "");
+        assert_eq!(normalize_home_background(""), "");
+    }
+
+    #[test]
+    fn accent_colours_are_normalized_and_the_default_saves_as_empty() {
+        assert_eq!(normalize_accent_color("").unwrap(), "");
+        assert_eq!(normalize_accent_color("#DE6161").unwrap(), "");
+        assert_eq!(normalize_accent_color("5b9be0").unwrap(), "#5b9be0");
+        assert_eq!(normalize_accent_color(" #abc ").unwrap(), "#aabbcc");
+        assert!(normalize_accent_color("#12345").is_err());
+        assert!(normalize_accent_color("#zzzzzz").is_err());
+        assert_eq!(
+            accent_slint_color("#5b9be0"),
+            slint::Color::from_rgb_u8(0x5b, 0x9b, 0xe0)
+        );
+        assert_eq!(
+            accent_slint_color("nonsense"),
+            slint::Color::from_rgb_u8(0xde, 0x61, 0x61)
+        );
+    }
     use crate::EngineView;
 
     #[test]
@@ -1740,6 +1829,7 @@ mod tests {
             group_count: 2,
             quota,
             has_auth_header: false,
+            local: false,
             title: "Main".to_string(),
             announce: None,
             support_url: None,

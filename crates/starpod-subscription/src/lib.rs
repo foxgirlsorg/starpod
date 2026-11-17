@@ -65,6 +65,7 @@ pub mod pipeline;
 pub mod provider;
 pub mod refresh;
 pub mod schedule;
+pub mod tls;
 
 pub use cache::{SubscriptionCache, SubscriptionCacheSet};
 pub use error::{ProviderError, SubscriptionError};

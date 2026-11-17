@@ -1,6 +1,6 @@
 // EmojiText: a string drawn with its emoji as Twemoji pictures.
 //
-// The Slint software renderer cannot draw colour emoji, so every display
+// The Slint software renderer cannot draw color emoji, so every display
 // string arrives as runs (see bridge.slint, TextRun): text runs of one word
 // each with the space after it, and emoji runs with the picture in `icon`.
 // A run with an empty icon is drawn as its text.
@@ -32,7 +32,7 @@ import { TextRun } from "bridge.slint";
 
 // One run as a box: a Text, or an Image for an emoji with a picture. The box
 // is as wide as its content and as tall as `box-height`; the content sits on
-// the box's centre line, so text and emoji line up. The colour is `ink`
+// the box's center line, so text and emoji line up. The color is `ink`
 // (Rectangle already has a deprecated `color`, so the name is taken).
 component EmojiRun inherits Rectangle {
     in property <string> text;

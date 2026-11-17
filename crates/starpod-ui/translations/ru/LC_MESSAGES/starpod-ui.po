@@ -1303,3 +1303,81 @@ msgstr "Версия {} доступна на GitHub. Установка пер�
 
 msgid "Back to settings"
 msgstr "Назад к настройкам"
+
+msgid "Accent color"
+msgstr "Цвет акцента"
+
+msgid "Used for the power button, selections and the Starpod mark."
+msgstr "Кнопка подключения, выделение и значок Starpod."
+
+msgid "Home background"
+msgstr "Фон главной"
+
+msgid "Drawn behind the Home page in the accent color."
+msgstr "Рисуется за главной страницей цветом акцента."
+
+msgid "None"
+msgstr "Нет"
+
+msgid "Matrix"
+msgstr "Матрица"
+
+msgid "Terrain"
+msgstr "Рельеф"
+
+msgid "Map"
+msgstr "Карта"
+
+msgid "Dots"
+msgstr "Точки"
+
+msgid "Applies when connected"
+msgstr "Применится при подключении"
+
+msgid "Paste the configuration."
+msgstr "Вставьте конфигурацию."
+
+msgid "From a link"
+msgstr "По ссылке"
+
+msgid "Paste a config"
+msgstr "Вставить конфиг"
+
+msgid "A Clash or mihomo configuration, in YAML or JSON. Starpod never fetches it; edit it from the profile card."
+msgstr "Конфигурация Clash или mihomo в YAML или JSON. Starpod её не загружает; правьте её из карточки профиля."
+
+msgid "Edit “{}”"
+msgstr "Изменить «{}»"
+
+msgid "The pasted configuration, in YAML or JSON. Saving checks it and rebuilds the profile."
+msgstr "Вставленная конфигурация в YAML или JSON. При сохранении она проверяется и профиль пересобирается."
+
+msgid "The profile as Starpod stores it, in JSON. The next update from the link replaces your changes."
+msgstr "Профиль в том виде, в каком его хранит Starpod, в JSON. Следующее обновление по ссылке заменит ваши правки."
+
+msgid "Reload"
+msgstr "Перечитать"
+
+msgid " · Pasted"
+msgstr " · Вставлен"
+
+msgid "About"
+msgstr "О программе"
+
+msgid "Made by foxgirls.org. Source code, releases and issues are on GitHub."
+msgstr "Сделано foxgirls.org. Исходный код, релизы и задачи — на GitHub."
+
+msgid "Ports, LAN access and IPv6"
+msgstr "Порты, доступ из сети и IPv6"
+
+msgid "Up {}"
+msgstr "Работает {}"
+
+msgid "Restart"
+msgstr "Перезапуск"
+
+msgid "Stops the engine and starts it again. Open connections are closed."
+msgstr "Останавливает движок и запускает его снова. Открытые соединения закрываются."
+
+msgid "Restart engine"
+msgstr "Перезапустить движок"

@@ -436,7 +436,7 @@ fn spawn_platform(binary: &Path, args: &[String], _pidfile: &Path) -> EngineResu
         ..Default::default()
     };
 
-    // SAFETY: `info` is fully initialised. Its string pointers refer to the
+    // SAFETY: `info` is fully initialized. Its string pointers refer to the
     // three buffers above, which live until the call returns, and the API
     // only reads them. `SEE_MASK_NOCLOSEPROCESS` makes it return the process
     // handle, which is then owned by `OwnedProcess`.

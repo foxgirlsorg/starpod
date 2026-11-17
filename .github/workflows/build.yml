@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -15,11 +15,16 @@ env:
   CARGO_TERM_COLOR: always
 
 # Cancel superseded runs for the same branch or pull request. Tag builds are
-# never cancelled, so a release run always finishes.
+# never canceled, so a release run always finishes.
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
+# Each platform publishes two files besides their checksums:
+#   archive    the portable build: unzip or untar it and run the binary
+#   installer  the per-user installer: setup.exe (Windows), .deb (Linux), .dmg (macOS)
+# The OTA update in crates/starpod-app/src/update.rs installs from the portable
+# archive only. Change its asset names together with the names below.
 jobs:
   build:
     name: Build (${{ matrix.target }})
@@ -33,20 +38,33 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary: starpod.exe
             name: starpod-windows-x86_64
-            archive: starpod-windows-x86_64.zip
+            archive: starpod-windows-x86_64-portable.zip
+            installer: starpod-windows-x86_64-setup.exe
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             binary: starpod
             name: starpod-linux-x86_64
-            archive: starpod-linux-x86_64.tar.gz
+            archive: starpod-linux-x86_64-portable.tar.gz
+            installer: starpod-linux-x86_64-setup.deb
           - os: macos-15
             target: aarch64-apple-darwin
             binary: starpod
             name: starpod-macos-aarch64
-            archive: starpod-macos-aarch64.tar.gz
+            archive: starpod-macos-aarch64-portable.tar.gz
+            installer: starpod-macos-aarch64-setup.dmg
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Read the app version
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The version of the workspace package, from the root Cargo.toml.
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          test -n "$version"
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "Version $version"
 
       - name: Install Linux system libraries
         if: runner.os == 'Linux'
@@ -96,7 +114,7 @@ jobs:
           done
           ls -la "$stage"
 
-      - name: Create archive (Windows)
+      - name: Create portable archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         env:
@@ -106,7 +124,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Compress-Archive -Path "stage/$env:NAME" -DestinationPath $env:ARCHIVE -Force
 
-      - name: Create archive (Unix)
+      - name: Create portable archive (Unix)
         if: runner.os != 'Windows'
         shell: bash
         env:
@@ -116,34 +134,194 @@ jobs:
           set -euo pipefail
           tar -C stage -czf "$ARCHIVE" "$NAME"
 
-      - name: Write SHA-256 checksum
+      # Inno Setup 6 is preinstalled on the Windows runner. The script installs
+      # per user (no administrator rights) and ships the same files as the zip.
+      - name: Build installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          NAME: ${{ matrix.name }}
+          INSTALLER: ${{ matrix.installer }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = (Resolve-Path "stage/$env:NAME").Path
+          $out = (Get-Location).Path
+          # iscc is not always on PATH; fall back to the default install folder.
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DAppVersion=$env:APP_VERSION" "/DStageDir=$stage" "/DOutputDir=$out" "packaging/windows/starpod.iss"
+          if ($LASTEXITCODE -ne 0) { throw "iscc failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path $env:INSTALLER)) { throw "iscc did not produce $env:INSTALLER" }
+
+      # A .deb built by hand: the binary, a desktop entry and the icon.
+      - name: Build installer (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          NAME: ${{ matrix.name }}
+          INSTALLER: ${{ matrix.installer }}
+        run: |
+          set -euo pipefail
+          root="deb/starpod"
+          rm -rf deb
+          install -Dm755 "stage/$NAME/starpod" "$root/usr/bin/starpod"
+          install -Dm644 packaging/linux/starpod.desktop "$root/usr/share/applications/starpod.desktop"
+          install -Dm644 crates/starpod-ui/ui/assets/app-icon.png "$root/usr/share/icons/hicolor/256x256/apps/starpod.png"
+          install -Dm644 README.md "$root/usr/share/doc/starpod/README.md"
+          size=$(du -sk "$root/usr" | cut -f1)
+          mkdir -p "$root/DEBIAN"
+          {
+            echo "Package: starpod"
+            echo "Version: $APP_VERSION"
+            echo "Architecture: amd64"
+            echo "Maintainer: Starpod project <https://github.com/foxgirlsorg/starpod>"
+            echo "Installed-Size: $size"
+            echo "Section: net"
+            echo "Priority: optional"
+            echo "Depends: libc6, libfontconfig1, libfreetype6, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libx11-6, libxcursor1, libxrandr2, libxi6, libgl1, libegl1, libdbus-1-3"
+            echo "Homepage: https://github.com/foxgirlsorg/starpod"
+            echo "Description: Desktop proxy client"
+            echo " Starpod fetches proxy subscriptions, merges them with your settings"
+            echo " and runs the engine as a supervised child process."
+          } > "$root/DEBIAN/control"
+          chmod 0755 "$root/usr/bin/starpod"
+          dpkg-deb --build --root-owner-group "$root" "$INSTALLER"
+          dpkg-deb --info "$INSTALLER"
+
+      # A minimal, unsigned .app bundle in a .dmg with an Applications link.
+      - name: Build installer (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          NAME: ${{ matrix.name }}
+          INSTALLER: ${{ matrix.installer }}
+        run: |
+          set -euo pipefail
+          rm -rf dmg
+          app="dmg/Starpod.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          install -m755 "stage/$NAME/starpod" "$app/Contents/MacOS/starpod"
+          sed "s/__VERSION__/$APP_VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          # The icon set, with each size resized from the 256-pixel app icon.
+          iconset="dmg/Starpod.iconset"
+          mkdir -p "$iconset"
+          src=crates/starpod-ui/ui/assets/app-icon.png
+          for spec in 16:icon_16x16 32:icon_16x16@2x 32:icon_32x32 64:icon_32x32@2x \
+                      128:icon_128x128 256:icon_128x128@2x 256:icon_256x256 \
+                      512:icon_256x256@2x 512:icon_512x512; do
+            px=${spec%%:*}
+            sips -z "$px" "$px" "$src" --out "$iconset/${spec#*:}.png" >/dev/null
+          done
+          iconutil -c icns "$iconset" -o "$app/Contents/Resources/Starpod.icns"
+          rm -rf "$iconset"
+          # An ad-hoc signature keeps the bundle seal consistent. The app is not
+          # signed with a developer identity.
+          codesign --force --sign - "$app"
+          root="dmg/root"
+          mkdir -p "$root"
+          cp -R "$app" "$root/"
+          ln -s /Applications "$root/Applications"
+          hdiutil create -volname "Starpod $APP_VERSION" -srcfolder "$root" -ov -format UDZO "$INSTALLER"
+
+      - name: Write SHA-256 checksums
         shell: bash
         env:
           ARCHIVE: ${{ matrix.archive }}
+          INSTALLER: ${{ matrix.installer }}
         run: |
           set -euo pipefail
-          # Run from the workspace root so the checksum file names only the archive.
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
-          else
-            shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
-          fi
-          cat "$ARCHIVE.sha256"
+          # Run from the workspace root so each checksum file names only its file.
+          for file in "$ARCHIVE" "$INSTALLER"; do
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$file" > "$file.sha256"
+            else
+              shasum -a 256 "$file" > "$file.sha256"
+            fi
+            cat "$file.sha256"
+          done
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.archive }}
+          name: ${{ matrix.name }}
           path: |
             ${{ matrix.archive }}
             ${{ matrix.archive }}.sha256
+            ${{ matrix.installer }}
+            ${{ matrix.installer }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # The Android APK (crates/starpod-android, packed by tools/build-android.sh)
+  # for arm64 phones and x86_64 emulators. Signed with the release key when the
+  # ANDROID_KEYSTORE_BASE64 secret is set, otherwise with a throwaway debug key.
+  android:
+    name: Build (Android)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install the Android SDK packages
+        run: |
+          set -euo pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null || true
+          "$sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build the APK
+        shell: bash
+        env:
+          STARPOD_ABIS: arm64-v8a x86_64
+          STARPOD_APK: starpod-android.apk
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+            export STARPOD_KEYSTORE="$PWD/release.keystore"
+            export STARPOD_KEYSTORE_PASS="$KEYSTORE_PASS"
+            export STARPOD_KEY_ALIAS="$KEY_ALIAS"
+          else
+            echo "::warning::No release keystore secret; the APK is signed with a debug key."
+          fi
+          bash tools/build-android.sh
+          sha256sum starpod-android.apk > starpod-android.apk.sha256
+          cat starpod-android.apk.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: starpod-android
+          path: |
+            starpod-android.apk
+            starpod-android.apk.sha256
           if-no-files-found: error
           retention-days: 14
 
   release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
@@ -174,6 +352,7 @@ jobs:
           git log --reverse --no-merges --format='### %s%n%n%b%n_(%h)_%n' "$range" >> notes.md
           cat notes.md
 
+      # Portable archives and installers, each with its .sha256 file.
       - name: Download all build artifacts
         uses: actions/download-artifact@v8
         with:

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Starpod for Android: a NativeActivity whose code is libstarpod.so
+  (crates/starpod-android). The only Java (android/java) is the VPN: the
+  activity asks for the VPN permission, and the VpnService opens the tunnel
+  that libstarpod.so reads.
+
+  targetSdkVersion is the current API (35), which Play requires for new apps.
+  The engine (the static musl build of meow) is shipped in the APK as
+  lib/<abi>/libmeow.so, because Android only lets an app run binaries from its
+  native library directory, not from its data directory. The attribute
+  android:extractNativeLibs="true" makes Android extract those libraries there.
+  tools/build-android.sh fills in the version.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.foxgirls.starpod"
+    android:versionCode="__VERSION_CODE__"
+    android:versionName="__VERSION_NAME__">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:hasCode="true"
+        android:extractNativeLibs="true"
+        android:usesCleartextTraffic="true"
+        android:theme="@android:style/Theme.Black.NoTitleBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|smallestScreenSize">
+            <meta-data android:name="android.app.lib_name" android:value="starpod" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".StarpodVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

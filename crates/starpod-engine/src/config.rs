@@ -340,7 +340,7 @@ fn engine_sections(body: &mut Map<String, Value>, options: &starpod_core::domain
 }
 
 /// Build the `dns:` map. A key the app does not model is written back as the
-/// subscription gave it, but never over a modelled key.
+/// subscription gave it, but never over a modeled key.
 fn dns_section(dns: &starpod_core::domain::DnsSettings) -> Map<String, Value> {
     let mut section = Map::new();
     if let Some(enable) = dns.enable {
@@ -1197,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn the_dns_block_is_written_with_its_keys_and_keeps_unmodelled_ones() {
+    fn the_dns_block_is_written_with_its_keys_and_keeps_unmodeled_ones() {
         let mut config = RuntimeConfig {
             engine: every_engine_option(),
             ..base_config()
@@ -1268,7 +1268,7 @@ mod tests {
             ..base_config()
         };
         let document = EngineDocument::build(&config);
-        let yaml = document.to_yaml().expect("serialises");
+        let yaml = document.to_yaml().expect("serializes");
         let back: Value = serde_saphyr::from_str(&yaml).expect("parses");
         assert_eq!(back, document.to_value());
     }

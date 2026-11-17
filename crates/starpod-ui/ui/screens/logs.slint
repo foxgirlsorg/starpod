@@ -1,19 +1,21 @@
 // The Logs page (docs/design/ui-spec.md section 5.5).
 //
-// Copy and Clear, a level filter, and a virtualised list of log lines. The
+// Copy and Clear, a level filter, and a virtualized list of log lines. The
 // filter itself is applied by Rust: this file writes `Bridge.log-level-filter`
 // and displays whatever `Bridge.logs` holds. The filter values are the level
 // names the engine and app use: all, info, warning, error.
 
-import { ListView } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { Design } from "../design.slint";
 import { Bridge, LogItem } from "../bridge.slint";
 import { EmojiText } from "../emoji-text.slint";
-import { ButtonSize, ButtonVariant, IconButton, Segmented, Card, EmptyState, PageHeader } from "../primitives.slint";
+import { ButtonSize, ButtonVariant, IconButton, Segmented, Card, EmptyState, PageHeader, WindowMetrics } from "../primitives.slint";
 
-// One log line: time, level, source, message. The message wraps; the other
-// columns keep a fixed width so every line up in one column.
-component LogRow inherits Rectangle {
+// One log line: time, level, source, message. Each line is laid out at its
+// natural width, so the message is never cut short: the list scrolls sideways
+// instead. The row is a layout root, so its minimum width (the sum of its
+// columns) reaches the list and sets the scrollable width.
+component LogRow inherits HorizontalLayout {
     in property <LogItem> entry;
 
     pure function level-text(level: string) -> string {
@@ -42,56 +44,55 @@ component LogRow inherits Rectangle {
         return Design.muted-foreground;
     }
 
-    HorizontalLayout {
-        padding-top: 6px;
-        padding-bottom: 6px;
-        padding-left: 16px;
-        padding-right: 16px;
-        spacing: 12px;
-        alignment: start;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    padding-left: 16px;
+    padding-right: 16px;
+    spacing: 12px;
+    alignment: start;
 
-        Text {
-            width: 72px;
-            text: root.entry.time;
-            color: Design.subtle-foreground;
-            font-family: Design.font-mono;
-            font-size: Design.font-xs;
-            vertical-alignment: top;
-            wrap: no-wrap;
-            overflow: elide;
-        }
+    // No width: the time keeps its natural width, so the whole timestamp shows.
+    Text {
+        text: root.entry.time;
+        color: Design.subtle-foreground;
+        font-family: Design.font-mono;
+        font-size: Design.font-xs;
+        vertical-alignment: top;
+        wrap: no-wrap;
+    }
 
-        Text {
-            // Wide enough for the Russian "ОТЛАДКА" as well as "DEBUG".
-            width: 72px;
-            text: root.level-text(root.entry.level);
-            color: root.level-color(root.entry.level);
-            font-family: Design.font-family;
-            font-size: Design.font-xs;
-            font-weight: 600;
-            vertical-alignment: top;
-            wrap: no-wrap;
-        }
+    Text {
+        // Wide enough for the Russian "ОТЛАДКА" as well as "DEBUG".
+        width: 72px;
+        text: root.level-text(root.entry.level);
+        color: root.level-color(root.entry.level);
+        font-family: Design.font-family;
+        font-size: Design.font-xs;
+        font-weight: 600;
+        vertical-alignment: top;
+        wrap: no-wrap;
+    }
 
-        EmojiText {
-            width: 90px;
-            runs: root.entry.source-runs;
-            fallback: root.entry.source;
-            color: Design.muted-foreground;
-            font-size: Design.font-xs;
-            wrap: false;
-        }
+    EmojiText {
+        width: 90px;
+        runs: root.entry.source-runs;
+        fallback: root.entry.source;
+        color: Design.muted-foreground;
+        font-size: Design.font-xs;
+        wrap: false;
+    }
 
-        EmojiText {
-            horizontal-stretch: 1;
-            min-width: 0px;
-            runs: root.entry.message-runs;
-            fallback: root.entry.message;
-            color: Design.foreground;
-            font-family: Design.font-mono;
-            font-size: Design.font-base;
-            wrap: false;
-        }
+    EmojiText {
+        // Never shorter than the message itself: a line is read whole, and the
+        // list scrolls sideways when the window is narrower.
+        horizontal-stretch: 1;
+        min-width: self.preferred-width;
+        runs: root.entry.message-runs;
+        fallback: root.entry.message;
+        color: Design.foreground;
+        font-family: Design.font-mono;
+        font-size: Design.font-base;
+        wrap: false;
     }
 }
 
@@ -130,9 +131,10 @@ export component LogsPage inherits Rectangle {
     VerticalLayout {
         width: parent.width;
         height: parent.height;
-        padding-left: 32px;
-        padding-right: 32px;
-        padding-top: 28px;
+        // The same margins as PageFrame, which the other pages use.
+        padding-left: WindowMetrics.width < 600px ? 16px : 32px;
+        padding-right: WindowMetrics.width < 600px ? 16px : 32px;
+        padding-top: WindowMetrics.width < 600px ? 20px : 28px;
         padding-bottom: 32px;
 
         HorizontalLayout {
@@ -220,12 +222,20 @@ export component LogsPage inherits Rectangle {
                         vertical-stretch: 1;
                         inner-padding: 0px;
 
-                        ListView {
+                        // Scrolls both ways. The content is as wide as the widest
+                        // line (each row's minimum width), so a long message scrolls
+                        // sideways. A plain for, not a ListView: a ListView only
+                        // scrolls vertically.
+                        ScrollView {
                             vertical-stretch: 1;
                             horizontal-stretch: 1;
 
-                            for log in Bridge.logs : LogRow {
-                                entry: log;
+                            VerticalLayout {
+                                alignment: start;
+
+                                for log in Bridge.logs : LogRow {
+                                    entry: log;
+                                }
                             }
                         }
                     }

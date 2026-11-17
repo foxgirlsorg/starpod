@@ -120,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn the_elevation_denial_is_recognisable() {
+    fn the_elevation_denial_is_recognizable() {
         assert!(EngineError::ElevationDenied.is_elevation_denied());
         assert!(!EngineError::EngineDown.is_elevation_denied());
     }

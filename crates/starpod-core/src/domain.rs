@@ -4,8 +4,8 @@
 //! owns, plus the parts the user configures that the engine has no concept
 //! of (a rule's identity, its enabled flag, its order).
 //!
-//! Everything here is plain data: serialisable, comparable, and free of
-//! behaviour that touches the outside world.
+//! Everything here is plain data: serializable, comparable, and free of
+//! behavior that touches the outside world.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -234,7 +234,7 @@ pub struct TunOptions {
 
 /// The DNS block.
 ///
-/// The modelled keys are the ones the app edits. Keys the app does not model
+/// The modeled keys are the ones the app edits. Keys the app does not model
 /// (a subscription's `fake-ip-filter-mode`, for example) are kept in
 /// `extra` and written back unchanged, so a subscription's DNS is not
 /// narrowed by reading it.
@@ -625,6 +625,33 @@ pub struct UserPreferences {
     /// pins it. Files written before this field existed load as `""`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub language: String,
+    /// The accent color as `#rrggbb`. `""` means the Starpod red,
+    /// [`DEFAULT_ACCENT_COLOR`]. Files written before this field existed load
+    /// as `""`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accent_color: String,
+    /// The picture behind the Home page: `""` for none, or one of
+    /// [`HOME_BACKGROUNDS`]. Files written before this field existed load as
+    /// `""`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub home_background: String,
+}
+
+/// The Home page backgrounds, by the name the preferences store.
+pub const HOME_BACKGROUNDS: &[&str] = &["matrix", "topo", "map", "dots", "eru"];
+
+/// The accent color used when the user has not picked one.
+pub const DEFAULT_ACCENT_COLOR: &str = "#de6161";
+
+impl UserPreferences {
+    /// The accent color to paint with: the saved one, or the default.
+    pub fn effective_accent_color(&self) -> &str {
+        if self.accent_color.is_empty() {
+            DEFAULT_ACCENT_COLOR
+        } else {
+            &self.accent_color
+        }
+    }
 }
 
 /// How the system proxy is configured.
@@ -721,6 +748,8 @@ impl Default for UserPreferences {
             auto_close_connections_on_switch: true,
             close_to_tray: true,
             language: String::new(),
+            accent_color: String::new(),
+            home_background: String::new(),
             engine: EngineOptions::default(),
             delay_test_url: None,
             delay_test_timeout_ms: None,
@@ -1083,6 +1112,12 @@ pub struct Subscription {
     /// limit on the last refresh. Cleared by a successful refresh.
     #[serde(default)]
     pub device_limit: bool,
+    /// Whether the subscription was added from pasted text rather than a URL.
+    ///
+    /// A local subscription is never fetched. Its source lives in the profile
+    /// source file in the data directory, and a refresh re-parses that file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
 }
 
 /// Who fetches a subscription.
@@ -1241,7 +1276,7 @@ pub struct EngineManagedSubscription {
 ///   or group to fetch through. An unknown name fails the fetch. Absent means
 ///   the engine's global default download route.
 /// - `payload`: `inline` only, and required there: a list of rule strings.
-/// - `header`: `http` only, custom request headers. Not modelled here.
+/// - `header`: `http` only, custom request headers. Not modeled here.
 ///
 /// `RULE-SET,<name>,<target>[,<flags>]`: `try_parse_rule_set` splits the line
 /// into at most four fields (`splitn(4, ',')`). Field 3 is the target, field 4
@@ -1260,7 +1295,7 @@ pub struct RuleProvider {
     /// The provider's payload path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    /// The provider's behaviour — the match semantics of its rules.
+    /// The provider's behavior — the match semantics of its rules.
     #[serde(default)]
     pub behavior: RuleProviderBehavior,
     /// The refresh interval in seconds.
@@ -1278,7 +1313,7 @@ pub struct RuleProvider {
     pub proxy: Option<String>,
 }
 
-/// A rule provider's behaviour — what its rules match on.
+/// A rule provider's behavior — what its rules match on.
 ///
 /// Source: `meow-config-0.29.0/src/raw.rs` — `RawRuleProvider.behavior`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -1362,7 +1397,7 @@ impl BuildOutcome {
 /// This is the app's own model of a configuration. Turning it into the
 /// engine's YAML happens in `starpod-engine`, which is the only crate that
 /// knows the engine's key names — and it must, because the engine ignores
-/// keys it does not recognise. Validating it is the engine's `meow -t`,
+/// keys it does not recognize. Validating it is the engine's `meow -t`,
 /// which also happens outside this crate.
 ///
 /// The separation is deliberate: this crate stays pure, so the whole
@@ -1467,7 +1502,7 @@ mod preference_tests {
 
     #[test]
     fn an_unset_refresh_setting_is_not_written() {
-        let text = serde_json::to_string(&UserPreferences::default()).expect("serialises");
+        let text = serde_json::to_string(&UserPreferences::default()).expect("serializes");
         assert!(!text.contains("auto_refresh_minutes"), "{text}");
     }
 
@@ -1478,8 +1513,8 @@ mod preference_tests {
                 auto_refresh_minutes: minutes,
                 ..UserPreferences::default()
             };
-            let text = serde_json::to_string(&prefs).expect("serialises");
-            let back: UserPreferences = serde_json::from_str(&text).expect("deserialises");
+            let text = serde_json::to_string(&prefs).expect("serializes");
+            let back: UserPreferences = serde_json::from_str(&text).expect("deserializes");
             assert_eq!(back.auto_refresh_minutes, minutes);
         }
     }
@@ -1512,8 +1547,8 @@ mod preference_tests {
             auto_close_connections_on_switch: false,
             ..UserPreferences::default()
         };
-        let text = serde_json::to_string(&prefs).expect("serialises");
-        let back: UserPreferences = serde_json::from_str(&text).expect("deserialises");
+        let text = serde_json::to_string(&prefs).expect("serializes");
+        let back: UserPreferences = serde_json::from_str(&text).expect("deserializes");
         assert_eq!(back, prefs);
     }
 
@@ -1523,8 +1558,8 @@ mod preference_tests {
         prefs
             .group_selections
             .insert("Proxy".to_string(), "Node A".to_string());
-        let text = serde_json::to_string(&prefs).expect("serialises");
-        let back: UserPreferences = serde_json::from_str(&text).expect("deserialises");
+        let text = serde_json::to_string(&prefs).expect("serializes");
+        let back: UserPreferences = serde_json::from_str(&text).expect("deserializes");
         assert_eq!(
             back.group_selections.get("Proxy").map(String::as_str),
             Some("Node A")
@@ -1630,8 +1665,8 @@ mod subscription_payload_tests {
             payload: None,
             proxy: Some("DIRECT".to_string()),
         };
-        let text = serde_json::to_string(&provider).expect("serialises");
-        let back: RuleProvider = serde_json::from_str(&text).expect("deserialises");
+        let text = serde_json::to_string(&provider).expect("serializes");
+        let back: RuleProvider = serde_json::from_str(&text).expect("deserializes");
         assert_eq!(back, provider);
     }
 
@@ -1648,7 +1683,7 @@ mod subscription_payload_tests {
             payload: Some(vec!["DOMAIN,example.test".to_string()]),
             proxy: None,
         };
-        let text = serde_json::to_string(&provider).expect("serialises");
+        let text = serde_json::to_string(&provider).expect("serializes");
         assert!(!text.contains("format"), "{text}");
         assert!(!text.contains("proxy"), "{text}");
         assert!(!text.contains("interval"), "{text}");

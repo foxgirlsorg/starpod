@@ -357,7 +357,7 @@ scales the path to fit. `point-at(t)` and `angle-at(t)` are pure functions.
 
 Each is `export component Icon<Name> inherits Path` with `fill: transparent`,
 `stroke: transparent`, `stroke-width: 2px`, round caps and joins. **Set
-`stroke` at the use site** to theme it; the components are colourless by
+`stroke` at the use site** to theme it; the components are colorless by
 design.
 
 The source SVGs are in `crates/starpod-ui/ui/assets/icons/*.svg`;
@@ -594,7 +594,7 @@ it:** `PUT /configs` does *not* write the backing file. Only `PUT
 /configs/save` (which the app never calls) and the engine's **background
 subscription refresh**
 (`meow-app-0.29.0/src/subscription_refresh.rs:421`) do. The second one would
-rewrite the app's file behind the app's back, in the engine's own normalised
+rewrite the app's file behind the app's back, in the engine's own normalized
 form. The app fetches, parses, caches and merges subscriptions itself, so
 the file it writes is the whole truth.
 
@@ -760,7 +760,7 @@ quit action. GOAL.md §4 requires window + tray.
   config updates, no accidental exposure of local services or management
   interfaces, correct lifecycle management, graceful shutdown, proper error
   propagation. **Check the "insecure default for convenience" line
-  explicitly** — the `Option<bool>` on `allow_lan` is the main defence.
+  explicitly** — the `Option<bool>` on `allow_lan` is the main defense.
 - README, user guide, build/release doc.
 
 ### Known small items

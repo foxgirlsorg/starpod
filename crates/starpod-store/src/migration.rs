@@ -189,7 +189,7 @@ pub fn set_schema(document: &mut Value, version: u32) {
     }
 }
 
-/// A convenience for building the `schema` field of a serialisable value.
+/// A convenience for building the `schema` field of a serializable value.
 pub fn schema_field(version: u32) -> serde_json::Map<String, Value> {
     let mut map = serde_json::Map::new();
     map.insert(SCHEMA_KEY.to_string(), Value::from(version));

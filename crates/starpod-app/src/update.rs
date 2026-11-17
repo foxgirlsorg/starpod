@@ -9,6 +9,10 @@
 //! it in place of the running one. The app then quits and starts the new
 //! binary. The release is not signed, so the checksum catches a damaged
 //! download, not a compromised release.
+//!
+//! On Android the update is the release's APK, checked the same way and
+//! handed to Android's installer ([`AndroidHooks`]), which asks the user and
+//! checks that it is signed with the same key as the installed app.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -94,7 +98,7 @@ pub fn parse_release(body: &str) -> Result<Release, String> {
 /// Fetch the latest release from GitHub. The request carries a User-Agent,
 /// which the GitHub API requires.
 pub async fn fetch_latest_release() -> Result<Release, String> {
-    let client = reqwest::Client::builder()
+    let client = starpod_subscription::tls::configure(reqwest::Client::builder())
         .timeout(REQUEST_TIMEOUT)
         .build()
         .map_err(|error| format!("the request could not be made: {error}"))?;
@@ -125,18 +129,117 @@ pub async fn fetch_latest_release() -> Result<Release, String> {
 
 // ----- the over-the-air install -----------------------------------------------
 
-/// The archive `build.yml` publishes for this platform, or `None` where no
+/// The archives `build.yml` publishes for this platform, as `(portable,
+/// legacy)`: the portable archive the update installs from, and the name
+/// releases up to 0.0.3 used, before `-portable` was added. `None` where no
 /// build is published.
-pub fn archive_name() -> Option<&'static str> {
+fn platform_archives() -> Option<(&'static str, &'static str)> {
     if cfg!(all(windows, target_arch = "x86_64")) {
-        Some("starpod-windows-x86_64.zip")
+        Some((
+            "starpod-windows-x86_64-portable.zip",
+            "starpod-windows-x86_64.zip",
+        ))
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        Some("starpod-linux-x86_64.tar.gz")
+        Some((
+            "starpod-linux-x86_64-portable.tar.gz",
+            "starpod-linux-x86_64.tar.gz",
+        ))
     } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        Some("starpod-macos-aarch64.tar.gz")
+        Some((
+            "starpod-macos-aarch64-portable.tar.gz",
+            "starpod-macos-aarch64.tar.gz",
+        ))
     } else {
         None
     }
+}
+
+/// The APK `build.yml` publishes for Android.
+pub const ANDROID_APK: &str = "starpod-android.apk";
+
+/// Hands an APK to Android's installer; see [`AndroidHooks::install`].
+pub type InstallApk = dyn Fn(&Path) -> Result<(), String> + Send + Sync;
+
+/// What the Android app gives the update code, which cannot reach Java on
+/// its own.
+pub struct AndroidHooks {
+    /// The package of the app that installed Starpod, if Android knows it.
+    pub installer: Option<String>,
+    /// Hand a downloaded APK to Android's installer. Returns once Android
+    /// has it; Android then asks the user.
+    pub install: Box<InstallApk>,
+}
+
+static ANDROID: std::sync::OnceLock<AndroidHooks> = std::sync::OnceLock::new();
+
+/// Set the Android hooks, once, at start.
+pub fn set_android_hooks(hooks: AndroidHooks) {
+    let _ = ANDROID.set(hooks);
+}
+
+/// Whether Starpod was installed straight from an APK (opened from a
+/// browser or a file manager, which Android's own installer installs, or
+/// `adb install`) rather than by a store or an updater such as F-Droid,
+/// Obtainium or Google Play, which then delivers the updates itself.
+pub fn android_installed_directly(installer: Option<&str>) -> bool {
+    match installer {
+        None | Some("") | Some("com.android.shell") => true,
+        // com.android.packageinstaller, com.google.android.packageinstaller
+        // and the phone makers' own, such as com.miui.packageinstaller.
+        Some(package) => package.ends_with(".packageinstaller"),
+    }
+}
+
+/// The store or package manager that installed Starpod, if one did. It then
+/// delivers the updates, so Starpod never checks for, offers or installs
+/// one itself: replacing its files would fight the package manager, and an
+/// APK from a store is signed with the store's key, which Android would
+/// refuse to replace with ours.
+pub fn package_manager() -> Option<&'static str> {
+    if cfg!(target_os = "android") {
+        return match ANDROID.get() {
+            Some(hooks) if android_installed_directly(hooks.installer.as_deref()) => None,
+            _ => Some("an app store"),
+        };
+    }
+    if std::env::var_os("FLATPAK_ID").is_some() {
+        return Some("Flatpak");
+    }
+    if std::env::var_os("SNAP").is_some() {
+        return Some("Snap");
+    }
+    let exe = std::env::current_exe().ok()?;
+    package_manager_for(&exe.to_string_lossy(), cfg!(target_os = "linux"))
+}
+
+/// [`package_manager`] for the executable at `path`. On Linux (`linux`),
+/// anything under `/usr` but outside `/usr/local` belongs to the system's
+/// package manager (the `.deb`, a distribution package, the AUR).
+pub fn package_manager_for(path: &str, linux: bool) -> Option<&'static str> {
+    let path = path.replace('\\', "/").to_ascii_lowercase();
+    const KNOWN: [(&str, &str); 7] = [
+        ("/scoop/apps/", "Scoop"),
+        ("/winget/packages/", "WinGet"),
+        ("/windowsapps/", "Microsoft Store"),
+        ("/cellar/", "Homebrew"),
+        ("/caskroom/", "Homebrew"),
+        ("/nix/store/", "Nix"),
+        ("/snap/", "Snap"),
+    ];
+    if let Some((_, name)) = KNOWN.iter().find(|(part, _)| path.contains(part)) {
+        return Some(name);
+    }
+    if linux && path.starts_with("/usr/") && !path.starts_with("/usr/local/") {
+        return Some("the system package manager");
+    }
+    None
+}
+
+/// The portable archive `build.yml` publishes for this platform, or `None`
+/// where no build is published. The installers (`-setup`) are never used
+/// for an update.
+pub fn archive_name() -> Option<&'static str> {
+    platform_archives().map(|(portable, _)| portable)
 }
 
 /// The app binary's file name inside the archive.
@@ -165,6 +268,21 @@ pub fn pick_assets<'a>(
             "release {} has no checksum for {archive}, so it cannot be checked",
             release.version
         )),
+    }
+}
+
+/// The platform's archive and its checksum, from the release. The portable
+/// name is preferred; a release that predates `-portable` is taken by its
+/// legacy name. If neither is there, the error names the portable archive.
+pub fn pick_platform_assets(release: &Release) -> Result<(&ReleaseAsset, &ReleaseAsset), String> {
+    if cfg!(target_os = "android") {
+        return pick_assets(release, ANDROID_APK);
+    }
+    let (portable, legacy) = platform_archives()
+        .ok_or_else(|| "no Starpod build is published for this computer".to_string())?;
+    match pick_assets(release, portable) {
+        Ok(pair) => Ok(pair),
+        Err(error) => pick_assets(release, legacy).map_err(|_| error),
     }
 }
 
@@ -300,9 +418,9 @@ pub async fn download_update(
     staging: &Path,
     progress: impl Fn(u8) + Send + Sync,
 ) -> Result<PathBuf, String> {
-    let archive = archive_name().ok_or("no Starpod build is published for this computer")?;
-    let (archive_asset, checksum_asset) = pick_assets(release, archive)?;
-    let client = reqwest::Client::builder()
+    let (archive_asset, checksum_asset) = pick_platform_assets(release)?;
+    let archive = archive_asset.name.as_str();
+    let client = starpod_subscription::tls::configure(reqwest::Client::builder())
         .timeout(DOWNLOAD_TIMEOUT)
         .build()
         .map_err(|error| format!("the request could not be made: {error}"))?;
@@ -314,7 +432,21 @@ pub async fn download_update(
             "the download does not match the release's checksum; nothing was installed".to_string(),
         );
     }
+    if cfg!(target_os = "android") {
+        std::fs::create_dir_all(staging)
+            .map_err(|error| format!("the download could not be saved: {error}"))?;
+        let apk = staging.join(ANDROID_APK);
+        std::fs::write(&apk, &bytes)
+            .map_err(|error| format!("the download could not be saved: {error}"))?;
+        return Ok(apk);
+    }
     extract_binary(archive, &bytes, staging)
+}
+
+/// Hand the APK at `apk` to Android's installer.
+pub fn install_apk(apk: &Path) -> Result<(), String> {
+    let hooks = ANDROID.get().ok_or("this build cannot install an update")?;
+    (hooks.install)(apk)
 }
 
 /// The path the running binary is moved to while the new one takes its place.
@@ -410,6 +542,35 @@ mod tests {
     }
 
     #[test]
+    fn the_portable_archive_is_chosen_over_installers_and_legacy_names() {
+        let (portable, legacy) = platform_archives().expect("a published platform");
+        let setup = "starpod-x86_64-setup.exe";
+        let with = |names: &[&str]| {
+            let mut all: Vec<String> = Vec::new();
+            for name in names {
+                all.push(name.to_string());
+                all.push(format!("{name}.sha256"));
+            }
+            let refs: Vec<&str> = all.iter().map(String::as_str).collect();
+            release_with(&refs)
+        };
+
+        // The portable archive wins even when the legacy one is also there.
+        let both = with(&[legacy, portable, setup]);
+        let (archive, checksum) = pick_platform_assets(&both).unwrap();
+        assert_eq!(archive.name, portable);
+        assert_eq!(checksum.name, format!("{portable}.sha256"));
+
+        // A release from before `-portable` is still installed from its name.
+        let old = with(&[legacy]);
+        assert_eq!(pick_platform_assets(&old).unwrap().0.name, legacy);
+
+        // An installer alone is never an update.
+        let installer_only = with(&[setup]);
+        assert!(pick_platform_assets(&installer_only).is_err());
+    }
+
+    #[test]
     fn a_checksum_line_gives_its_hash() {
         let hash = "a".repeat(64);
         assert_eq!(parse_checksum(&format!("{hash}  starpod.zip\n")), Ok(hash));
@@ -490,6 +651,7 @@ mod tests {
 
         let archive = archive_name().expect("a published platform");
         let mut bytes = Vec::new();
+        // The fixture uses the portable name, which is what the update picks.
         if archive.ends_with(".zip") {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
             zip.start_file(
@@ -638,5 +800,67 @@ mod tests {
     fn a_release_body_without_a_tag_is_an_error() {
         assert!(parse_release(r#"{"html_url": "https://example.test"}"#).is_err());
         assert!(parse_release("not json").is_err());
+    }
+
+    #[test]
+    fn a_store_or_package_manager_install_is_recognized() {
+        let cases = [
+            (
+                r"C:\Users\a\scoop\apps\starpod\current\starpod.exe",
+                false,
+                Some("Scoop"),
+            ),
+            (
+                r"C:\Users\a\AppData\Local\Microsoft\WinGet\Packages\starpod\starpod.exe",
+                false,
+                Some("WinGet"),
+            ),
+            (
+                r"C:\Program Files\WindowsApps\Starpod_1.0\starpod.exe",
+                false,
+                Some("Microsoft Store"),
+            ),
+            (
+                "/opt/homebrew/Cellar/starpod/1.0/bin/starpod",
+                false,
+                Some("Homebrew"),
+            ),
+            ("/nix/store/abc-starpod/bin/starpod", true, Some("Nix")),
+            ("/usr/bin/starpod", true, Some("the system package manager")),
+            // Starpod's own installer, the portable archive and a manual copy.
+            (
+                r"C:\Users\a\AppData\Local\Programs\Starpod\starpod.exe",
+                false,
+                None,
+            ),
+            ("/home/a/starpod/starpod", true, None),
+            ("/usr/local/bin/starpod", true, None),
+            ("/usr/bin/starpod", false, None),
+        ];
+        for (path, linux, expected) in cases {
+            assert_eq!(package_manager_for(path, linux), expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn only_a_direct_android_install_updates_itself() {
+        for direct in [
+            None,
+            Some("com.android.shell"),
+            Some("com.google.android.packageinstaller"),
+            Some("com.android.packageinstaller"),
+            Some("com.miui.packageinstaller"),
+        ] {
+            assert!(android_installed_directly(direct), "{direct:?}");
+        }
+        for store in [
+            "org.fdroid.fdroid",
+            "dev.imranr.obtainium",
+            "com.android.vending",
+            "com.aurora.store",
+            "com.looker.droidify",
+        ] {
+            assert!(!android_installed_directly(Some(store)), "{store}");
+        }
     }
 }

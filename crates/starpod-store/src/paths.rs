@@ -125,6 +125,22 @@ impl AppPaths {
             .join(safe_file_name("subscription", id)?))
     }
 
+    /// The directory holding the source text of local profiles (the
+    /// configurations pasted in rather than fetched).
+    ///
+    /// It lives in the data directory, not the cache directory: the text is
+    /// the only copy of the profile, so "clear cache" must never remove it.
+    pub fn profile_source_dir(&self) -> PathBuf {
+        self.data_dir.join("profiles")
+    }
+
+    /// The source text of one local profile. The id is validated like the
+    /// payload's, and the file gets a `.txt` extension.
+    pub fn profile_source_file(&self, id: &str) -> Result<PathBuf, StoreError> {
+        let name = safe_file_name("subscription", id)?;
+        Ok(self.profile_source_dir().join(format!("{name}.txt")))
+    }
+
     /// The directory holding the cached profile logos.
     ///
     /// A sibling of [`Self::subscription_cache_dir`], not a child of it: the
@@ -250,6 +266,20 @@ mod tests {
             paths.subscription_cache_file("abc-123").unwrap(),
             Path::new("/cache/Starpod/subscriptions/abc-123")
         );
+    }
+
+    #[test]
+    fn the_profile_source_lives_in_the_data_directory_not_the_cache() {
+        let paths = AppPaths::from_roots("/cfg", "/data", "/cache");
+        assert_eq!(
+            paths.profile_source_dir(),
+            Path::new("/data/Starpod/profiles")
+        );
+        assert_eq!(
+            paths.profile_source_file("abc-123").unwrap(),
+            Path::new("/data/Starpod/profiles/abc-123.txt")
+        );
+        assert!(paths.profile_source_file("../escape").is_err());
     }
 
     #[test]

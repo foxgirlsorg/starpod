@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_controller_that_accepts_the_secret_is_recognised() {
+    async fn a_controller_that_accepts_the_secret_is_recognized() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/version"))

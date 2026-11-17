@@ -9,6 +9,9 @@
 // navigation (the pages, Settings, the status block) is a drawer that is
 // closed by default; the menu button slides it in over the page, and choosing
 // a page or clicking outside it closes it again.
+//
+// On a phone (Bridge.mobile) there is no menu button and no drawer. A bottom
+// dock holds the main pages instead, as a native app's tab bar does.
 
 import { Design } from "design.slint";
 import { Palette } from "std-widgets.slint";
@@ -25,9 +28,10 @@ import { ConnectionsPage } from "screens/connections.slint";
 
 export { Bridge, SubscriptionItem, NodeItem, RuleItem, LogItem, SettingsModel, MemberItem, GroupItem, AnnouncementItem, ProfileCardItem, SelectItem, TextRun, WarningItem, HotkeyModel, ConnectionItem } from "bridge.slint";
 export { AppTray } from "tray.slint";
+export { Design } from "design.slint";
 
 // One row of the sidebar: 36px, 18px icon, 10px gap, 14px label. Icon and
-// label are placed on the row's centre line, so they share one vertical axis.
+// label are placed on the row's center line, so they share one vertical axis.
 component NavItem inherits Rectangle {
     in property <string> label;
     in property <image> icon;
@@ -76,7 +80,7 @@ component NavItem inherits Rectangle {
     }
 }
 
-// The engine phase as a card at the foot of the sidebar: a coloured dot, a
+// The engine phase as a card at the foot of the sidebar: a colored dot, a
 // title and a second line (uptime when running, otherwise the routing mode).
 component StatusBlock inherits Rectangle {
     in property <string> phase: "stopped";
@@ -147,6 +151,109 @@ component StatusBlock inherits Rectangle {
     }
 }
 
+// One row of the More sheet on a phone: a 52px row with the icon and the
+// label. The active row is tinted, as a selected drawer row is.
+component SheetItem inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> active: false;
+    callback activated();
+
+    height: 52px;
+    border-radius: Design.radius-md;
+    background: root.active ? Design.primary-soft : transparent;
+
+    Image {
+        x: 12px;
+        y: (parent.height - 20px) / 2;
+        width: 20px;
+        height: 20px;
+        source: root.icon;
+        colorize: root.active ? Design.primary : Design.muted-foreground;
+    }
+
+    Text {
+        x: 46px;
+        y: 0px;
+        width: parent.width - 46px - 12px;
+        height: parent.height;
+        text: root.label;
+        color: root.active ? Design.foreground : Design.muted-foreground;
+        font-family: Design.font-family;
+        font-size: 15px;
+        font-weight: 500;
+        vertical-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.activated();
+        }
+    }
+}
+
+// One tab of the bottom dock on a phone: the icon in a pill when active, and a
+// short label under it. The whole item is the touch target, so it is as tall
+// as the dock and well over the 48px minimum.
+component DockItem inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> active: false;
+    callback activated();
+
+    horizontal-stretch: 1;
+    min-height: 48px;
+
+    // The pill is declared first, so it sits behind the icon.
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 6px;
+        width: 56px;
+        height: 28px;
+        border-radius: 14px;
+        background: root.active ? Design.primary.with-alpha(0.14) : transparent;
+        animate background {
+            duration: 150ms;
+        }
+    }
+
+    Image {
+        x: (parent.width - self.width) / 2;
+        y: 10px;
+        width: 20px;
+        height: 20px;
+        source: root.icon;
+        colorize: root.active ? Design.primary : Design.muted-foreground;
+    }
+
+    Text {
+        x: 0px;
+        y: 38px;
+        width: parent.width;
+        height: 16px;
+        text: root.label;
+        color: root.active ? Design.foreground : Design.muted-foreground;
+        font-family: Design.font-family;
+        // 11px is below the smallest design token (12px), as a tab label needs.
+        font-size: 11px;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.activated();
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "Starpod";
     icon: @image-url("assets/app-icon.png");
@@ -157,9 +264,24 @@ export component AppWindow inherits Window {
     preferred-height: 840px;
     background: Design.background;
 
+    // Open a page from the sidebar, the dock or the More sheet. Picking the
+    // page already open takes it back to its start: Settings to its section
+    // list, Profiles out of the profile editor (as Cancel does).
+    function go(page: int) {
+        if (page == Bridge.active-page) {
+            if (page == 5) {
+                Bridge.settings-section = -1;
+            }
+            if (page == 1) {
+                Bridge.editor-open = false;
+            }
+        }
+        Bridge.active-page = page;
+    }
+
     // Popups read the window size from WindowMetrics (see Select).
     // The std-widgets (TextEdit, ScrollView, ListView scrollbars) take their
-    // colours from this palette. The app is dark only, so they follow it.
+    // colors from this palette. The app is dark only, so they follow it.
     init => {
         Palette.color-scheme = ColorScheme.dark;
         WindowMetrics.width = root.width;
@@ -174,20 +296,34 @@ export component AppWindow inherits Window {
 
     // Whether the navigation drawer is open. It starts closed.
     in-out property <bool> nav-open: false;
+    // Whether the More sheet is open on a phone. It starts closed.
+    private property <bool> more-open: false;
 
     VerticalLayout {
-        // The top bar: the menu button, the mark and the name, and the
-        // update notice when there is one.
+        // On a phone the system bars overlap the window: the gesture bar at
+        // the bottom, and the status bar, which the top bar extends under.
+        // The dock takes the bottom inset itself, so the layout leaves it out
+        // on a phone; the inset is then applied exactly once.
+        padding-bottom: Bridge.mobile ? 0px : root.safe-area-insets.bottom;
+        padding-left: root.safe-area-insets.left;
+        padding-right: root.safe-area-insets.right;
+
+        // The top bar: the menu button (desktop only), the mark and the name,
+        // and the update notice when there is one. On a phone the update
+        // notice moves here, because the drawer that holds it is never shown.
         Rectangle {
-            height: 52px;
+            height: 52px + root.safe-area-insets.top;
             background: Design.sidebar;
 
             HorizontalLayout {
-                padding-left: 10px;
+                padding-top: root.safe-area-insets.top;
+                padding-left: Bridge.mobile ? 16px : 10px;
                 padding-right: 16px;
                 spacing: 10px;
 
-                VerticalLayout {
+                // The menu button opens the drawer. A phone has the dock
+                // instead, so the button is left out there.
+                if (!Bridge.mobile) : VerticalLayout {
                     alignment: center;
 
                     IconButton {
@@ -223,6 +359,53 @@ export component AppWindow inherits Window {
 
                 Rectangle {
                     horizontal-stretch: 1;
+                }
+
+                // The update notice, on a phone only. Tapping it installs the
+                // update, as the drawer's copy does on desktop.
+                if (Bridge.mobile && Bridge.self-update && Bridge.update-available) : VerticalLayout {
+                    alignment: center;
+
+                    // A fixed width keeps the notice from crowding the logo
+                    // and the engine state; the text elides if it is longer.
+                    Rectangle {
+                        width: 180px;
+                        height: 28px;
+                        border-radius: Design.radius-md;
+                        background: update-mobile-ta.has-hover ? Design.card-hover : transparent;
+
+                        Image {
+                            x: 6px;
+                            y: (parent.height - 14px) / 2;
+                            width: 14px;
+                            height: 14px;
+                            source: @image-url("assets/icons/download.svg");
+                            colorize: Design.primary;
+                        }
+
+                        Text {
+                            // update-version has no leading "v" (update.rs strips it).
+                            x: 26px;
+                            y: 0px;
+                            width: parent.width - 32px;
+                            height: parent.height;
+                            text: @tr("Update available: v{}", Bridge.update-version);
+                            color: Design.primary;
+                            font-family: Design.font-family;
+                            font-size: Design.font-xs;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                            wrap: no-wrap;
+                            overflow: elide;
+                        }
+
+                        update-mobile-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                Bridge.install-update();
+                            }
+                        }
+                    }
                 }
 
                 // The engine state, so it is visible with the drawer closed.
@@ -269,6 +452,8 @@ export component AppWindow inherits Window {
         // by itself, so the banner stays put.
         VerticalLayout {
             horizontal-stretch: 1;
+            // Takes the height that the dock leaves, so the page ends above it.
+            vertical-stretch: 1;
 
             if (Bridge.banner-message != "") : HorizontalLayout {
                 padding-left: 32px;
@@ -318,10 +503,81 @@ export component AppWindow inherits Window {
                 vertical-stretch: 1;
             }
         }
+
+        // The bottom dock, on a phone only. It is the last child, so it sits
+        // under the content. Its height includes the gesture bar inset, so the
+        // background runs under the bar while the tabs stay above it.
+        if (Bridge.mobile) : Rectangle {
+            height: 64px + root.safe-area-insets.bottom;
+            background: Design.sidebar;
+
+            HorizontalLayout {
+                y: 0px;
+                height: 64px;
+
+                // The tabs: Home, Profiles, Proxies and Settings, then More. More
+                // opens a sheet with the pages that do not fit in the dock
+                // (Connections, Rules and Logs), so every page stays reachable.
+                DockItem {
+                    label: @tr("Home");
+                    icon: @image-url("assets/icons/house.svg");
+                    active: Bridge.active-page == 0;
+                    activated => {
+                        root.go(0);
+                    }
+                }
+
+                DockItem {
+                    label: @tr("Profiles");
+                    icon: @image-url("assets/icons/layers.svg");
+                    active: Bridge.active-page == 1;
+                    activated => {
+                        root.go(1);
+                    }
+                }
+
+                DockItem {
+                    label: @tr("Proxies");
+                    icon: @image-url("assets/icons/server.svg");
+                    active: Bridge.active-page == 2;
+                    activated => {
+                        root.go(2);
+                    }
+                }
+
+                DockItem {
+                    label: @tr("Settings");
+                    icon: @image-url("assets/icons/settings.svg");
+                    active: Bridge.active-page == 5;
+                    activated => {
+                        root.go(5);
+                    }
+                }
+
+                // The tab is lit while one of the sheet's pages is the active one,
+                // so the user can see where they are.
+                DockItem {
+                    label: @tr("More");
+                    icon: @image-url("assets/icons/menu.svg");
+                    active: Bridge.active-page == 3 || Bridge.active-page == 4 || Bridge.active-page == 6;
+                    activated => {
+                        root.more-open = true;
+                    }
+                }
+            }
+
+            // The hairline on the dock's top edge.
+            Rectangle {
+                y: 0px;
+                height: 1px;
+                background: Design.border;
+            }
+        }
     }
 
     // The backdrop behind the open drawer. A click on it closes the drawer.
-    if (root.nav-open) : Rectangle {
+    // A phone has no drawer, so there is no backdrop either.
+    if (root.nav-open && !Bridge.mobile) : Rectangle {
         x: 0px;
         y: 0px;
         width: root.width;
@@ -339,9 +595,11 @@ export component AppWindow inherits Window {
     drawer := Rectangle {
         x: root.nav-open ? 0px : -self.width - 2px;
         y: 0px;
-        width: 240px;
+        width: 240px + root.safe-area-insets.left;
         height: root.height;
         background: Design.sidebar;
+        // On a phone the dock replaces the drawer, so the drawer is never shown.
+        visible: !Bridge.mobile;
         animate x {
             duration: 180ms;
             easing: ease-out;
@@ -359,7 +617,8 @@ export component AppWindow inherits Window {
 
         VerticalLayout {
             padding: 12px;
-            padding-top: 8px;
+            padding-top: 8px + root.safe-area-insets.top;
+            padding-left: 12px + root.safe-area-insets.left;
             spacing: 0px;
 
             // The brand row, with the button that closes the drawer at the
@@ -412,7 +671,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/house.svg");
                         active: Bridge.active-page == 0;
                         activated => {
-                            Bridge.active-page = 0;
+                            root.go(0);
                             root.nav-open = false;
                         }
                     }
@@ -422,7 +681,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/layers.svg");
                         active: Bridge.active-page == 1;
                         activated => {
-                            Bridge.active-page = 1;
+                            root.go(1);
                             root.nav-open = false;
                         }
                     }
@@ -432,7 +691,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/server.svg");
                         active: Bridge.active-page == 2;
                         activated => {
-                            Bridge.active-page = 2;
+                            root.go(2);
                             root.nav-open = false;
                         }
                     }
@@ -442,7 +701,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/route.svg");
                         active: Bridge.active-page == 3;
                         activated => {
-                            Bridge.active-page = 3;
+                            root.go(3);
                             root.nav-open = false;
                         }
                     }
@@ -452,7 +711,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/scroll-text.svg");
                         active: Bridge.active-page == 4;
                         activated => {
-                            Bridge.active-page = 4;
+                            root.go(4);
                             root.nav-open = false;
                         }
                     }
@@ -462,7 +721,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/activity.svg");
                         active: Bridge.active-page == 6;
                         activated => {
-                            Bridge.active-page = 6;
+                            root.go(6);
                             root.nav-open = false;
                         }
                     }
@@ -481,12 +740,12 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/settings.svg");
                         active: Bridge.active-page == 5;
                         activated => {
-                            Bridge.active-page = 5;
+                            root.go(5);
                             root.nav-open = false;
                         }
                     }
 
-                    if (Bridge.update-available) : Rectangle {
+                    if (Bridge.self-update && Bridge.update-available) : Rectangle {
                         height: 28px;
                         border-radius: Design.radius-md;
                         background: update-ta.has-hover ? Design.card-hover : transparent;
@@ -537,6 +796,87 @@ export component AppWindow inherits Window {
         }
     }
 
+    // The More sheet, on a phone only: the pages that the dock does not hold,
+    // in a panel that rises above the dock. The scrim behind it covers the
+    // whole window, and tapping it closes the sheet.
+    if (root.more-open && Bridge.mobile) : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #00000080;
+
+        TouchArea {
+            clicked => {
+                root.more-open = false;
+            }
+        }
+    }
+
+    more-sheet := Rectangle {
+        // The panel rests on top of the dock, and slides up from below the
+        // window when it opens.
+        x: 0px;
+        y: root.more-open ? root.height - (64px + root.safe-area-insets.bottom) - self.height : root.height;
+        width: root.width;
+        height: 172px;
+        opacity: root.more-open ? 1 : 0;
+        visible: Bridge.mobile;
+        background: Design.popover;
+        border-top-left-radius: 16px;
+        border-top-right-radius: 16px;
+        border-width: 1px;
+        border-color: Design.border;
+        animate y {
+            duration: 180ms;
+            easing: ease-out;
+        }
+        animate opacity {
+            duration: 180ms;
+            easing: ease-out;
+        }
+
+        // Swallows clicks, so they do not reach the scrim.
+        TouchArea { }
+
+        VerticalLayout {
+            padding: 8px;
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 0px;
+
+            SheetItem {
+                label: @tr("Connections");
+                icon: @image-url("assets/icons/activity.svg");
+                active: Bridge.active-page == 6;
+                activated => {
+                    root.go(6);
+                    root.more-open = false;
+                }
+            }
+
+            SheetItem {
+                label: @tr("Rules");
+                icon: @image-url("assets/icons/route.svg");
+                active: Bridge.active-page == 3;
+                activated => {
+                    root.go(3);
+                    root.more-open = false;
+                }
+            }
+
+            SheetItem {
+                label: @tr("Logs");
+                icon: @image-url("assets/icons/scroll-text.svg");
+                active: Bridge.active-page == 4;
+                activated => {
+                    root.go(4);
+                    root.more-open = false;
+                }
+            }
+        }
+    }
+
     // The confirmation for a starpod:// link. It opens only when Rust sets
     // install-pending, and it adds nothing until the user confirms.
     private property <bool> install-mirror: Bridge.install-pending;
@@ -561,7 +901,7 @@ export component AppWindow inherits Window {
         confirmed => {
             Bridge.confirm-install();
         }
-        cancelled => {
+        canceled => {
             Bridge.cancel-install();
         }
     }

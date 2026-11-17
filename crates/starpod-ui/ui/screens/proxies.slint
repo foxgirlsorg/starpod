@@ -8,7 +8,7 @@ import { Design } from "../design.slint";
 import { Bridge, MemberItem, TextRun } from "../bridge.slint";
 import {
     Button, ButtonVariant, ButtonSize, IconButton, Input, Badge, BadgeVariant,
-    Card, EmptyState, PageHeader, PageFrame, Segmented, Switch, Separator, LatencyText
+    Card, EmptyState, PageHeader, PageFrame, Segmented, Switch, Separator, LatencyText, WindowMetrics
 } from "../primitives.slint";
 import { EmojiText } from "../emoji-text.slint";
 
@@ -144,6 +144,11 @@ component ServerGrid inherits Rectangle {
     horizontal-stretch: 1;
     vertical-stretch: 0;
     preferred-height: grid.preferred-height;
+    // The cells are as wide as the grid was when they were laid out, and the
+    // flexbox would report that as its minimum: the window could then never
+    // get narrower than it once was. The grid takes any width; the cells
+    // follow on the next layout pass.
+    min-width: 0px;
 
     grid := FlexboxLayout {
         width: root.width;
@@ -219,6 +224,11 @@ export component ProxiesPage inherits Rectangle {
 
     // The routing mode. Global is left out when the active profile forbids it.
     private property <bool> running: Bridge.engine-phase == "running";
+    // A phone-width window: the routing mode and the sort get their own rows.
+    private property <bool> narrow: WindowMetrics.width < 600px;
+    // A phone: the routing card is one row, the mode on the left and the
+    // traffic on the right. The desktop rows below are left out.
+    private property <bool> phone-row: Bridge.mobile && root.narrow;
     private property <[string]> mode-labels: Bridge.global-mode-allowed ? [@tr("Rule"), @tr("Global"), @tr("Direct")] : [@tr("Rule"), @tr("Direct")];
     private property <[string]> mode-keys: Bridge.global-mode-allowed ? ["rule", "global", "direct"] : ["rule", "direct"];
     private property <int> mode-index: Bridge.mode == "direct" ? root.mode-keys.length - 1
@@ -277,22 +287,105 @@ export component ProxiesPage inherits Rectangle {
                     VerticalLayout {
                         spacing: 8px;
 
+                        // In a narrow window: the mode on the left, the session
+                        // traffic on the right, one line.
+                        if (root.narrow) : HorizontalLayout {
+                            vertical-stretch: 0;
+                            height: 36px;
+                            spacing: 8px;
+
+                            phone-mode := Segmented {
+                                options: root.mode-labels;
+                                current-index: root.mode-index;
+                                min-width: phone-mode.preferred-width;
+                                selected(i) => {
+                                    Bridge.set-mode(root.mode-keys[i]);
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            // Always there, dimmed while disconnected, so the
+                            // card keeps its shape.
+                            if (Bridge.session-traffic-visible) : HorizontalLayout {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                alignment: end;
+                                opacity: root.running ? 1 : 0.5;
+                                spacing: 12px;
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+
+                                    VerticalLayout {
+                                        vertical-stretch: 0;
+                                        alignment: center;
+
+                                        Image {
+                                            width: 12px;
+                                            height: 12px;
+                                            source: @image-url("../assets/icons/arrow-up.svg");
+                                            colorize: Design.muted-foreground;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: Bridge.session-upload;
+                                        color: Design.foreground;
+                                        font-family: Design.font-family;
+                                        font-size: Design.font-xs;
+                                        vertical-alignment: center;
+                                        wrap: no-wrap;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+
+                                    VerticalLayout {
+                                        vertical-stretch: 0;
+                                        alignment: center;
+
+                                        Image {
+                                            width: 12px;
+                                            height: 12px;
+                                            source: @image-url("../assets/icons/arrow-down.svg");
+                                            colorize: Design.muted-foreground;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: Bridge.session-download;
+                                        color: Design.foreground;
+                                        font-family: Design.font-family;
+                                        font-size: Design.font-xs;
+                                        vertical-alignment: center;
+                                        wrap: no-wrap;
+                                    }
+                                }
+                            }
+                        }
+
                         // One row: the switches and the session traffic on the
-                        // left, the routing mode on the right.
-                        HorizontalLayout {
+                        // left, the routing mode on the right. Left out on a phone.
+                        if (!root.phone-row) : HorizontalLayout {
                             vertical-stretch: 0;
                             height: 36px;
                             spacing: 16px;
 
-                            SwitchRow {
+                            if (!Bridge.mobile) : SwitchRow {
                                 label: @tr("System proxy");
-                                checked: Bridge.system-proxy-active;
+                                // Connected: whether the system proxy points at the engine.
+                                // Not connected: the saved setting, which applies on connect.
+                                checked: root.running ? Bridge.system-proxy-active : Bridge.settings.system-proxy;
                                 toggled(value) => {
                                     Bridge.toggle-system-proxy(value);
                                 }
                             }
 
-                            SwitchRow {
+                            if (!Bridge.mobile) : SwitchRow {
                                 label: @tr("TUN");
                                 checked: Bridge.settings.tun-enabled;
                                 toggled(value) => {
@@ -300,9 +393,12 @@ export component ProxiesPage inherits Rectangle {
                                 }
                             }
 
-                            if (root.running && Bridge.session-traffic-visible) : HorizontalLayout {
+                            // Always there, dimmed while disconnected, as in a
+                            // narrow window.
+                            if (!root.narrow && Bridge.session-traffic-visible) : HorizontalLayout {
                                 horizontal-stretch: 0;
                                 spacing: 12px;
+                                opacity: root.running ? 1 : 0.5;
 
                                 HorizontalLayout {
                                     spacing: 4px;
@@ -359,7 +455,7 @@ export component ProxiesPage inherits Rectangle {
                                 horizontal-stretch: 1;
                             }
 
-                            Segmented {
+                            if (!root.narrow) : Segmented {
                                 options: root.mode-labels;
                                 current-index: root.mode-index;
                                 selected(i) => {
@@ -371,6 +467,14 @@ export component ProxiesPage inherits Rectangle {
                         if (root.running && Bridge.system-proxy-error != "") : Text {
                             text: Bridge.system-proxy-error;
                             color: Design.destructive;
+                            font-family: Design.font-family;
+                            font-size: Design.font-xs;
+                            wrap: word-wrap;
+                        }
+
+                        if (!root.running && Bridge.settings.system-proxy) : Text {
+                            text: @tr("Applies when connected");
+                            color: Design.muted-foreground;
                             font-family: Design.font-family;
                             font-size: Design.font-xs;
                             wrap: word-wrap;
@@ -387,32 +491,35 @@ export component ProxiesPage inherits Rectangle {
                 padding-bottom: 16px;
 
                 HorizontalLayout {
+                    spacing: 12px;
+
                     Input {
                         preferred-width: 280px;
                         min-width: 140px;
-                        horizontal-stretch: 0;
+                        horizontal-stretch: root.narrow ? 1 : 0;
                         placeholder: @tr("Filter servers");
                         icon: @image-url("../assets/icons/search.svg");
                         text <=> Bridge.node-filter;
                     }
 
-                    Rectangle {
+                    if (!root.narrow) : Rectangle {
                         horizontal-stretch: 1;
                     }
 
-                    Segmented {
+                    if (!root.narrow) : Segmented {
                         options: [@tr("Default"), @tr("Latency"), @tr("Name")];
                         current-index <=> Bridge.proxies-sort;
                     }
                 }
 
                 HorizontalLayout {
-                    spacing: 16px;
+                    spacing: root.narrow ? 10px : 16px;
                     height: 36px;
 
                     HorizontalLayout {
                         spacing: 8px;
-                        horizontal-stretch: 0;
+                        horizontal-stretch: root.narrow ? 1 : 0;
+                        min-width: 0px;
 
                         VerticalLayout {
                             alignment: center;
@@ -436,12 +543,22 @@ export component ProxiesPage inherits Rectangle {
                                 height: 20px;
                                 vertical-alignment: center;
                                 wrap: no-wrap;
+                                overflow: elide;
+                                min-width: 0px;
                             }
                         }
                     }
 
-                    Rectangle {
+                    if (!root.narrow) : Rectangle {
                         horizontal-stretch: 1;
+                    }
+
+                    // In a narrow window the sort shares this row.
+                    if (root.narrow) : Segmented {
+                        horizontal-stretch: 0;
+                        item-padding: 8px;
+                        options: [@tr("Default"), @tr("Latency"), @tr("Name")];
+                        current-index <=> Bridge.proxies-sort;
                     }
                 }
             }
@@ -507,10 +624,11 @@ export component ProxiesPage inherits Rectangle {
                                     wrap: false;
                                     horizontal-stretch: 1;
                                     min-width: 0px;
-                                    max-width: 240px;
+                                    // Alone on a narrow row, it takes the free width.
+                                    max-width: root.narrow ? 10000px : 240px;
                                 }
 
-                                VerticalLayout {
+                                if (!root.narrow) : VerticalLayout {
                                     alignment: center;
                                     horizontal-stretch: 0;
 
@@ -523,7 +641,7 @@ export component ProxiesPage inherits Rectangle {
                                     }
                                 }
 
-                                Text {
+                                if (!root.narrow) : Text {
                                     text: @tr("{n} server" | "{n} servers" % group.members.length);
                                     color: Design.muted-foreground;
                                     font-family: Design.font-family;
@@ -536,7 +654,9 @@ export component ProxiesPage inherits Rectangle {
                                 // The selected member's name, right-aligned, with the
                                 // same label its tile shows. It and the group label
                                 // share the free width (EmojiText has no natural width).
-                                if (group.selected-index >= 0) : EmojiText {
+                                // A narrow row has room for the group's name only;
+                                // the selection shows when the group is opened.
+                                if (!root.narrow && group.selected-index >= 0) : EmojiText {
                                     runs: group.members[group.selected-index].label-runs;
                                     fallback: group.members[group.selected-index].label != ""
                                         ? group.members[group.selected-index].label

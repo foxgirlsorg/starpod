@@ -4,7 +4,7 @@
 //! fetch. The clock is a *parameter*, never a call to
 //! `SystemTime::now()` — that is what makes the schedule testable
 //! without waiting, and what stops a stray clock read from making the
-//! crate's behaviour depend on when it happens to run.
+//! crate's behavior depend on when it happens to run.
 //!
 //! # The rule
 //!

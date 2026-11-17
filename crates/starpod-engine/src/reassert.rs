@@ -179,7 +179,7 @@ mod tests {
                 rules(&["DOMAIN,a.com,DIRECT", "MATCH,PROXY"]),
             ),
             (
-                "MATCH is recognised whatever its case and spacing",
+                "MATCH is recognized whatever its case and spacing",
                 rules(&[]),
                 rules(&["DOMAIN,s.com,PROXY", " match ,PROXY"]),
                 rules(&["DOMAIN,s.com,PROXY", " match ,PROXY"]),

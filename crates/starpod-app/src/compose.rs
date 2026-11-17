@@ -432,6 +432,7 @@ mod tests {
             global_mode_disabled: false,
             expand_proxy_groups: None,
             device_limit: false,
+            local: false,
         }
     }
 

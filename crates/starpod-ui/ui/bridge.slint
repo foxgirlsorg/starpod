@@ -46,6 +46,8 @@ export struct SubscriptionItem {
     title-runs: [TextRun],
     // runs of `error`
     error-runs: [TextRun],
+    // added from pasted text: never fetched, edited instead
+    local: bool,
 }
 
 export struct NodeItem {
@@ -131,6 +133,10 @@ export struct SettingsModel {
     close-to-tray: bool,
     // "" = follow the system locale; "en" or "ru" pin the language
     language: string,
+    // The accent color as #rrggbb; "" = the Starpod red
+    accent-color: string,
+    // The Home background: "" (none), "matrix", "topo", "map", "dots" or "eru"
+    home-background: string,
 }
 
 // The engine settings beyond the core ones. Conventions:
@@ -150,7 +156,7 @@ export struct EngineSettingsModel {
     // one CIDR per line
     tun-route-address: string,
     tun-route-exclude-address: string,
-    // IPv6, latency and connection behaviour
+    // IPv6, latency and connection behavior
     ipv6: int,
     unified-delay: int,
     tcp-concurrent: int,
@@ -247,7 +253,7 @@ export struct MemberItem {
 }
 
 // One row of a Select. `detail` is a right-aligned secondary text, for
-// example a latency; `detail-color` colours it.
+// example a latency; `detail-color` colors it.
 export struct SelectItem {
     text: string,
     detail: string,
@@ -350,6 +356,24 @@ export global Bridge {
     in-out property <int> active-page: 0;
     // The Settings page: -1 shows the section list, 0.. that section.
     in-out property <int> settings-section: -1;
+    // The profile editor on the Profiles page. Rust fills it from
+    // open-profile-editor and closes it when a save is accepted.
+    in-out property <bool> editor-open: false;
+    in property <string> editor-id;
+    in property <string> editor-title;
+    in property <string> editor-text;
+    // a pasted profile (its own text) rather than a fetched one (stored JSON)
+    in property <bool> editor-local;
+    in property <string> editor-error;
+    // Running on a phone (Android): no tray, no login start, no global
+    // shortcuts and no self-update, so their settings are hidden.
+    in property <bool> mobile: false;
+    // Starpod may update itself: false when a store or package manager
+    // installed it (and always on a phone), which then hides every update
+    // control.
+    in property <bool> self-update: true;
+    // This build's version, for the About card.
+    in property <string> app-version;
 
     // --- engine -------------------------------------------------------------
     // "stopped" | "starting" | "running" | "stopping" | "failed"
@@ -494,6 +518,12 @@ export global Bridge {
     callback refresh-subscription(string);
     // Use this subscription, and only it.
     callback activate-subscription(string);
+    // name, pasted configuration (YAML or JSON)
+    callback add-local-subscription(string, string);
+    // Load a profile's text into the editor (the editor-* properties).
+    callback open-profile-editor(string);
+    // profile id, edited text
+    callback save-profile-source(string, string);
     callback refresh-all();
     // subscription id, mode
     callback set-subscription-mode(string, string);

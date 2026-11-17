@@ -1303,3 +1303,66 @@ msgstr ""
 
 msgid "Back to settings"
 msgstr ""
+
+msgid "Accent color"
+msgstr ""
+
+msgid "Used for the power button, selections and the Starpod mark."
+msgstr ""
+
+msgid "Home background"
+msgstr ""
+
+msgid "Drawn behind the Home page in the accent color."
+msgstr ""
+
+msgid "None"
+msgstr ""
+
+msgid "Matrix"
+msgstr ""
+
+msgid "Terrain"
+msgstr ""
+
+msgid "Map"
+msgstr ""
+
+msgid "Dots"
+msgstr ""
+
+msgid "Applies when connected"
+msgstr ""
+
+msgid "Paste the configuration."
+msgstr ""
+
+msgid "From a link"
+msgstr ""
+
+msgid "Paste a config"
+msgstr ""
+
+msgid "A Clash or mihomo configuration, in YAML or JSON. Starpod never fetches it; edit it from the profile card."
+msgstr ""
+
+msgid "Edit “{}”"
+msgstr ""
+
+msgid "The pasted configuration, in YAML or JSON. Saving checks it and rebuilds the profile."
+msgstr ""
+
+msgid "The profile as Starpod stores it, in JSON. The next update from the link replaces your changes."
+msgstr ""
+
+msgid "Reload"
+msgstr ""
+
+msgid " · Pasted"
+msgstr ""
+
+msgid "About"
+msgstr ""
+
+msgid "Made by foxgirls.org. Source code, releases and issues are on GitHub."
+msgstr ""

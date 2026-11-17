@@ -4,7 +4,7 @@
 //!
 //! - [`StoreError`] is for *I/O and format* problems — a directory that cannot
 //!   be resolved, a file that cannot be written, a payload that will not
-//!   serialise.
+//!   serialize.
 //! - [`MigrationError`] is for a *schema* problem — a file whose version this
 //!   build cannot upgrade. It is separate because a migration failure must
 //!   leave the original file untouched, and the caller needs to be able to say
@@ -37,7 +37,7 @@ pub enum StoreError {
         source: std::io::Error,
     },
 
-    /// A value could not be serialised to JSON.
+    /// A value could not be serialized to JSON.
     #[error("could not serialize {what}: {source}")]
     Serialize {
         /// What was being serialized, e.g. `"user state"`.
@@ -82,7 +82,7 @@ pub enum StoreError {
     ///
     /// The controller secret is passed to the engine on its command line
     /// (`--secret`), never in the config file (ARCHITECTURE §5.1). This error
-    /// is the last line of defence against a call site that does that anyway.
+    /// is the last line of defense against a call site that does that anyway.
     #[error(
         "the generated configuration contains a {key:?} key, which must never be written to disk"
     )]

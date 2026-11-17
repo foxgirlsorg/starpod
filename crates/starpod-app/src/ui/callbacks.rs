@@ -249,8 +249,67 @@ fn wire_servers(bridge: &Bridge<'_>, ctx: &Ctx) {
             &c,
             "Switching the subscription…",
             Sink::Banner,
-            move |s| async move { s.lock().await.set_active_subscription(&id).await },
+            move |s| async move {
+                let mut svc = s.lock().await;
+                svc.set_active_subscription(&id).await?;
+                ping_profile(&mut svc).await;
+                Ok(())
+            },
         );
+    });
+
+    let c = ctx.clone();
+    bridge.on_add_local_subscription(move |label, text| {
+        let label = label.to_string();
+        let text = text.to_string();
+        act(
+            &c,
+            "Adding the profile…",
+            Sink::Banner,
+            move |s| async move {
+                let mut svc = s.lock().await;
+                svc.add_local_subscription(label, text).await?;
+                ping_profile(&mut svc).await;
+                Ok(())
+            },
+        );
+    });
+
+    let c = ctx.clone();
+    bridge.on_open_profile_editor(move |id| {
+        let id = id.to_string();
+        let service = c.service.clone();
+        c.runtime.spawn(async move {
+            let mut svc = service.lock().await;
+            let title = svc
+                .snapshot()
+                .subscriptions
+                .iter()
+                .find(|view| view.id == id)
+                .map(|view| view.title.clone())
+                .unwrap_or_default();
+            let result = svc.profile_source(&id).await;
+            drop(svc);
+            super::runtime::post(move |ui| match result {
+                Ok(source) => ui.open_profile_editor(&id, &title, &source.text, source.local),
+                Err(error) => ui.report(Sink::Banner, error.to_string()),
+            });
+        });
+    });
+
+    let c = ctx.clone();
+    bridge.on_save_profile_source(move |id, text| {
+        let id = id.to_string();
+        let text = text.to_string();
+        let service = c.service.clone();
+        c.runtime.spawn(async move {
+            super::runtime::post(|ui| ui.begin_busy("Saving the profile…"));
+            let result = service.lock().await.save_profile_source(&id, text).await;
+            super::runtime::post(move |ui| {
+                ui.end_busy();
+                ui.finish_profile_edit(result.err().map(|error| error.to_string()));
+            });
+        });
     });
 
     let c = ctx.clone();
@@ -397,7 +456,17 @@ async fn add_subscription_flow(
     if mode == starpod_core::SubscriptionMode::AppManaged {
         svc.refresh_subscription(&id).await?;
     }
+    ping_profile(&mut svc).await;
     Ok(())
+}
+
+/// Test every server of the profile in use once, so a new or newly chosen
+/// profile shows its latencies without the user asking. A failed test is
+/// logged, not reported: the change itself worked.
+async fn ping_profile(svc: &mut AppService) {
+    if let Err(error) = svc.test_latency().await {
+        warn!(%error, "the latency test after a profile change failed");
+    }
 }
 
 fn wire_rules(bridge: &Bridge<'_>, ctx: &Ctx) {

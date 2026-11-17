@@ -50,7 +50,7 @@
 //! The second one matters for an app-managed design, and it is why the app
 //! does not put engine-managed subscriptions in the generated file when it
 //! can avoid it: the engine's refresh loop would rewrite the app's file
-//! behind the app's back, in the engine's own normalised form. The app
+//! behind the app's back, in the engine's own normalized form. The app
 //! fetches, parses, caches and merges subscriptions itself
 //! (ARCHITECTURE §1.9), so the file it writes is the whole truth.
 
@@ -943,7 +943,7 @@ mod tests {
             .await;
 
         // The pid is that of a harmless process this test owns, so nothing
-        // is signalled by accident. It is not stopped by these assertions.
+        // is signaled by accident. It is not stopped by these assertions.
         let mut stand_in = std::process::Command::new("sleep")
             .arg("30")
             .spawn()

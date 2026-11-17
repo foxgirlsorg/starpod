@@ -190,7 +190,7 @@ impl RuleKind {
 
     /// Whether this kind takes a target.
     ///
-    /// The logic rules carry their target *after* the parenthesised payload
+    /// The logic rules carry their target *after* the parenthesized payload
     /// group, and `MATCH` carries it directly — both have a target, just not
     /// in the second field.
     pub const fn has_target(self) -> bool {
@@ -251,7 +251,7 @@ impl RuleKind {
     /// Whether this kind may carry the `no-resolve` flag.
     ///
     /// `RULE-SET` consults it too, but only together with the provider's own
-    /// behaviour (`RuleSetRule::should_resolve_ip`), so it is not listed
+    /// behavior (`RuleSetRule::should_resolve_ip`), so it is not listed
     /// here — see [`RuleKind::accepts_src_flag`] for the flag-bearing kinds.
     pub const fn accepts_no_resolve_flag(self) -> bool {
         matches!(

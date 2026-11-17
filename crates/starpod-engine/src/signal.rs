@@ -129,7 +129,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_pid_that_would_address_a_group_is_never_signalled() {
+    fn a_pid_that_would_address_a_group_is_never_signaled() {
         // Pid 0 means "the caller's process group"; a pid above i32::MAX
         // would wrap to a negative group. Both must be refused outright.
         assert!(!request_graceful(0));

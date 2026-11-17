@@ -23,7 +23,7 @@ use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
 use starpod_core::config::{DEFAULT_MIXED_PORT, DEFAULT_SOCKS_PORT};
 use starpod_core::{SubscriptionMode, UserPreferences, timestamp};
 use starpod_subscription::RefreshSchedule;
-use starpod_ui::{AppTray, AppWindow, Bridge};
+use starpod_ui::{AppTray, AppWindow, Bridge, Design};
 use tokio::sync::watch;
 use tracing::{info, warn};
 
@@ -109,6 +109,7 @@ pub struct UiState {
     banner: Option<Banner>,
     busy: u32,
     busy_message: String,
+    #[cfg(not(target_os = "android"))]
     clipboard: Option<arboard::Clipboard>,
     /// `STARPOD_UI_DEMO=1`: fill the window with the demo data after the first push.
     demo_requested: bool,
@@ -133,6 +134,12 @@ pub fn post(update: impl FnOnce(&mut UiState) + Send + 'static) {
     }
 }
 
+/// Show `message` as an error banner. Any thread; for platform code outside
+/// the UI, such as Android's installer reporting a failed update.
+pub fn show_error(message: String) {
+    post(move |ui| ui.show_banner(Banner::error(message)));
+}
+
 /// Run `update` against the UI state now. Only call this on the Slint thread.
 pub fn with_ui(update: impl FnOnce(&mut UiState)) {
     UI.with(|cell| match cell.borrow_mut().as_mut() {
@@ -152,6 +159,7 @@ impl UiState {
             banner: None,
             busy: 0,
             busy_message: String::new(),
+            #[cfg(not(target_os = "android"))]
             clipboard: None,
             demo_requested: demo::requested(),
             demo_applied: false,
@@ -450,16 +458,46 @@ impl UiState {
         }
     }
 
-    fn copy_text(&mut self, text: String) -> Result<(), arboard::Error> {
+    #[cfg(not(target_os = "android"))]
+    fn copy_text(&mut self, text: String) -> Result<(), String> {
         // The clipboard is kept alive: on some platforms its contents go away
         // with the handle.
         if self.clipboard.is_none() {
-            self.clipboard = Some(arboard::Clipboard::new()?);
+            self.clipboard = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
         }
         if let Some(clipboard) = self.clipboard.as_mut() {
-            clipboard.set_text(text)?;
+            clipboard
+                .set_text(text)
+                .map_err(|error| error.to_string())?;
         }
         Ok(())
+    }
+
+    /// Android has no clipboard access from native code without the Java
+    /// side, so copying says so instead.
+    #[cfg(target_os = "android")]
+    fn copy_text(&mut self, _text: String) -> Result<(), String> {
+        Err("copying is not available on Android yet".to_string())
+    }
+
+    /// Show the profile editor with a profile's text.
+    pub fn open_profile_editor(&mut self, id: &str, title: &str, text: &str, local: bool) {
+        let bridge = self.window.global::<Bridge>();
+        bridge.set_editor_id(id.into());
+        bridge.set_editor_title(title.into());
+        bridge.set_editor_text(text.into());
+        bridge.set_editor_local(local);
+        bridge.set_editor_error("".into());
+        bridge.set_editor_open(true);
+    }
+
+    /// Close the editor after a save it accepted, or show why it refused.
+    pub fn finish_profile_edit(&mut self, error: Option<String>) {
+        let bridge = self.window.global::<Bridge>();
+        match error {
+            None => bridge.set_editor_open(false),
+            Some(message) => bridge.set_editor_error(message.into()),
+        }
     }
 
     /// Put the proxy command for the visible ports on the clipboard.
@@ -495,6 +533,11 @@ impl UiState {
         let language = crate::i18n::effective(&prefs.language);
         if let Err(error) = slint::select_bundled_translation(language.tag()) {
             warn!(?error, "the interface language could not be selected");
+        }
+        let accent = super::mapping::accent_slint_color(prefs.effective_accent_color());
+        self.window.global::<Design>().set_primary(accent);
+        if let Some(tray) = &self.tray {
+            tray.global::<Design>().set_primary(accent);
         }
         self.each_bridge(|bridge| {
             bridge.set_check_updates(check_updates);
@@ -615,6 +658,10 @@ impl UiState {
 /// Check GitHub for a newer release. A manual check always runs. The startup
 /// check runs only while the user keeps the setting on.
 pub fn spawn_update_check(ctx: &Ctx, manual: bool) {
+    // A store or package manager delivers the updates (always on Android).
+    if update::package_manager().is_some() {
+        return;
+    }
     let service = ctx.service.clone();
     ctx.runtime.spawn(async move {
         if !manual {
@@ -641,6 +688,9 @@ pub fn spawn_update_check(ctx: &Ctx, manual: bool) {
 /// Download and install the newest release, then quit and start it. Runs
 /// only when the user asks. A failure changes nothing and says why.
 pub fn spawn_install_update(ctx: &Ctx) {
+    if update::package_manager().is_some() {
+        return;
+    }
     let ctx = ctx.clone();
     let service = ctx.service.clone();
     ctx.runtime.clone().spawn(async move {
@@ -658,14 +708,21 @@ pub fn spawn_install_update(ctx: &Ctx) {
                 post(move |ui| ui.set_busy_message(&format!("Downloading the update… {percent}%")));
             })
             .await?;
+            if cfg!(target_os = "android") {
+                // Android installs it, after asking; the app is replaced and
+                // restarted by Android, not here.
+                update::install_apk(&new)?;
+                return Ok(None);
+            }
             let current = std::env::current_exe()
                 .map_err(|error| format!("the running Starpod could not be found: {error}"))?;
             update::replace_binary(&current, &new)?;
-            Ok((current, release.version))
+            Ok(Some((current, release.version)))
         }
         .await;
         match result {
-            Ok((current, version)) => {
+            Ok(None) => post(|ui| ui.end_busy()),
+            Ok(Some((current, version))) => {
                 info!(%version, "update installed; restarting");
                 update::schedule_relaunch(current);
                 post(|ui| ui.end_busy());
@@ -894,6 +951,15 @@ pub fn run(
 ) -> Result<(), Box<dyn Error>> {
     let window = AppWindow::new()?;
     info!("window created");
+    window
+        .global::<Bridge>()
+        .set_mobile(cfg!(target_os = "android"));
+    window
+        .global::<Bridge>()
+        .set_self_update(update::package_manager().is_none());
+    window
+        .global::<Bridge>()
+        .set_app_version(env!("CARGO_PKG_VERSION").into());
     // Debug hook for tools/ui-shot.sh: STARPOD_UI_PAGE=0..6 opens that page
     // (6 is Connections).
     if let Some(page) = std::env::var("STARPOD_UI_PAGE")
@@ -1031,6 +1097,7 @@ mod tests {
             group_count: 0,
             quota: None,
             has_auth_header: false,
+            local: false,
             title: id.to_string(),
             announce: None,
             support_url: None,

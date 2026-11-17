@@ -746,7 +746,7 @@ async fn stop_launch(launch: &mut Launch) -> ExitInfo {
 
 /// Stop an engine this app did not start in this run.
 ///
-/// The pid is all the app has. An unelevated engine is signalled directly.
+/// The pid is all the app has. An unelevated engine is signaled directly.
 /// An elevated one needs a second elevation on unix. On Windows the app has
 /// no handle to it and cannot open one with `PROCESS_TERMINATE` from an
 /// unelevated process, so it cannot be stopped from here.

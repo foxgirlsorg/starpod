@@ -217,7 +217,7 @@ Exactly one of `path` / `payload`; neither → `400 "request body must contain '
 
 Query parameter: `?force=true` (any other value is not force).
 
-Behaviour:
+Behavior:
 1. YAML is parsed via `meow_config::parse_raw_yaml` — **syntax errors are always `400`, even
    with `force=true`**.
 2. Duplicate `subscriptions:` names → `400 "duplicate subscription name"` (never commit).
@@ -260,7 +260,7 @@ bad patch never partially applies.
 ## 5. What `meow-cli` (the reference client) reveals (VERIFIED by running it + reading SKILL.md)
 
 The release ships `skills/meow-cli/SKILL.md` — a complete, authoritative description of the API's
-semantics. It is the best single document about this engine's behaviour. Highlights that shape
+semantics. It is the best single document about this engine's behavior. Highlights that shape
 the app:
 
 - `meow-cli status` → "version, mode, log level, TUN, ports, traffic totals".
@@ -309,7 +309,7 @@ Key facts:
 - `geodata.auto-update` (default `false`) turns on a background refresh loop;
   `auto-update-interval` defaults to `24` (hours).
 - `geosite-path` overrides the local geosite file path.
-- Downloads honour `resolve-geodata-egress`: `DIRECT`/`COMPATIBLE`/`PASS` fetch direct,
+- Downloads honor `resolve-geodata-egress`: `DIRECT`/`COMPATIBLE`/`PASS` fetch direct,
   `REJECT`/`REJECT-DROP` do not fetch.
 
 **Consequence for the app: the app does not need to ship or fetch geodata.** The engine does it,

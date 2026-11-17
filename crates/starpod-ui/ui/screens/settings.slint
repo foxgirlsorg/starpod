@@ -46,7 +46,8 @@ export component SettingsPage inherits Rectangle {
     ];
     private property <[string]> section-texts: [
         @tr("Startup, routing, subscriptions and updates"),
-        @tr("Ports, LAN access, IPv6 and the system proxy"),
+        // A phone connects through its VPN, never a system proxy or TUN.
+        Bridge.mobile ? @tr("Ports, LAN access and IPv6") : @tr("Ports, LAN access, IPv6 and the system proxy"),
         @tr("The virtual adapter that routes all system traffic"),
         @tr("How the engine resolves names"),
         @tr("Reads domain names from the traffic"),
@@ -188,6 +189,28 @@ export component SettingsPage inherits Rectangle {
         { text: "Русский", detail: "", detail-color: Design.muted-foreground },
     ];
     private property <[string]> language-values: ["", "en", "ru"];
+    // The Home backgrounds offered, and their names.
+    private property <[string]> background-options: ["", "matrix", "topo", "map", "dots", "eru"];
+    private property <[image]> background-previews: [
+        @image-url(""),
+        @image-url("../assets/backgrounds/thumb-matrix.png"),
+        @image-url("../assets/backgrounds/thumb-topo.png"),
+        @image-url("../assets/backgrounds/thumb-map.png"),
+        @image-url("../assets/backgrounds/thumb-dots.png"),
+        @image-url("../assets/backgrounds/eru.png"),
+    ];
+    private property <[string]> background-labels: [@tr("None"), @tr("Matrix"), @tr("Terrain"), @tr("Map"), @tr("Dots"), "Eru"];
+    // The accent colors offered as swatches. The first is the default.
+    private property <[string]> accent-swatches: ["#de6161", "#e8864a", "#d9a441", "#5bb381", "#3fb5a8", "#5b9be0", "#e06c9f"];
+    pure function swatch-color(hex: string) -> color {
+        if hex == "#e8864a" { return #e8864a; }
+        if hex == "#d9a441" { return #d9a441; }
+        if hex == "#5bb381" { return #5bb381; }
+        if hex == "#3fb5a8" { return #3fb5a8; }
+        if hex == "#5b9be0" { return #5b9be0; }
+        if hex == "#e06c9f" { return #e06c9f; }
+        return #de6161;
+    }
 
     // Hotkey placeholders show the format; the row's description says how to clear one.
     private property <string> hotkey-example: "Ctrl+Alt+KeyS";
@@ -325,12 +348,16 @@ export component SettingsPage inherits Rectangle {
                 }
 
                 if (root.section < 0) : Card {
-                    for name[i] in root.section-names : SectionLink {
-                        icon: root.section-icons[i];
-                        text: name;
-                        description: root.section-texts[i];
-                        clicked => {
-                            root.open-section(i);
+                    for name[i] in root.section-names : VerticalLayout {
+                        // TUN (2) and global shortcuts (9) do not exist on a
+                        // phone: it connects through its VPN.
+                        if !(Bridge.mobile && (i == 2 || i == 9)) : SectionLink {
+                            icon: root.section-icons[i];
+                            text: name;
+                            description: root.section-texts[i];
+                            clicked => {
+                                root.open-section(i);
+                            }
                         }
                     }
                 }
@@ -382,9 +409,120 @@ export component SettingsPage inherits Rectangle {
                                 }
                             }
                         }
+
+                        Separator {}
+
+                        ListRow {
+                            label: @tr("Home background");
+                            description: @tr("Drawn behind the Home page in the accent color.");
+
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                for option[i] in root.background-options : VerticalLayout {
+                                    private property <bool> picked: root.draft.home-background == option;
+                                    // Equal tiles: the label never widens its tile.
+                                    horizontal-stretch: 1;
+                                    preferred-width: 1px;
+                                    spacing: 6px;
+
+                                    Rectangle {
+                                        height: 80px;
+                                        min-width: 40px;
+                                        border-radius: Design.radius-md;
+                                        background: Design.background;
+                                        border-width: parent.picked ? 2px : 1px;
+                                        border-color: parent.picked ? Design.primary : tile-touch.has-hover ? Design.input : Design.border;
+                                        clip: true;
+
+                                        // A still preview of each background, made by
+                                        // tools/render_backgrounds.py, in the accent color.
+                                        if option != "" : Image {
+                                            x: 2px;
+                                            y: 2px;
+                                            width: parent.width - 4px;
+                                            height: parent.height - 4px;
+                                            source: root.background-previews[i];
+                                            image-fit: cover;
+                                            colorize: option == "eru" ? transparent : Design.primary;
+                                        }
+
+                                        tile-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.draft.home-background = option;
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: root.background-labels[i];
+                                        color: parent.picked ? Design.foreground : Design.muted-foreground;
+                                        font-family: Design.font-family;
+                                        font-size: Design.font-xs;
+                                        horizontal-alignment: center;
+                                        overflow: elide;
+                                        min-width: 0px;
+                                    }
+                                }
+                            }
+                        }
+
+                        Separator {}
+
+                        SettingRow {
+                            label: @tr("Accent color");
+                            description: @tr("Used for the power button, selections and the Starpod mark.");
+
+                            VerticalLayout {
+                                spacing: 8px;
+                                min-width: 204px;
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    for swatch in root.accent-swatches : Rectangle {
+                                        private property <bool> picked: root.draft.accent-color == swatch
+                                            || (swatch == "#de6161" && root.draft.accent-color == "");
+                                        width: 24px;
+                                        height: 24px;
+                                        border-radius: 12px;
+                                        background: root.swatch-color(swatch);
+                                        border-width: self.picked ? 2px : 0px;
+                                        border-color: Design.foreground;
+
+                                        Rectangle {
+                                            width: 100%;
+                                            height: 100%;
+                                            border-radius: 12px;
+                                            background: swatch-touch.has-hover && !parent.picked ? #ffffff26 : transparent;
+                                        }
+
+                                        swatch-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.draft.accent-color = swatch == "#de6161" ? "" : swatch;
+                                                root.rev += 1;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                DraftText {
+                                    value: root.draft.accent-color;
+                                    revision: root.rev;
+                                    placeholder: "#de6161";
+                                    committed(v) => {
+                                        root.draft.accent-color = v;
+                                    }
+                                }
+                            }
+                        }
                     }
 
-                    Card {
+                    // A phone has no login start and no tray.
+                    if (!Bridge.mobile) : Card {
                         CardHeader {
                             title: @tr("Startup");
                         }
@@ -489,7 +627,8 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
 
-                    Card {
+                    // A store or package manager delivers the updates.
+                    if (Bridge.self-update) : Card {
                         CardHeader {
                             title: @tr("Updates");
                         }
@@ -556,6 +695,26 @@ export component SettingsPage inherits Rectangle {
                                             Bridge.install-update();
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("About");
+                        }
+
+                        SettingRow {
+                            label: "Starpod " + Bridge.app-version;
+                            description: @tr("Made by foxgirls.org. Source code, releases and issues are on GitHub.");
+
+                            Button {
+                                text: "GitHub";
+                                variant: ButtonVariant.outline;
+                                icon: @image-url("../assets/icons/external-link.svg");
+                                clicked => {
+                                    Bridge.open-url("https://github.com/foxgirlsorg");
                                 }
                             }
                         }
@@ -680,7 +839,7 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
 
-                    Card {
+                    if (!Bridge.mobile) : Card {
                         CardHeader {
                             title: @tr("System proxy");
                         }
@@ -1482,7 +1641,8 @@ export component SettingsPage inherits Rectangle {
                             HorizontalLayout {
                                 alignment: end;
 
-                                Button {
+                                // On a phone the engine comes with the app.
+                                if (!Bridge.mobile) : Button {
                                     text: Bridge.engine-installed ? @tr("Reinstall") : @tr("Install");
                                     variant: ButtonVariant.outline;
                                     busy: Bridge.busy;
@@ -1496,48 +1656,73 @@ export component SettingsPage inherits Rectangle {
 
                         Separator {}
 
+                        // A save reloads the engine in place when it must;
+                        // a full restart is only ever the user's call.
                         SettingRow {
-                            label: @tr("Channel");
-                            description: @tr("Alpha releases come first and may be less stable.");
+                            label: @tr("Restart");
+                            description: @tr("Stops the engine and starts it again. Open connections are closed.");
 
-                            DraftChoice {
-                                items: root.channel-items;
-                                values: root.channel-values;
-                                value: root.edraft.engine-channel;
-                                revision: root.rev;
-                                committed(v) => {
-                                    root.edraft.engine-channel = v;
+                            HorizontalLayout {
+                                alignment: end;
+
+                                Button {
+                                    text: @tr("Restart engine");
+                                    variant: ButtonVariant.outline;
+                                    enabled: !Bridge.busy && Bridge.engine-phase == "running";
+                                    clicked => {
+                                        Bridge.restart();
+                                    }
                                 }
                             }
                         }
 
-                        Separator {}
+                        // A phone's engine is updated with the app.
+                        if (!Bridge.mobile) : VerticalLayout {
+                            Separator {}
 
-                        SettingRow {
-                            label: @tr("Latest");
-                            description: Bridge.engine-latest-version == "" ? @tr("Not checked yet")
-                                : Bridge.engine-update-available ? @tr("Version {} is available on this channel", Bridge.engine-latest-version)
-                                : @tr("Up to date on this channel");
+                            SettingRow {
+                                label: @tr("Channel");
+                                description: @tr("Alpha releases come first and may be less stable.");
 
-                            HorizontalLayout {
-                                alignment: end;
-                                spacing: 8px;
-
-                                Button {
-                                    text: @tr("Check");
-                                    variant: ButtonVariant.outline;
-                                    enabled: !Bridge.busy;
-                                    clicked => {
-                                        Bridge.check-engine-update();
+                                DraftChoice {
+                                    items: root.channel-items;
+                                    values: root.channel-values;
+                                    value: root.edraft.engine-channel;
+                                    revision: root.rev;
+                                    committed(v) => {
+                                        root.edraft.engine-channel = v;
                                     }
                                 }
+                            }
 
-                                if (Bridge.engine-update-available) : Button {
-                                    text: @tr("Upgrade");
-                                    variant: ButtonVariant.primary;
-                                    enabled: !Bridge.busy;
-                                    clicked => {
-                                        Bridge.upgrade-engine();
+                            Separator {}
+
+                            SettingRow {
+                                label: @tr("Latest");
+                                description: Bridge.engine-latest-version == "" ? @tr("Not checked yet")
+                                    : Bridge.engine-update-available ? @tr("Version {} is available on this channel", Bridge.engine-latest-version)
+                                    : @tr("Up to date on this channel");
+
+                                HorizontalLayout {
+                                    alignment: end;
+                                    spacing: 8px;
+
+                                    Button {
+                                        text: @tr("Check");
+                                        variant: ButtonVariant.outline;
+                                        enabled: !Bridge.busy;
+                                        clicked => {
+                                            Bridge.check-engine-update();
+                                        }
+                                    }
+
+                                    if (Bridge.engine-update-available) : Button {
+                                        text: @tr("Upgrade");
+                                        variant: ButtonVariant.primary;
+                                        enabled: !Bridge.busy;
+                                        clicked => {
+                                            Bridge.upgrade-engine();
+                                        }
                                     }
                                 }
                             }
@@ -1907,19 +2092,9 @@ export component SettingsPage inherits Rectangle {
 
                         SettingRow {
                             label: @tr("Secrets stored in");
-                            description: Bridge.secrets-encrypted ? "" : Bridge.secret-fallback-reason;
+                            description: (Bridge.secret-backend != "" ? Bridge.secret-backend : @tr("Not reported yet"))
+                                + (Bridge.secrets-encrypted || Bridge.secret-fallback-reason == "" ? "" : ". " + Bridge.secret-fallback-reason);
                             warning: Bridge.secrets-encrypted ? "" : @tr("Not encrypted. Anyone with access to your user profile can read them.");
-
-                            Text {
-                                horizontal-stretch: 1;
-                                vertical-stretch: 0;
-                                text: Bridge.secret-backend != "" ? Bridge.secret-backend : @tr("Not reported yet");
-                                color: Design.foreground;
-                                font-family: Design.font-family;
-                                font-size: Design.font-sm;
-                                horizontal-alignment: right;
-                                wrap: word-wrap;
-                            }
                         }
 
                         Separator {}

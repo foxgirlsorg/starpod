@@ -165,11 +165,11 @@ dialog. Dropdown-menu and sheet need Slint-specific implementations (popup windo
 ## 7. Logo & iconography
 
 ### The mark (`src/lib/Logo.svelte`)
-A single-colour (`fill="currentColor"`) **fox head in profile**, drawn as two SVG paths, viewBox
+A single-color (`fill="currentColor"`) **fox head in profile**, drawn as two SVG paths, viewBox
 `0 0 117.29976 203.22969` (tall aspect — head plus ears). One path is the filled silhouette
 (ear + muzzle + cheek); the second is a stroked outline (`stroke-width: 1.165`) offset from it,
 giving the mark a subtle double-line/ink quality rather than a flat blob. The whole thing is
-one colour, so it recolours to any `currentColor` — in the navbar it is `text-brand`
+one color, so it recolors to any `currentColor` — in the navbar it is `text-brand`
 (`#de6161`) and rotates `-12deg` on group hover.
 
 Desktop translation: this is a pure vector mark with no gradients or raster. It can be ported to

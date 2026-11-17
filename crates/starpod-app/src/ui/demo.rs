@@ -100,6 +100,7 @@ pub fn apply(bridge: &Bridge<'_>) {
             expires: Some("2026-11-16T00:00:00Z".into()),
         }),
         has_auth_header: false,
+        local: false,
         title: "Foxgirls VPN".into(),
         announce: None,
         support_url: None,
@@ -252,6 +253,10 @@ pub fn apply(bridge: &Bridge<'_>) {
         auto_connect: false,
         close_to_tray: true,
         language: String::new().into(),
+        accent_color: String::new().into(),
+        home_background: std::env::var("STARPOD_UI_BACKGROUND")
+            .unwrap_or_default()
+            .into(),
     });
     bridge.set_settings_error("".into());
     bridge.set_secret_backend("Windows Credential Manager".into());

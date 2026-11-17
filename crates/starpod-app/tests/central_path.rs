@@ -1307,9 +1307,12 @@ async fn removing_one_of_two_subscriptions_keeps_a_running_proxy_on_the_other() 
     let snapshot = service.snapshot();
     assert_eq!(snapshot.engine.phase, EnginePhase::Running);
     assert_eq!(snapshot.connect_blocked, None);
+    // The second subscription was already the one in use, so the engine's
+    // configuration is unchanged and the engine is left alone.
     assert!(
-        matches!(engine.calls().last(), Some(Call::Reload(_))),
-        "the running proxy is reloaded on the remaining subscription"
+        matches!(engine.calls().last(), Some(Call::Start(_))),
+        "neither stopped nor reloaded: {:?}",
+        engine.calls().len()
     );
     assert!(
         snapshot
@@ -2164,4 +2167,306 @@ async fn only_the_subscription_in_use_is_built_and_shows_its_news() {
     // Removing the one in use falls back to the other.
     service.remove_subscription(&a).await.unwrap();
     assert!(service.snapshot().subscriptions.iter().all(|s| s.active));
+}
+
+// ----- local profiles ----------------------------------------------------------
+
+const LOCAL_ONE: &str = "\
+proxies:
+  - name: \"Pasted\"
+    type: ss
+    server: pasted.example.test
+    port: 8388
+    cipher: aes-256-gcm
+    password: PASTED-SECRET-1
+";
+
+const LOCAL_TWO: &str = "\
+proxies:
+  - name: \"Pasted\"
+    type: ss
+    server: pasted.example.test
+    port: 8388
+    cipher: aes-256-gcm
+    password: PASTED-SECRET-1
+  - name: \"Pasted Two\"
+    type: ss
+    server: two.example.test
+    port: 8389
+    cipher: aes-256-gcm
+    password: PASTED-SECRET-2
+";
+
+async fn add_local(service: &mut AppService, source: &str) -> String {
+    service
+        .add_local_subscription("Pasted profile".to_string(), source.to_string())
+        .await
+        .expect("the pasted configuration is added")
+}
+
+#[tokio::test]
+async fn a_pasted_configuration_is_added_selected_and_counted_without_a_fetch() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let scripted = Scripted::new(vec![]);
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(scripted.clone());
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+
+    let id = add_local(&mut service, LOCAL_ONE).await;
+
+    let snapshot = service.snapshot();
+    assert_eq!(snapshot.subscriptions.len(), 1);
+    assert_eq!(snapshot.subscriptions[0].id, id);
+    assert_eq!(snapshot.subscriptions[0].node_count, 1);
+    assert!(snapshot.subscriptions[0].active, "it is the one in use");
+    assert_eq!(
+        snapshot.subscriptions[0].status,
+        SubscriptionStatus::Current
+    );
+    assert!(scripted.requests().is_empty(), "nothing was fetched");
+    assert!(
+        paths_in(&dir).profile_source_file(&id).unwrap().exists(),
+        "the source is kept in the data directory"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_label_becomes_my_profile_and_bad_text_adds_nothing() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(Scripted::new(vec![]));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+
+    let refused = service
+        .add_local_subscription("Mine".to_string(), "proxies: [".to_string())
+        .await;
+    assert!(matches!(refused, Err(AppError::Invalid(_))), "{refused:?}");
+    assert!(service.snapshot().subscriptions.is_empty());
+
+    service
+        .add_local_subscription("  ".to_string(), LOCAL_ONE.to_string())
+        .await
+        .unwrap();
+    assert_eq!(service.snapshot().subscriptions[0].label, "My profile");
+}
+
+#[tokio::test]
+async fn a_refresh_rebuilds_a_pasted_profile_from_its_source_after_a_cache_clear() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let scripted = Scripted::new(vec![]);
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(scripted.clone());
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_local(&mut service, LOCAL_ONE).await;
+
+    service.clear_cache().await.unwrap();
+    assert_eq!(service.snapshot().nodes.len(), 0, "the cache is gone");
+    assert!(
+        paths_in(&dir).profile_source_file(&id).unwrap().exists(),
+        "clearing the cache keeps the pasted source"
+    );
+
+    service.refresh_subscription(&id).await.unwrap();
+    assert_eq!(service.snapshot().subscriptions[0].node_count, 1);
+    assert_eq!(service.snapshot().nodes.len(), 1);
+    assert!(scripted.requests().is_empty(), "the refresh did not fetch");
+}
+
+#[tokio::test]
+async fn profile_source_gives_the_pasted_text_for_a_local_profile() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(Scripted::new(vec![]));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_local(&mut service, LOCAL_ONE).await;
+
+    let source = service.profile_source(&id).await.unwrap();
+    assert!(source.local);
+    assert_eq!(source.text, LOCAL_ONE);
+}
+
+#[tokio::test]
+async fn saving_a_changed_configuration_updates_the_node_count() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(Scripted::new(vec![]));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_local(&mut service, LOCAL_ONE).await;
+
+    service
+        .save_profile_source(&id, LOCAL_TWO.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(service.snapshot().subscriptions[0].node_count, 2);
+    assert_eq!(service.snapshot().nodes.len(), 2);
+    assert_eq!(service.profile_source(&id).await.unwrap().text, LOCAL_TWO);
+}
+
+#[tokio::test]
+async fn invalid_text_is_rejected_and_the_old_payload_and_source_stay() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(Scripted::new(vec![]));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_local(&mut service, LOCAL_ONE).await;
+
+    let broken = service
+        .save_profile_source(&id, "proxies: [".to_string())
+        .await;
+    assert!(matches!(broken, Err(AppError::Invalid(_))), "{broken:?}");
+    let empty_servers = service
+        .save_profile_source(&id, "proxies: []".to_string())
+        .await;
+    assert!(
+        matches!(empty_servers, Err(AppError::Invalid(_))),
+        "{empty_servers:?}"
+    );
+
+    assert_eq!(service.snapshot().subscriptions[0].node_count, 1);
+    assert_eq!(service.snapshot().nodes.len(), 1);
+    assert_eq!(service.profile_source(&id).await.unwrap().text, LOCAL_ONE);
+}
+
+#[tokio::test]
+async fn a_fetched_profile_shows_its_payload_and_takes_a_pasted_configuration() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let scripted = Scripted::new(vec![Ok(FetchResponse::new(FIXTURE.as_bytes().to_vec()))]);
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(scripted);
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+
+    let before = service.profile_source(&id).await;
+    assert!(matches!(before, Err(AppError::Invalid(_))), "{before:?}");
+
+    service.refresh_subscription(&id).await.unwrap();
+    let shown = service.profile_source(&id).await.unwrap();
+    assert!(!shown.local);
+    assert!(
+        shown.text.contains("\"nodes\""),
+        "the payload is shown as JSON"
+    );
+
+    service
+        .save_profile_source(&id, LOCAL_ONE.to_string())
+        .await
+        .unwrap();
+    assert_eq!(service.snapshot().subscriptions[0].node_count, 1);
+    assert!(
+        !paths_in(&dir).profile_source_file(&id).unwrap().exists(),
+        "a fetched profile has no source file"
+    );
+}
+
+#[tokio::test]
+async fn removing_a_pasted_profile_deletes_its_source_file() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(Scripted::new(vec![]));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_local(&mut service, LOCAL_ONE).await;
+    let source_file = paths_in(&dir).profile_source_file(&id).unwrap();
+    assert!(source_file.exists());
+
+    service.remove_subscription(&id).await.unwrap();
+
+    assert!(service.snapshot().subscriptions.is_empty());
+    assert!(!source_file.exists(), "the pasted source is gone");
+}
+
+/// A phone tunnel that records what it was asked to do.
+#[derive(Default)]
+struct RecordingTunnel(Mutex<Vec<String>>);
+
+#[async_trait]
+impl starpod_app::PhoneTunnel for RecordingTunnel {
+    async fn prepare(&self) -> Result<(), String> {
+        self.0.lock().unwrap().push("prepare".to_string());
+        Ok(())
+    }
+    fn start(&self, socks_port: u16) {
+        self.0.lock().unwrap().push(format!("start {socks_port}"));
+    }
+    fn stop(&self) {
+        self.0.lock().unwrap().push("stop".to_string());
+    }
+}
+
+#[tokio::test]
+async fn a_phone_tunnel_follows_the_engine_and_a_failed_one_stops_the_proxy() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    let tunnel = Arc::new(RecordingTunnel::default());
+    service.set_phone_tunnel(tunnel.clone());
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+
+    service.connect().await.unwrap();
+    let calls = tunnel.0.lock().unwrap().clone();
+    assert_eq!(
+        calls.len(),
+        2,
+        "permission first, then the tunnel: {calls:?}"
+    );
+    assert_eq!(calls[0], "prepare");
+    assert!(calls[1].starts_with("start "), "{calls:?}");
+    // Connecting until the tunnel is up.
+    assert_eq!(service.snapshot().engine.phase, EnginePhase::Starting);
+    service.phone_tunnel_ready();
+    assert!(service.snapshot().engine.phase.is_running());
+
+    service.disconnect().await.unwrap();
+    assert_eq!(tunnel.0.lock().unwrap().last().unwrap(), "stop");
+
+    // A tunnel the system closes stops the proxy and says why; it is not
+    // asked to stop again.
+    service.connect().await.unwrap();
+    service.phone_tunnel_failed("The VPN was turned off").await;
+    let calls = tunnel.0.lock().unwrap().clone();
+    assert_eq!(calls.len(), 5, "{calls:?}");
+    assert!(!service.snapshot().engine.phase.is_running());
+    assert_eq!(
+        service.snapshot().notice.map(|(_, text)| text),
+        Some("The VPN was turned off".to_string())
+    );
+}
+
+#[tokio::test]
+async fn a_display_only_preference_leaves_the_running_engine_alone() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+    service.connect().await.unwrap();
+    let before = engine.calls().len();
+
+    let mut prefs = service.user_state().preferences.clone();
+    prefs.accent_color = "#4ade80".to_string();
+    prefs.home_background = "eru".to_string();
+    service.save_preferences(prefs).await.unwrap();
+
+    assert_eq!(
+        engine.calls().len(),
+        before,
+        "neither validated nor reloaded: {:?}",
+        &engine.calls()[before..]
+    );
+    assert_eq!(service.user_state().preferences.accent_color, "#4ade80");
 }
