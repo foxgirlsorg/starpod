@@ -368,6 +368,8 @@ export global Bridge {
     // Running on a phone (Android): no tray, no login start, no global
     // shortcuts and no self-update, so their settings are hidden.
     in property <bool> mobile: false;
+    // This build's version, for the About card.
+    in property <string> app-version;
 
     // --- engine -------------------------------------------------------------
     // "stopped" | "starting" | "running" | "stopping" | "failed"

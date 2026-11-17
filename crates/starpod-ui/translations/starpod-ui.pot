@@ -1360,3 +1360,9 @@ msgstr ""
 
 msgid " · Pasted"
 msgstr ""
+
+msgid "About"
+msgstr ""
+
+msgid "Made by foxgirls. Source code, releases and issues are on GitHub."
+msgstr ""

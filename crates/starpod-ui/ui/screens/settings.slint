@@ -697,6 +697,26 @@ export component SettingsPage inherits Rectangle {
                             }
                         }
                     }
+
+                    Card {
+                        CardHeader {
+                            title: @tr("About");
+                        }
+
+                        SettingRow {
+                            label: "Starpod " + Bridge.app-version;
+                            description: @tr("Made by foxgirls. Source code, releases and issues are on GitHub.");
+
+                            Button {
+                                text: "GitHub";
+                                variant: ButtonVariant.outline;
+                                icon: @image-url("../assets/icons/external-link.svg");
+                                clicked => {
+                                    Bridge.open-url("https://github.com/foxgirlsorg");
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // ============================================================

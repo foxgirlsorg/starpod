@@ -939,6 +939,9 @@ pub fn run(
     window
         .global::<Bridge>()
         .set_mobile(cfg!(target_os = "android"));
+    window
+        .global::<Bridge>()
+        .set_app_version(env!("CARGO_PKG_VERSION").into());
     // Debug hook for tools/ui-shot.sh: STARPOD_UI_PAGE=0..6 opens that page
     // (6 is Connections).
     if let Some(page) = std::env::var("STARPOD_UI_PAGE")
