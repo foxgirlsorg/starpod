@@ -1381,3 +1381,12 @@ msgstr "Останавливает движок и запускает его с�
 
 msgid "Restart engine"
 msgstr "Перезапустить движок"
+
+msgid "Starpod {} is available"
+msgstr "Доступна версия Starpod {}"
+
+msgid "Installing it restarts Starpod. You can update later from Settings."
+msgstr "Установка перезапустит Starpod. Обновить позже можно в настройках."
+
+msgid "Later"
+msgstr "Позже"

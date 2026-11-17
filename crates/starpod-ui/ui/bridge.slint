@@ -485,6 +485,9 @@ export global Bridge {
     in-out property <bool> update-available: false;
     in-out property <string> update-version: "";
     in-out property <string> update-url: "";
+    // Set on each start (and each manual check) that finds a newer release.
+    // The window opens the update dialog; it clears this when the dialog closes.
+    in-out property <bool> update-prompt: false;
 
     // --- shell --------------------------------------------------------------
     in-out property <bool> tray-available: false;

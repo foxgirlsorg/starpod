@@ -595,7 +595,8 @@ impl UiState {
     }
 
     /// Show the outcome of an update check: the update fields on each Bridge,
-    /// and a banner when the user asked for the check. A failed startup check
+    /// the update dialog when a newer release is found, and a banner when the
+    /// user asked for the check. A failed startup check
     /// says nothing, since the user did not ask for it.
     fn finish_update_check(&mut self, result: Result<Option<Release>, String>, manual: bool) {
         match result {
@@ -607,6 +608,8 @@ impl UiState {
                     bridge.set_update_version(version.as_str().into());
                     bridge.set_update_url(url.as_str().into());
                 });
+                // The window asks the user at once; the tray has no dialog.
+                self.window.global::<Bridge>().set_update_prompt(true);
                 if manual {
                     self.show_banner(Banner::info(crate::i18n::fmt(
                         "Starpod {} is available",

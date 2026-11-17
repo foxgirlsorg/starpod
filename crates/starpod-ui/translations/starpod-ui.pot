@@ -1366,3 +1366,12 @@ msgstr ""
 
 msgid "Made by foxgirls.org. Source code, releases and issues are on GitHub."
 msgstr ""
+
+msgid "Starpod {} is available"
+msgstr ""
+
+msgid "Installing it restarts Starpod. You can update later from Settings."
+msgstr ""
+
+msgid "Later"
+msgstr ""

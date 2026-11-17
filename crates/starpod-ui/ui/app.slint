@@ -911,4 +911,34 @@ export component AppWindow inherits Window {
             Bridge.cancel-install();
         }
     }
+
+    // The update prompt, shown on every start that finds a newer release.
+    // Download starts the install (which restarts Starpod); Later only closes
+    // it for this run. Either way Rust's flag is cleared, so the next check
+    // can open it again.
+    private property <bool> update-mirror: Bridge.update-prompt;
+    changed update-mirror => {
+        if (update-mirror) {
+            update-dialog.show();
+        } else {
+            update-dialog.close();
+        }
+    }
+
+    update-dialog := ConfirmDialog {
+        width: parent.width;
+        height: parent.height;
+        title: @tr("Starpod {} is available", Bridge.update-version);
+        message: @tr("Installing it restarts Starpod. You can update later from Settings.");
+        confirm-text: @tr("Download");
+        confirm-variant: ButtonVariant.primary;
+        cancel-text: @tr("Later");
+        confirmed => {
+            Bridge.update-prompt = false;
+            Bridge.install-update();
+        }
+        canceled => {
+            Bridge.update-prompt = false;
+        }
+    }
 }
