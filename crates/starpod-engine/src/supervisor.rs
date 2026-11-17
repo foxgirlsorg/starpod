@@ -151,7 +151,7 @@ pub const CONTROLLER_ADDRESS: &str = "127.0.0.1:0";
 /// The engine gets a console, hidden, instead of a window. See the module
 /// docs for why that is preferred to `CREATE_NEW_PROCESS_GROUP`.
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// What the app knows about the engine it is running, for the snapshot and
 /// for the ownership marker.

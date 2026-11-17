@@ -65,6 +65,8 @@ use starpod_core::domain::RuntimeConfig;
 use crate::config::EngineDocument;
 use crate::engine::ValidationReport;
 use crate::error::{EngineError, EngineResult};
+#[cfg(windows)]
+use crate::supervisor::CREATE_NO_WINDOW;
 
 /// How long the engine may take to parse a configuration before the check
 /// is abandoned.
@@ -138,6 +140,11 @@ async fn run_validation(binary: &Path, path: &Path) -> EngineResult<ValidationRe
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+
+    // The engine is a console program. Without this, Windows opens a console
+    // window for every validation run. See `CREATE_NO_WINDOW` in `supervisor`.
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
 
     let output = tokio::time::timeout(VALIDATE_TIMEOUT, command.output())
         .await
