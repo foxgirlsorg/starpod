@@ -719,10 +719,25 @@ export component Badge inherits Rectangle {
 // put a CardHeader first when the card needs a title. `inner-padding` defaults to 20.
 export component Card inherits Rectangle {
     in property <length> inner-padding: 20px;
+    // A clickable card: the whole surface is one target and lights up on
+    // hover. Buttons inside it keep their own clicks.
+    in property <bool> clickable: false;
+    // Draws the card as the chosen one of a list: an accent border.
+    in property <bool> selected: false;
+    callback clicked();
 
-    background: Design.card;
-    border-width: 1px;
-    border-color: Design.border;
+    background: root.clickable && touch.has-hover ? Design.card-hover : Design.card;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Design.primary : Design.border;
+
+    // Behind the body, so the controls in it are hit first.
+    touch := TouchArea {
+        enabled: root.clickable;
+        mouse-cursor: root.clickable ? MouseCursor.pointer : MouseCursor.default;
+        clicked => {
+            root.clicked();
+        }
+    }
     border-radius: Design.radius-lg;
     preferred-height: body.preferred-height;
     horizontal-stretch: 1;

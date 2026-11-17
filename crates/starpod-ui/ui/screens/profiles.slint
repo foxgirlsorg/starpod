@@ -16,8 +16,6 @@ export component ProfilesPage inherits Rectangle {
     private property <bool> advanced: false;
     // true from the Add click until the Bridge reports the work is done
     private property <bool> submitting: false;
-    // 0 = Starpod (app-managed), 1 = Engine (engine-managed)
-    private property <int> mode-index: 0;
     private property <string> draft-url: "";
     private property <string> draft-name: "";
     private property <string> draft-auth: "";
@@ -48,7 +46,6 @@ export component ProfilesPage inherits Rectangle {
         root.draft-name = "";
         root.draft-auth = "";
         root.url-error = "";
-        root.mode-index = 0;
     }
 
     function submit() {
@@ -64,7 +61,8 @@ export component ProfilesPage inherits Rectangle {
             root.draft-name,
             root.draft-url,
             root.draft-auth,
-            root.mode-index == 0 ? @tr("app-managed") : @tr("engine-managed"));
+            // Starpod always fetches the profiles itself.
+            "app-managed");
     }
 
     // The status badge text and colour for a subscription status.
@@ -193,39 +191,6 @@ export component ProfilesPage inherits Rectangle {
                             text <=> root.draft-auth;
                         }
 
-                        VerticalLayout {
-                            spacing: 8px;
-
-                            Text {
-                                text: @tr("Updated by");
-                                color: Design.foreground;
-                                font-family: Design.font-family;
-                                font-size: Design.font-sm;
-                                font-weight: 500;
-                                height: 16px;
-                                vertical-alignment: center;
-                                wrap: no-wrap;
-                            }
-
-                            HorizontalLayout {
-                                alignment: start;
-
-                                Segmented {
-                                    options: ["Starpod", @tr("Engine")];
-                                    current-index <=> root.mode-index;
-                                    horizontal-stretch: 0;
-                                }
-                            }
-
-                            if (root.mode-index == 1) : Text {
-                                text: @tr("No traffic/expiry info, the engine refreshes it itself");
-                                color: Design.muted-foreground;
-                                font-family: Design.font-family;
-                                font-size: Design.font-xs;
-                                wrap: word-wrap;
-                            }
-                        }
-
                         HorizontalLayout {
                             alignment: end;
                             spacing: 8px;
@@ -268,8 +233,15 @@ export component ProfilesPage inherits Rectangle {
                     }
                 }
 
+                // The whole card picks the profile; the one in use has the
+                // accent border. Only one profile is in use at a time.
                 for s[i] in Bridge.subscriptions : Card {
                     inner-padding: 16px;
+                    clickable: !s.active;
+                    selected: s.active;
+                    clicked => {
+                        Bridge.activate-subscription(s.id);
+                    }
 
                     VerticalLayout {
                         spacing: 6px;
@@ -312,16 +284,6 @@ export component ProfilesPage inherits Rectangle {
                                         text: root.status-text(s.status);
                                         variant: root.status-variant(s.status);
                                     }
-                                }
-                            }
-
-                            // Only one subscription is in use at a time.
-                            if (!s.active) : Button {
-                                text: @tr("Use");
-                                variant: ButtonVariant.outline;
-                                size: ButtonSize.sm;
-                                clicked => {
-                                    Bridge.activate-subscription(s.id);
                                 }
                             }
 
