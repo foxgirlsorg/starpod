@@ -393,9 +393,12 @@ export component ProxiesPage inherits Rectangle {
                                 }
                             }
 
-                            if (!root.narrow && root.running && Bridge.session-traffic-visible) : HorizontalLayout {
+                            // Always there, dimmed while disconnected, as in a
+                            // narrow window.
+                            if (!root.narrow && Bridge.session-traffic-visible) : HorizontalLayout {
                                 horizontal-stretch: 0;
                                 spacing: 12px;
+                                opacity: root.running ? 1 : 0.5;
 
                                 HorizontalLayout {
                                     spacing: 4px;
