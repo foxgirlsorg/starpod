@@ -515,9 +515,10 @@ export component RulesPage inherits Rectangle {
     VerticalLayout {
         width: parent.width;
         height: parent.height;
-        padding-left: 32px;
-        padding-right: 32px;
-        padding-top: 28px;
+        // The same margins as PageFrame, which the other pages use.
+        padding-left: WindowMetrics.width < 600px ? 16px : 32px;
+        padding-right: WindowMetrics.width < 600px ? 16px : 32px;
+        padding-top: WindowMetrics.width < 600px ? 20px : 28px;
         padding-bottom: 32px;
 
         HorizontalLayout {

@@ -5,15 +5,17 @@
 // and displays whatever `Bridge.logs` holds. The filter values are the level
 // names the engine and app use: all, info, warning, error.
 
-import { ListView } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { Design } from "../design.slint";
 import { Bridge, LogItem } from "../bridge.slint";
 import { EmojiText } from "../emoji-text.slint";
-import { ButtonSize, ButtonVariant, IconButton, Segmented, Card, EmptyState, PageHeader } from "../primitives.slint";
+import { ButtonSize, ButtonVariant, IconButton, Segmented, Card, EmptyState, PageHeader, WindowMetrics } from "../primitives.slint";
 
-// One log line: time, level, source, message. The message wraps; the other
-// columns keep a fixed width so every line up in one column.
-component LogRow inherits Rectangle {
+// One log line: time, level, source, message. Each line is laid out at its
+// natural width, so the message is never cut short: the list scrolls sideways
+// instead. The row is a layout root, so its minimum width (the sum of its
+// columns) reaches the list and sets the scrollable width.
+component LogRow inherits HorizontalLayout {
     in property <LogItem> entry;
 
     pure function level-text(level: string) -> string {
@@ -130,9 +132,10 @@ export component LogsPage inherits Rectangle {
     VerticalLayout {
         width: parent.width;
         height: parent.height;
-        padding-left: 32px;
-        padding-right: 32px;
-        padding-top: 28px;
+        // The same margins as PageFrame, which the other pages use.
+        padding-left: WindowMetrics.width < 600px ? 16px : 32px;
+        padding-right: WindowMetrics.width < 600px ? 16px : 32px;
+        padding-top: WindowMetrics.width < 600px ? 20px : 28px;
         padding-bottom: 32px;
 
         HorizontalLayout {
