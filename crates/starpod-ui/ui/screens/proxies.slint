@@ -624,7 +624,8 @@ export component ProxiesPage inherits Rectangle {
                                     wrap: false;
                                     horizontal-stretch: 1;
                                     min-width: 0px;
-                                    max-width: 240px;
+                                    // Alone on a narrow row, it takes the free width.
+                                    max-width: root.narrow ? 10000px : 240px;
                                 }
 
                                 if (!root.narrow) : VerticalLayout {
@@ -653,7 +654,9 @@ export component ProxiesPage inherits Rectangle {
                                 // The selected member's name, right-aligned, with the
                                 // same label its tile shows. It and the group label
                                 // share the free width (EmojiText has no natural width).
-                                if (group.selected-index >= 0) : EmojiText {
+                                // A narrow row has room for the group's name only;
+                                // the selection shows when the group is opened.
+                                if (!root.narrow && group.selected-index >= 0) : EmojiText {
                                     runs: group.members[group.selected-index].label-runs;
                                     fallback: group.members[group.selected-index].label != ""
                                         ? group.members[group.selected-index].label
