@@ -504,6 +504,7 @@ mod tests {
             strategy: None,
             url: None,
             interval: None,
+            hidden: false,
             raw: Default::default(),
         });
         state.preferences.group_selections = BTreeMap::from([
@@ -545,6 +546,7 @@ mod tests {
             strategy: None,
             url: None,
             interval: None,
+            hidden: false,
             raw: Default::default(),
         };
         let mut state = UserState::default();

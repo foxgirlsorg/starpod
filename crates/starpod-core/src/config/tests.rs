@@ -35,6 +35,7 @@ fn group(name: &str, members: &[&str]) -> ProxyGroup {
         strategy: None,
         url: None,
         interval: None,
+        hidden: false,
         raw: Default::default(),
     }
 }

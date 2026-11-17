@@ -566,7 +566,7 @@ export component ProxiesPage inherits Rectangle {
             VerticalLayout {
                 spacing: 16px;
 
-                if (Bridge.loaded && Bridge.groups.length == 0) : Card {
+                if (Bridge.loaded && Bridge.listed-groups.length == 0) : Card {
                     inner-padding: 0px;
 
                     EmptyState {
@@ -580,7 +580,7 @@ export component ProxiesPage inherits Rectangle {
                     }
                 }
 
-                for group in Bridge.groups : Card {
+                for group in Bridge.listed-groups : Card {
                     inner-padding: 0px;
 
                     VerticalLayout {

@@ -458,7 +458,7 @@ fn group_entry(group: &ProxyGroup) -> Value {
     entry.insert("name".to_string(), Value::String(group.name.clone()));
     entry.insert("type".to_string(), Value::String(group.group_type.clone()));
     for (key, value) in &group.raw {
-        if key == "name" || key == "type" || key == "proxies" {
+        if key == "name" || key == "type" || key == "proxies" || key == "hidden" {
             continue;
         }
         entry.insert(key.clone(), value.clone());
@@ -481,6 +481,9 @@ fn group_entry(group: &ProxyGroup) -> Value {
     }
     if let Some(strategy) = &group.strategy {
         entry.insert("strategy".to_string(), Value::String(strategy.clone()));
+    }
+    if group.hidden {
+        entry.insert("hidden".to_string(), Value::Bool(true));
     }
     Value::Object(entry)
 }
@@ -609,6 +612,7 @@ mod tests {
                 strategy: None,
                 url: None,
                 interval: None,
+                hidden: false,
                 raw: Map::new(),
             }],
             ..base_config()
@@ -628,6 +632,7 @@ mod tests {
             strategy: None,
             url: None,
             interval: None,
+            hidden: false,
             raw: Map::new(),
         };
         let config = RuntimeConfig {
@@ -846,6 +851,7 @@ mod tests {
                 strategy: None,
                 url: None,
                 interval: None,
+                hidden: false,
                 raw: Map::new(),
             }],
             rules: vec!["MATCH,PROXY".to_string()],

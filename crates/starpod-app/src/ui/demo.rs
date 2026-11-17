@@ -162,6 +162,7 @@ pub fn apply(bridge: &Bridge<'_>) {
             name: PROXY.into(),
             label: PROXY.into(),
             kind: "select".into(),
+            hidden: false,
             selected: Some(AUTO.into()),
             members: proxy_members,
         },
@@ -169,6 +170,7 @@ pub fn apply(bridge: &Bridge<'_>) {
             name: AUTO.into(),
             label: AUTO.into(),
             kind: "url-test".into(),
+            hidden: false,
             selected: Some(FRANKFURT.into()),
             members: auto_members,
         },
@@ -176,12 +178,14 @@ pub fn apply(bridge: &Bridge<'_>) {
             name: BLOCKED.into(),
             label: BLOCKED.into(),
             kind: "select".into(),
+            hidden: false,
             selected: Some(PROXY.into()),
             members: blocked_members,
         },
     ];
     let groups: Vec<_> = views.iter().map(group_item).collect();
-    bridge.set_groups(ModelRc::new(VecModel::from(groups)));
+    bridge.set_groups(ModelRc::new(VecModel::from(groups.clone())));
+    bridge.set_listed_groups(ModelRc::new(VecModel::from(groups)));
     bridge.set_group_choices(ModelRc::new(VecModel::from(group_choices(&views))));
     bridge.set_primary_group(PROXY.into());
     bridge.set_primary_group_runs(runs_model(PROXY));

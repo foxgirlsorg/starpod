@@ -318,6 +318,17 @@ pub fn member_choices(members: &[MemberView]) -> ModelRc<SelectItem> {
     ))
 }
 
+/// The groups the Proxies page and the tray list: every group but the hidden
+/// ones. The full list stays in the snapshot, for the Home page's server
+/// picker, which works on the primary group even when that group is hidden.
+pub fn listed_groups(groups: &[GroupView]) -> Vec<GroupView> {
+    groups
+        .iter()
+        .filter(|group| !group.hidden)
+        .cloned()
+        .collect()
+}
+
 /// The Select rows for the groups: the label of each, with no detail.
 pub fn group_choices(groups: &[GroupView]) -> Vec<SelectItem> {
     groups
@@ -1641,18 +1652,23 @@ fn set_servers(bridge: &Bridge<'_>, snap: &AppSnapshot, view: &ViewState) {
         bridge.set_nodes(model);
     }
     let order = view.member_order();
-    let groups: Vec<GroupItem> = snap
-        .groups
-        .iter()
-        .map(|group| group_item_in(group, order, view.expanded_groups.contains(&group.name)))
-        .collect();
+    let item_of =
+        |group: &GroupView| group_item_in(group, order, view.expanded_groups.contains(&group.name));
+    // Home reads every group, so it can still show a hidden primary group.
+    let groups: Vec<GroupItem> = snap.groups.iter().map(item_of).collect();
     if groups_changed(&bridge.get_groups(), &groups) {
         bridge.set_groups(ModelRc::new(VecModel::from(groups)));
+    }
+    // The Proxies page and the tray list only the groups that are not hidden.
+    let listed = listed_groups(&snap.groups);
+    let listed_items: Vec<GroupItem> = listed.iter().map(item_of).collect();
+    if groups_changed(&bridge.get_listed_groups(), &listed_items) {
+        bridge.set_listed_groups(ModelRc::new(VecModel::from(listed_items)));
     }
     let primary = snap.primary_group.clone().unwrap_or_default();
     bridge.set_primary_group_runs(runs_model(&primary));
     bridge.set_primary_group(primary.into());
-    let group_rows = group_choices(&snap.groups);
+    let group_rows = group_choices(&listed);
     if let Some(model) = changed_model(bridge.get_group_choices(), group_rows, same_select) {
         bridge.set_group_choices(model);
     }
@@ -1986,6 +2002,7 @@ mod tests {
             name: "Airport / Proxy".to_string(),
             label: "Proxy".to_string(),
             kind: "select".to_string(),
+            hidden: false,
             selected: None,
             members: vec![
                 MemberView {
@@ -2020,6 +2037,7 @@ mod tests {
             name: "Proxy".to_string(),
             label: "Proxy".to_string(),
             kind: "select".to_string(),
+            hidden: false,
             selected: Some("A".to_string()),
             members: vec![MemberView {
                 name: "A".to_string(),
@@ -2383,6 +2401,7 @@ mod tests {
             name: "Airport / Pick".to_string(),
             label: "Pick".to_string(),
             kind: "select".to_string(),
+            hidden: false,
             selected: None,
             members: Vec::new(),
         };
@@ -2529,9 +2548,37 @@ mod tests {
             name: "Proxy".to_string(),
             label: "Proxy".to_string(),
             kind: "select".to_string(),
+            hidden: false,
             selected: selected.map(str::to_string),
             members,
         }
+    }
+
+    #[test]
+    fn hidden_groups_are_left_out_of_the_listed_groups() {
+        let groups = vec![
+            GroupView {
+                name: "Hidden".to_string(),
+                label: "Hidden".to_string(),
+                hidden: true,
+                ..proxy_group(Vec::new(), None)
+            },
+            GroupView {
+                name: "Shown".to_string(),
+                label: "Shown".to_string(),
+                ..proxy_group(Vec::new(), None)
+            },
+        ];
+        let listed: Vec<String> = listed_groups(&groups)
+            .into_iter()
+            .map(|group| group.name)
+            .collect();
+        assert_eq!(listed, vec!["Shown".to_string()]);
+        assert_eq!(
+            groups.len(),
+            2,
+            "the full list keeps the hidden group for Home"
+        );
     }
 
     fn names(members: &[MemberView]) -> Vec<&str> {

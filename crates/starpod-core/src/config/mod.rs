@@ -383,6 +383,7 @@ fn merge(normalized: &Normalized, findings: &mut Vec<Finding>) -> (RuntimeConfig
         strategy: None,
         url: None,
         interval: None,
+        hidden: false,
         raw: Default::default(),
     });
     let (leading_default, trailing_default) = if subscription_has_match {

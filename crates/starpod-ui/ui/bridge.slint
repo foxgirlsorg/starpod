@@ -403,6 +403,8 @@ export global Bridge {
     in-out property <[NodeItem]> nodes: [];
     in-out property <string> node-filter: "";
     in-out property <[GroupItem]> groups: [];
+    // The groups the Proxies page and the tray list: `groups` without the hidden ones.
+    in-out property <[GroupItem]> listed-groups: [];
     in-out property <string> primary-group: "";
     // one row per group, for the group Select: text is the group's label
     in-out property <[SelectItem]> group-choices: [];

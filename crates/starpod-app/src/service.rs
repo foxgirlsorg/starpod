@@ -503,6 +503,8 @@ impl AppService {
 
         let mut rule_targets = builtin_target_names();
         if let Some(config) = built {
+            // Hidden groups are left out of group lists, but rules may still
+            // send traffic to them.
             rule_targets.extend(config.proxy_groups.iter().map(|group| group.name.clone()));
             rule_targets.extend(config.proxies.iter().map(|node| node.name.clone()));
         }
@@ -3035,6 +3037,7 @@ impl AppService {
                 name: group.name.clone(),
                 label: label_of(&group.name),
                 kind: group.group_type.clone(),
+                hidden: group.hidden,
                 selected: self.selected_member(group, prefs),
                 members: group
                     .members

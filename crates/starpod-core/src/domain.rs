@@ -832,6 +832,9 @@ pub struct ProxyGroup {
     pub url: Option<String>,
     /// The health-check interval in seconds.
     pub interval: Option<u64>,
+    /// Whether the configuration marks the group `hidden`. A hidden group still routes
+    /// traffic, but the group lists the user sees leave it out.
+    pub hidden: bool,
     /// The original engine-format group, passed through untouched.
     pub raw: serde_json::Map<String, serde_json::Value>,
 }
@@ -960,6 +963,7 @@ impl Serialize for ProxyGroup {
                 ("strategy", self.strategy.clone().map(Value::from)),
                 ("url", self.url.clone().map(Value::from)),
                 ("interval", self.interval.map(Value::from)),
+                ("hidden", self.hidden.then_some(Value::Bool(true))),
             ],
         )
         .serialize(serializer)
@@ -977,6 +981,7 @@ impl<'de> Deserialize<'de> for ProxyGroup {
         let strategy = peek(&object, "strategy")?;
         let url = peek(&object, "url")?;
         let interval = peek(&object, "interval")?;
+        let hidden = peek(&object, "hidden")?.unwrap_or(false);
         drop_nulls(&mut object, &["strategy", "url", "interval"]);
         Ok(ProxyGroup {
             id,
@@ -986,6 +991,7 @@ impl<'de> Deserialize<'de> for ProxyGroup {
             strategy,
             url,
             interval,
+            hidden,
             raw: object,
         })
     }
@@ -1613,9 +1619,10 @@ mod subscription_payload_tests {
             strategy: None,
             url: Some("https://example.com/204".into()),
             interval: Some(300),
+            hidden: true,
             raw: object(serde_json::json!({
                 "name": "Sub / G", "type": "url-test", "proxies": ["Sub / A"],
-                "url": "https://example.com/204", "interval": 300
+                "url": "https://example.com/204", "interval": 300, "hidden": true
             })),
         };
         let text = serde_json::to_string(&(&node, &group)).unwrap();
@@ -1632,6 +1639,10 @@ mod subscription_payload_tests {
             (group.url, group.interval)
         );
         assert_eq!(group_back.group_type, "url-test");
+        assert!(
+            group_back.hidden,
+            "a hidden group stays hidden through a save"
+        );
     }
 
     #[test]

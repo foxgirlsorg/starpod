@@ -1413,6 +1413,10 @@ fn validate_group(entry: &serde_json::Value, label: &str) -> Result<ProxyGroup, 
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
         interval: object.get("interval").and_then(serde_json::Value::as_u64),
+        hidden: object
+            .get("hidden")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
         raw,
     })
 }
@@ -1873,6 +1877,36 @@ proxy-groups:
         assert_eq!(parsed.payload.nodes.len(), 1, "the node survives");
         assert_eq!(parsed.payload.dropped_entries, 1);
         assert!(parsed.dropped[0].reason.contains("magic"));
+    }
+
+    #[test]
+    fn a_group_marked_hidden_is_parsed_as_hidden() {
+        let body = "\r
+proxies:
+  - { name: A, type: http, server: a.example.com, port: 8080 }
+proxy-groups:
+  - { name: G, type: select, proxies: [A], hidden: true }
+  - { name: H, type: select, proxies: [A] }
+";
+        let parsed = parse_payload(body.as_bytes(), "sub-1", "Airport").expect("parses");
+        let group = |name: &str| {
+            parsed
+                .payload
+                .groups
+                .iter()
+                .find(|group| group.name == name)
+                .expect("the group is kept")
+        };
+        assert!(group("Airport / G").hidden, "hidden: true is read");
+        assert!(
+            !group("Airport / H").hidden,
+            "a group without the key is shown"
+        );
+        assert_eq!(
+            group("Airport / G").raw.get("hidden"),
+            Some(&serde_json::Value::Bool(true)),
+            "the engine still receives the key"
+        );
     }
 
     #[test]

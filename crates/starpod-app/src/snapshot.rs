@@ -389,6 +389,9 @@ pub struct GroupView {
     pub selected: Option<String>,
     /// The members, in configuration order.
     pub members: Vec<MemberView>,
+    /// Whether the configuration marks the group `hidden`. A hidden group still routes
+    /// traffic, so the Home page keeps it; the Proxies page and the tray leave it out.
+    pub hidden: bool,
 }
 
 /// One member of a proxy group.
@@ -612,6 +615,7 @@ mod tests {
             strategy: None,
             url: None,
             interval: None,
+            hidden: false,
             raw: Default::default(),
         }
     }

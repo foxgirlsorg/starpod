@@ -103,12 +103,12 @@ export component AppTray inherits SystemTrayIcon {
         Menu {
             title: @tr("Proxies");
 
-            if (Bridge.groups.length == 0) : MenuItem {
+            if (Bridge.listed-groups.length == 0) : MenuItem {
                 title: @tr("No proxy groups");
                 enabled: false;
             }
 
-            for group in Bridge.groups : Menu {
+            for group in Bridge.listed-groups : Menu {
                 title: group.label;
 
                 for member in group.members : MenuItem {
