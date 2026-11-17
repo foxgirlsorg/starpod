@@ -4,15 +4,19 @@ All notable changes to Starpod are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] - 2026-11-17
 
 ### Added
 
-- Crash reports are saved to the crashes folder next to the log.
+- Crash reports are saved to the crashes folder next to the log: one file per
+  app crash, and one per unexpected engine exit with its last output lines.
 
 ### Changed
 
-- Latency tests always go through the engine, also when you're not connected, and test servers in parallel.
+- Latency tests always go through the engine, also when you're not connected,
+  and test servers in parallel.
+- No console window flashes up when the engine checks a configuration on
+  Windows.
 - Home shows the IP of the server in use instead of the local proxy address.
 
 ## [1.1.0] - 2026-11-17
