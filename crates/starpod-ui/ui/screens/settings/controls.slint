@@ -14,7 +14,7 @@ import { Input, Segmented, Select, SelectItem, Switch, WindowMetrics } from "../
 import { TextEdit } from "std-widgets.slint";
 
 // A row of a card: label and description, and the control. A narrow control
-// (a switch) sits to the right of the text. A wider one (a select, a number
+// (a switch, a short button) sits to the right of the text. A wider one (a select, a number
 // field, buttons) sits in a 220px column on the right when the row is wide,
 // and under the text, at full width, when it is not, so the text never gets
 // squeezed into a sliver.
@@ -27,7 +27,8 @@ export component SettingRow inherits GridLayout {
     // A control this narrow always fits beside the text. The window width,
     // not the row's, decides the rest: the row's own width depends on where
     // the control goes, so reading it here would be a loop.
-    private property <bool> narrow-control: inner.min-width <= 64px;
+    // Switches and short buttons fit beside the text at any width.
+    private property <bool> narrow-control: inner.preferred-width <= 120px;
     private property <bool> stacked: !root.narrow-control && WindowMetrics.width < 680px;
 
     horizontal-stretch: 1;
@@ -74,8 +75,10 @@ export component SettingRow inherits GridLayout {
     control := VerticalLayout {
         row: root.stacked ? 1 : 0;
         col: root.stacked ? 0 : 1;
-        preferred-width: root.narrow-control ? inner.min-width : 220px;
-        min-width: root.narrow-control ? 0px : root.stacked ? 0px : 220px;
+        // A narrow control gets the width it asks for, so a button is never
+        // squeezed below its label and pushed past the card's edge.
+        preferred-width: root.narrow-control ? inner.preferred-width : 220px;
+        min-width: root.narrow-control ? inner.preferred-width : root.stacked ? 0px : 220px;
         horizontal-stretch: 0;
         vertical-stretch: 0;
         alignment: center;

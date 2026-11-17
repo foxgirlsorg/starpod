@@ -1907,19 +1907,9 @@ export component SettingsPage inherits Rectangle {
 
                         SettingRow {
                             label: @tr("Secrets stored in");
-                            description: Bridge.secrets-encrypted ? "" : Bridge.secret-fallback-reason;
+                            description: (Bridge.secret-backend != "" ? Bridge.secret-backend : @tr("Not reported yet"))
+                                + (Bridge.secrets-encrypted || Bridge.secret-fallback-reason == "" ? "" : ". " + Bridge.secret-fallback-reason);
                             warning: Bridge.secrets-encrypted ? "" : @tr("Not encrypted. Anyone with access to your user profile can read them.");
-
-                            Text {
-                                horizontal-stretch: 1;
-                                vertical-stretch: 0;
-                                text: Bridge.secret-backend != "" ? Bridge.secret-backend : @tr("Not reported yet");
-                                color: Design.foreground;
-                                font-family: Design.font-family;
-                                font-size: Design.font-sm;
-                                horizontal-alignment: right;
-                                wrap: word-wrap;
-                            }
                         }
 
                         Separator {}
