@@ -1372,3 +1372,12 @@ msgstr "Порты, доступ из сети и IPv6"
 
 msgid "Up {}"
 msgstr "Работает {}"
+
+msgid "Restart"
+msgstr "Перезапуск"
+
+msgid "Stops the engine and starts it again. Open connections are closed."
+msgstr "Останавливает движок и запускает его снова. Открытые соединения закрываются."
+
+msgid "Restart engine"
+msgstr "Перезапустить движок"

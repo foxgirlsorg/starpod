@@ -1654,6 +1654,28 @@ export component SettingsPage inherits Rectangle {
                             }
                         }
 
+                        Separator {}
+
+                        // A save reloads the engine in place when it must;
+                        // a full restart is only ever the user's call.
+                        SettingRow {
+                            label: @tr("Restart");
+                            description: @tr("Stops the engine and starts it again. Open connections are closed.");
+
+                            HorizontalLayout {
+                                alignment: end;
+
+                                Button {
+                                    text: @tr("Restart engine");
+                                    variant: ButtonVariant.outline;
+                                    enabled: !Bridge.busy && Bridge.engine-phase == "running";
+                                    clicked => {
+                                        Bridge.restart();
+                                    }
+                                }
+                            }
+                        }
+
                         // A phone's engine is updated with the app.
                         if (!Bridge.mobile) : VerticalLayout {
                             Separator {}
