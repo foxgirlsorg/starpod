@@ -1172,15 +1172,18 @@ export component LatencyText inherits Text {
 // the only gap before the page's first block, so a page must not add spacing
 // of its own after the header.
 //
+// On a narrow window (under 560px) the actions stay on the title row at the
+// right, the title takes the rest of the width and elides, and the description
+// goes below the whole row at full width. Button has no icon-only mode, so the
+// actions keep their labels and their preferred width.
+//
 // The header is a layout with no stretch, so it is exactly as tall as its
 // content and never grows to fill the page.
 export component PageHeader inherits VerticalLayout {
     in property <string> title;
     in property <string> description;
 
-    // On a narrow window (a phone) the actions go under the title, so the
-    // description keeps the full width instead of wrapping word by word.
-    private property <bool> stacked: WindowMetrics.width < 560px && actions.preferred-width > 0;
+    private property <bool> narrow: WindowMetrics.width < 560px;
 
     vertical-stretch: 0;
     padding-bottom: 24px;
@@ -1188,15 +1191,15 @@ export component PageHeader inherits VerticalLayout {
     GridLayout {
         vertical-stretch: 0;
         spacing-horizontal: 16px;
-        spacing-vertical: root.stacked ? 16px : 0px;
+        spacing-vertical: root.description != "" ? 4px : 0px;
 
         VerticalLayout {
             row: 0;
             col: 0;
             horizontal-stretch: 1;
             vertical-stretch: 0;
-            alignment: start;
-            spacing: 4px;
+            min-width: 0px;
+            alignment: center;
 
             Text {
                 text: root.title;
@@ -1208,25 +1211,20 @@ export component PageHeader inherits VerticalLayout {
                 vertical-alignment: center;
                 wrap: no-wrap;
                 overflow: elide;
-            }
-
-            if (root.description != "") : Text {
-                text: root.description;
-                color: Design.muted-foreground;
-                font-family: Design.font-family;
-                font-size: Design.font-base;
-                min-height: 20px;
-                vertical-alignment: center;
-                // Wraps in a narrow window instead of cutting the sentence.
-                wrap: word-wrap;
+                min-width: 0px;
             }
         }
 
+        // The actions: beside the title on every width. On a wide window they
+        // span the title and the description, so they stay centered on the
+        // whole block as before.
         VerticalLayout {
-            row: root.stacked ? 1 : 0;
-            col: root.stacked ? 0 : 1;
+            row: 0;
+            col: 1;
+            rowspan: (!root.narrow && root.description != "") ? 2 : 1;
             horizontal-stretch: 0;
             vertical-stretch: 0;
+            min-width: actions.preferred-width;
             alignment: center;
 
             actions := HorizontalLayout {
@@ -1235,6 +1233,20 @@ export component PageHeader inherits VerticalLayout {
 
                 @children
             }
+        }
+
+        if (root.description != "") : Text {
+            row: 1;
+            col: 0;
+            colspan: root.narrow ? 2 : 1;
+            text: root.description;
+            color: Design.muted-foreground;
+            font-family: Design.font-family;
+            font-size: Design.font-base;
+            min-height: 20px;
+            vertical-alignment: center;
+            // Wraps in a narrow window instead of cutting the sentence.
+            wrap: word-wrap;
         }
     }
 }
