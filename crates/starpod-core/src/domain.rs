@@ -1112,6 +1112,12 @@ pub struct Subscription {
     /// limit on the last refresh. Cleared by a successful refresh.
     #[serde(default)]
     pub device_limit: bool,
+    /// Whether the subscription was added from pasted text rather than a URL.
+    ///
+    /// A local subscription is never fetched. Its source lives in the profile
+    /// source file in the data directory, and a refresh re-parses that file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
 }
 
 /// Who fetches a subscription.

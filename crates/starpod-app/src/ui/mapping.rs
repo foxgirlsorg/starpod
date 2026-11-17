@@ -228,6 +228,7 @@ pub fn subscription_item(view: &SubscriptionView) -> SubscriptionItem {
         quota_used_fraction: fraction,
         quota_text: text.into(),
         expires: expires.into(),
+        local: view.local,
     }
 }
 
@@ -1828,6 +1829,7 @@ mod tests {
             group_count: 2,
             quota,
             has_auth_header: false,
+            local: false,
             title: "Main".to_string(),
             announce: None,
             support_url: None,

@@ -1333,3 +1333,30 @@ msgstr "Точки"
 
 msgid "Applies when connected"
 msgstr "Применится при подключении"
+
+msgid "Paste the configuration."
+msgstr "Вставьте конфигурацию."
+
+msgid "From a link"
+msgstr "По ссылке"
+
+msgid "Paste a config"
+msgstr "Вставить конфиг"
+
+msgid "A Clash or mihomo configuration, in YAML or JSON. Starpod never fetches it; edit it from the profile card."
+msgstr "Конфигурация Clash или mihomo в YAML или JSON. Starpod её не загружает; правьте её из карточки профиля."
+
+msgid "Edit “{}”"
+msgstr "Изменить «{}»"
+
+msgid "The pasted configuration, in YAML or JSON. Saving checks it and rebuilds the profile."
+msgstr "Вставленная конфигурация в YAML или JSON. При сохранении она проверяется и профиль пересобирается."
+
+msgid "The profile as Starpod stores it, in JSON. The next update from the link replaces your changes."
+msgstr "Профиль в том виде, в каком его хранит Starpod, в JSON. Следующее обновление по ссылке заменит ваши правки."
+
+msgid "Reload"
+msgstr "Перечитать"
+
+msgid " · Pasted"
+msgstr " · Вставлен"

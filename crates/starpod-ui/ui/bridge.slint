@@ -46,6 +46,8 @@ export struct SubscriptionItem {
     title-runs: [TextRun],
     // runs of `error`
     error-runs: [TextRun],
+    // added from pasted text: never fetched, edited instead
+    local: bool,
 }
 
 export struct NodeItem {
@@ -354,6 +356,15 @@ export global Bridge {
     in-out property <int> active-page: 0;
     // The Settings page: -1 shows the section list, 0.. that section.
     in-out property <int> settings-section: -1;
+    // The profile editor on the Profiles page. Rust fills it from
+    // open-profile-editor and closes it when a save is accepted.
+    in-out property <bool> editor-open: false;
+    in property <string> editor-id;
+    in property <string> editor-title;
+    in property <string> editor-text;
+    // a pasted profile (its own text) rather than a fetched one (stored JSON)
+    in property <bool> editor-local;
+    in property <string> editor-error;
 
     // --- engine -------------------------------------------------------------
     // "stopped" | "starting" | "running" | "stopping" | "failed"
@@ -498,6 +509,12 @@ export global Bridge {
     callback refresh-subscription(string);
     // Use this subscription, and only it.
     callback activate-subscription(string);
+    // name, pasted configuration (YAML or JSON)
+    callback add-local-subscription(string, string);
+    // Load a profile's text into the editor (the editor-* properties).
+    callback open-profile-editor(string);
+    // profile id, edited text
+    callback save-profile-source(string, string);
     callback refresh-all();
     // subscription id, mode
     callback set-subscription-mode(string, string);

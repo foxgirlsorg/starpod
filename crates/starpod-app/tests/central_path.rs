@@ -2165,3 +2165,217 @@ async fn only_the_subscription_in_use_is_built_and_shows_its_news() {
     service.remove_subscription(&a).await.unwrap();
     assert!(service.snapshot().subscriptions.iter().all(|s| s.active));
 }
+
+// ----- local profiles ----------------------------------------------------------
+
+const LOCAL_ONE: &str = "\
+proxies:
+  - name: \"Pasted\"
+    type: ss
+    server: pasted.example.test
+    port: 8388
+    cipher: aes-256-gcm
+    password: PASTED-SECRET-1
+";
+
+const LOCAL_TWO: &str = "\
+proxies:
+  - name: \"Pasted\"
+    type: ss
+    server: pasted.example.test
+    port: 8388
+    cipher: aes-256-gcm
+    password: PASTED-SECRET-1
+  - name: \"Pasted Two\"
+    type: ss
+    server: two.example.test
+    port: 8389
+    cipher: aes-256-gcm
+    password: PASTED-SECRET-2
+";
+
+async fn add_local(service: &mut AppService, source: &str) -> String {
+    service
+        .add_local_subscription("Pasted profile".to_string(), source.to_string())
+        .await
+        .expect("the pasted configuration is added")
+}
+
+#[tokio::test]
+async fn a_pasted_configuration_is_added_selected_and_counted_without_a_fetch() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let scripted = Scripted::new(vec![]);
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(scripted.clone());
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+
+    let id = add_local(&mut service, LOCAL_ONE).await;
+
+    let snapshot = service.snapshot();
+    assert_eq!(snapshot.subscriptions.len(), 1);
+    assert_eq!(snapshot.subscriptions[0].id, id);
+    assert_eq!(snapshot.subscriptions[0].node_count, 1);
+    assert!(snapshot.subscriptions[0].active, "it is the one in use");
+    assert_eq!(
+        snapshot.subscriptions[0].status,
+        SubscriptionStatus::Current
+    );
+    assert!(scripted.requests().is_empty(), "nothing was fetched");
+    assert!(
+        paths_in(&dir).profile_source_file(&id).unwrap().exists(),
+        "the source is kept in the data directory"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_label_becomes_my_profile_and_bad_text_adds_nothing() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(Scripted::new(vec![]));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+
+    let refused = service
+        .add_local_subscription("Mine".to_string(), "proxies: [".to_string())
+        .await;
+    assert!(matches!(refused, Err(AppError::Invalid(_))), "{refused:?}");
+    assert!(service.snapshot().subscriptions.is_empty());
+
+    service
+        .add_local_subscription("  ".to_string(), LOCAL_ONE.to_string())
+        .await
+        .unwrap();
+    assert_eq!(service.snapshot().subscriptions[0].label, "My profile");
+}
+
+#[tokio::test]
+async fn a_refresh_rebuilds_a_pasted_profile_from_its_source_after_a_cache_clear() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let scripted = Scripted::new(vec![]);
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(scripted.clone());
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_local(&mut service, LOCAL_ONE).await;
+
+    service.clear_cache().await.unwrap();
+    assert_eq!(service.snapshot().nodes.len(), 0, "the cache is gone");
+    assert!(
+        paths_in(&dir).profile_source_file(&id).unwrap().exists(),
+        "clearing the cache keeps the pasted source"
+    );
+
+    service.refresh_subscription(&id).await.unwrap();
+    assert_eq!(service.snapshot().subscriptions[0].node_count, 1);
+    assert_eq!(service.snapshot().nodes.len(), 1);
+    assert!(scripted.requests().is_empty(), "the refresh did not fetch");
+}
+
+#[tokio::test]
+async fn profile_source_gives_the_pasted_text_for_a_local_profile() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(Scripted::new(vec![]));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_local(&mut service, LOCAL_ONE).await;
+
+    let source = service.profile_source(&id).await.unwrap();
+    assert!(source.local);
+    assert_eq!(source.text, LOCAL_ONE);
+}
+
+#[tokio::test]
+async fn saving_a_changed_configuration_updates_the_node_count() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(Scripted::new(vec![]));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_local(&mut service, LOCAL_ONE).await;
+
+    service
+        .save_profile_source(&id, LOCAL_TWO.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(service.snapshot().subscriptions[0].node_count, 2);
+    assert_eq!(service.snapshot().nodes.len(), 2);
+    assert_eq!(service.profile_source(&id).await.unwrap().text, LOCAL_TWO);
+}
+
+#[tokio::test]
+async fn invalid_text_is_rejected_and_the_old_payload_and_source_stay() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(Scripted::new(vec![]));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_local(&mut service, LOCAL_ONE).await;
+
+    let broken = service
+        .save_profile_source(&id, "proxies: [".to_string())
+        .await;
+    assert!(matches!(broken, Err(AppError::Invalid(_))), "{broken:?}");
+    let empty_servers = service
+        .save_profile_source(&id, "proxies: []".to_string())
+        .await;
+    assert!(
+        matches!(empty_servers, Err(AppError::Invalid(_))),
+        "{empty_servers:?}"
+    );
+
+    assert_eq!(service.snapshot().subscriptions[0].node_count, 1);
+    assert_eq!(service.snapshot().nodes.len(), 1);
+    assert_eq!(service.profile_source(&id).await.unwrap().text, LOCAL_ONE);
+}
+
+#[tokio::test]
+async fn a_fetched_profile_shows_its_payload_and_takes_a_pasted_configuration() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let scripted = Scripted::new(vec![Ok(FetchResponse::new(FIXTURE.as_bytes().to_vec()))]);
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(scripted);
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+
+    let before = service.profile_source(&id).await;
+    assert!(matches!(before, Err(AppError::Invalid(_))), "{before:?}");
+
+    service.refresh_subscription(&id).await.unwrap();
+    let shown = service.profile_source(&id).await.unwrap();
+    assert!(!shown.local);
+    assert!(
+        shown.text.contains("\"nodes\""),
+        "the payload is shown as JSON"
+    );
+
+    service
+        .save_profile_source(&id, LOCAL_ONE.to_string())
+        .await
+        .unwrap();
+    assert_eq!(service.snapshot().subscriptions[0].node_count, 1);
+    assert!(
+        !paths_in(&dir).profile_source_file(&id).unwrap().exists(),
+        "a fetched profile has no source file"
+    );
+}
+
+#[tokio::test]
+async fn removing_a_pasted_profile_deletes_its_source_file() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> = Arc::new(Scripted::new(vec![]));
+    let mut service = build_service(&dir, &engine, provider);
+    service.load().await.unwrap();
+    let id = add_local(&mut service, LOCAL_ONE).await;
+    let source_file = paths_in(&dir).profile_source_file(&id).unwrap();
+    assert!(source_file.exists());
+
+    service.remove_subscription(&id).await.unwrap();
+
+    assert!(service.snapshot().subscriptions.is_empty());
+    assert!(!source_file.exists(), "the pasted source is gone");
+}

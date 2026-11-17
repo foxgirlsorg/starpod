@@ -9,6 +9,32 @@ import {
     Button, ButtonVariant, ButtonSize, IconButton, Input, Segmented, Badge, BadgeVariant,
     Card, EmptyState, PageHeader, PageFrame, Progress, ConfirmDialog, Spinner
 } from "../primitives.slint";
+import { TextEdit } from "std-widgets.slint";
+
+// A framed, monospaced text area for a configuration.
+component ConfigText inherits Rectangle {
+    in-out property <string> text;
+    in property <length> area-height: 260px;
+
+    horizontal-stretch: 1;
+    height: root.area-height;
+    background: Design.muted;
+    border-radius: Design.radius-md;
+    border-width: 1px;
+    border-color: Design.input;
+    clip: true;
+
+    TextEdit {
+        x: 10px;
+        y: 6px;
+        width: parent.width - 20px;
+        height: parent.height - 12px;
+        font-family: Design.font-mono;
+        font-size: Design.font-sm;
+        wrap: no-wrap;
+        text <=> root.text;
+    }
+}
 
 export component ProfilesPage inherits Rectangle {
     // --- add form -------------------------------------------------------------
@@ -20,6 +46,11 @@ export component ProfilesPage inherits Rectangle {
     private property <string> draft-name: "";
     private property <string> draft-auth: "";
     private property <string> url-error: "";
+    // 0 = from a link, 1 = pasted configuration
+    private property <int> source-index: 0;
+    private property <string> draft-config: "";
+    // the editor's working copy of Bridge.editor-text
+    private property <string> editor-draft: Bridge.editor-text;
 
     // --- remove confirmation --------------------------------------------------
     private property <string> remove-id: "";
@@ -46,9 +77,21 @@ export component ProfilesPage inherits Rectangle {
         root.draft-name = "";
         root.draft-auth = "";
         root.url-error = "";
+        root.source-index = 0;
+        root.draft-config = "";
     }
 
     function submit() {
+        if (root.source-index == 1) {
+            if (root.draft-config == "") {
+                root.url-error = @tr("Paste the configuration.");
+                return;
+            }
+            root.url-error = "";
+            root.submitting = true;
+            Bridge.add-local-subscription(root.draft-name, root.draft-config);
+            return;
+        }
         if (!(root.draft-url.starts-with("https://") || root.draft-url.starts-with("http://"))) {
             root.url-error = root.draft-url == ""
                 ? @tr("Paste the subscription link.")
@@ -155,20 +198,48 @@ export component ProfilesPage inherits Rectangle {
                     VerticalLayout {
                         spacing: 12px;
 
-                        Input {
+                        HorizontalLayout {
+                            alignment: start;
+
+                            Segmented {
+                                options: [@tr("From a link"), @tr("Paste a config")];
+                                current-index <=> root.source-index;
+                                horizontal-stretch: 0;
+                            }
+                        }
+
+                        if (root.source-index == 0) : Input {
                             label: @tr("Subscription URL");
                             placeholder: "https://…";
                             text <=> root.draft-url;
                             error: root.url-error;
                         }
 
+                        if (root.source-index == 1) : VerticalLayout {
+                            spacing: 6px;
+
+                            ConfigText {
+                                text <=> root.draft-config;
+                                area-height: 200px;
+                            }
+
+                            Text {
+                                text: root.url-error != "" ? root.url-error
+                                    : @tr("A Clash or mihomo configuration, in YAML or JSON. Starpod never fetches it; edit it from the profile card.");
+                                color: root.url-error != "" ? Design.destructive : Design.muted-foreground;
+                                font-family: Design.font-family;
+                                font-size: Design.font-xs;
+                                wrap: word-wrap;
+                            }
+                        }
+
                         Input {
                             label: @tr("Name");
-                            placeholder: @tr("Optional — taken from the link");
+                            placeholder: root.source-index == 0 ? @tr("Optional — taken from the link") : @tr("Optional");
                             text <=> root.draft-name;
                         }
 
-                        HorizontalLayout {
+                        if (root.source-index == 0) : HorizontalLayout {
                             alignment: start;
 
                             Button {
@@ -184,7 +255,7 @@ export component ProfilesPage inherits Rectangle {
                             }
                         }
 
-                        if (root.advanced) : Input {
+                        if (root.advanced && root.source-index == 0) : Input {
                             label: @tr("Authorization header");
                             placeholder: @tr("Optional");
                             hint: @tr("Sent with every update, stored in your system keychain");
@@ -219,6 +290,73 @@ export component ProfilesPage inherits Rectangle {
                     }
                 }
 
+                // The profile editor replaces the list while it is open.
+                if (Bridge.editor-open) : Card {
+                    inner-padding: 20px;
+
+                    VerticalLayout {
+                        spacing: 12px;
+
+                        Text {
+                            text: @tr("Edit “{}”", Bridge.editor-title);
+                            color: Design.foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-lg;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: Bridge.editor-local
+                                ? @tr("The pasted configuration, in YAML or JSON. Saving checks it and rebuilds the profile.")
+                                : @tr("The profile as Starpod stores it, in JSON. The next update from the link replaces your changes.");
+                            color: Design.muted-foreground;
+                            font-family: Design.font-family;
+                            font-size: Design.font-sm;
+                            wrap: word-wrap;
+                        }
+
+                        ConfigText {
+                            text <=> root.editor-draft;
+                            area-height: 360px;
+                        }
+
+                        if (Bridge.editor-error != "") : Text {
+                            text: Bridge.editor-error;
+                            color: Design.destructive;
+                            font-family: Design.font-family;
+                            font-size: Design.font-sm;
+                            wrap: word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            alignment: end;
+                            spacing: 8px;
+
+                            Button {
+                                text: @tr("Cancel");
+                                variant: ButtonVariant.ghost;
+                                size: ButtonSize.md;
+                                horizontal-stretch: 0;
+                                clicked => {
+                                    Bridge.editor-open = false;
+                                }
+                            }
+
+                            Button {
+                                text: @tr("Save");
+                                variant: ButtonVariant.primary;
+                                size: ButtonSize.md;
+                                horizontal-stretch: 0;
+                                busy: Bridge.busy;
+                                clicked => {
+                                    Bridge.save-profile-source(Bridge.editor-id, root.editor-draft);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (Bridge.loaded && Bridge.subscriptions.length == 0 && !root.form-open) : Card {
                     inner-padding: 0px;
 
@@ -235,7 +373,7 @@ export component ProfilesPage inherits Rectangle {
 
                 // The whole card picks the profile; the one in use has the
                 // accent border. Only one profile is in use at a time.
-                for s[i] in Bridge.subscriptions : Card {
+                for s[i] in (Bridge.editor-open ? [] : Bridge.subscriptions) : Card {
                     inner-padding: 16px;
                     clickable: !s.active;
                     selected: s.active;
@@ -288,10 +426,20 @@ export component ProfilesPage inherits Rectangle {
                             }
 
                             IconButton {
+                                icon: @image-url("../assets/icons/pencil.svg");
+                                size: ButtonSize.sm;
+                                variant: ButtonVariant.ghost;
+                                tooltip: @tr("Edit");
+                                clicked => {
+                                    Bridge.open-profile-editor(s.id);
+                                }
+                            }
+
+                            IconButton {
                                 icon: @image-url("../assets/icons/refresh-cw.svg");
                                 size: ButtonSize.sm;
                                 variant: ButtonVariant.ghost;
-                                tooltip: @tr("Update now");
+                                tooltip: s.local ? @tr("Reload") : @tr("Update now");
                                 enabled: s.status != "syncing";
                                 clicked => {
                                     Bridge.refresh-subscription(s.id);
@@ -315,7 +463,8 @@ export component ProfilesPage inherits Rectangle {
                         Text {
                             text: @tr("{n} server" | "{n} servers" % s.node-count)
                                 + (s.last-updated != "" ? @tr(" · Updated {}", s.last-updated) : "")
-                                + (s.mode == "engine-managed" ? @tr(" · Updated by the engine") : "");
+                                + (s.mode == "engine-managed" ? @tr(" · Updated by the engine") : "")
+                                + (s.local ? @tr(" · Pasted") : "");
                             color: Design.muted-foreground;
                             font-family: Design.font-family;
                             font-size: Design.font-sm;

@@ -455,6 +455,34 @@ impl Store {
         }
     }
 
+    /// Read the source text of a local profile. `None` means the file is
+    /// missing, which the caller reports as a damaged profile.
+    pub fn read_profile_source(&self, id: &str) -> Result<Option<String>, StoreError> {
+        let path = self.paths.profile_source_file(id)?;
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Ok(Some(text)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(io_at(&path, err)),
+        }
+    }
+
+    /// Write the source text of a local profile, replacing it atomically.
+    pub fn write_profile_source(&self, id: &str, text: &str) -> Result<(), StoreError> {
+        let path = self.paths.profile_source_file(id)?;
+        crate::atomic::write_atomic(&path, text.as_bytes())
+    }
+
+    /// Remove the source text of a local profile. A missing file is not an
+    /// error.
+    pub fn remove_profile_source(&self, id: &str) -> Result<(), StoreError> {
+        let path = self.paths.profile_source_file(id)?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(io_at(&path, err)),
+        }
+    }
+
     /// The list of subscriptions that have a cached payload.
     pub fn cached_subscription_ids(&self) -> Result<Vec<String>, StoreError> {
         let dir = self.paths.subscription_cache_dir();
@@ -675,6 +703,55 @@ mod tests {
     }
 
     #[test]
+    fn the_profile_source_round_trips_and_a_missing_one_is_none() {
+        let (_dir, store) = store();
+        assert_eq!(store.read_profile_source("loc").unwrap(), None);
+        store
+            .write_profile_source("loc", "proxies:\n  - name: a\n")
+            .unwrap();
+        assert_eq!(
+            store.read_profile_source("loc").unwrap(),
+            Some("proxies:\n  - name: a\n".to_string())
+        );
+        store.write_profile_source("loc", "replaced").unwrap();
+        assert_eq!(
+            store.read_profile_source("loc").unwrap(),
+            Some("replaced".to_string())
+        );
+        assert!(store.paths().profile_source_file("loc").unwrap().exists());
+        store.remove_profile_source("loc").unwrap();
+        assert_eq!(store.read_profile_source("loc").unwrap(), None);
+    }
+
+    #[test]
+    fn removing_a_missing_profile_source_is_not_an_error() {
+        let (_dir, store) = store();
+        store.remove_profile_source("never-pasted").unwrap();
+    }
+
+    #[test]
+    fn an_unsafe_profile_source_id_is_refused() {
+        let (_dir, store) = store();
+        assert!(matches!(
+            store.write_profile_source("../escape", "x").unwrap_err(),
+            StoreError::UnsafeId { .. }
+        ));
+        assert!(store.read_profile_source("a/b").is_err());
+    }
+
+    #[test]
+    fn the_profile_source_is_kept_when_the_cache_is_cleared() {
+        let (_dir, store) = store();
+        store.write_profile_source("loc", "proxies: []").unwrap();
+        store.write_subscription_cache("loc", b"{}").unwrap();
+        store.remove_subscription_cache("loc").unwrap();
+        assert_eq!(
+            store.read_profile_source("loc").unwrap(),
+            Some("proxies: []".to_string())
+        );
+    }
+
+    #[test]
     fn removing_a_missing_cache_entry_is_not_an_error() {
         let (_dir, store) = store();
         store.remove_subscription_cache("never-fetched").unwrap();
@@ -716,6 +793,7 @@ mod tests {
                 global_mode_disabled: false,
                 expand_proxy_groups: None,
                 device_limit: false,
+                local: false,
             }],
             url_keys: vec![SecretRef {
                 subscription_id: "sub-1".to_string(),

@@ -221,6 +221,9 @@ pub struct SubscriptionView {
     pub quota: Option<SubscriptionQuota>,
     /// Whether an `Authorization` header is stored for it.
     pub has_auth_header: bool,
+    /// Whether it was added from pasted text rather than a link. A local
+    /// profile is never fetched; its text is edited instead.
+    pub local: bool,
     /// The profile title the provider sent, or the label when it sent none.
     pub title: String,
     /// The `announce` header, if the provider sent one.
@@ -593,6 +596,7 @@ mod tests {
             global_mode_disabled: false,
             expand_proxy_groups: None,
             device_limit: false,
+            local: false,
         }
     }
 

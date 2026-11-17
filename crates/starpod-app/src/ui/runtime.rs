@@ -462,6 +462,26 @@ impl UiState {
         Ok(())
     }
 
+    /// Show the profile editor with a profile's text.
+    pub fn open_profile_editor(&mut self, id: &str, title: &str, text: &str, local: bool) {
+        let bridge = self.window.global::<Bridge>();
+        bridge.set_editor_id(id.into());
+        bridge.set_editor_title(title.into());
+        bridge.set_editor_text(text.into());
+        bridge.set_editor_local(local);
+        bridge.set_editor_error("".into());
+        bridge.set_editor_open(true);
+    }
+
+    /// Close the editor after a save it accepted, or show why it refused.
+    pub fn finish_profile_edit(&mut self, error: Option<String>) {
+        let bridge = self.window.global::<Bridge>();
+        match error {
+            None => bridge.set_editor_open(false),
+            Some(message) => bridge.set_editor_error(message.into()),
+        }
+    }
+
     /// Put the proxy command for the visible ports on the clipboard.
     pub fn copy_proxy_env(&mut self) {
         let prefs = self
@@ -1036,6 +1056,7 @@ mod tests {
             group_count: 0,
             quota: None,
             has_auth_header: false,
+            local: false,
             title: id.to_string(),
             announce: None,
             support_url: None,

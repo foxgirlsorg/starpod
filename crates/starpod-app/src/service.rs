@@ -43,6 +43,7 @@ use starpod_store::{
 };
 use starpod_subscription::logo::fetch_logo;
 use starpod_subscription::metadata::DEFAULT_INTERVAL_SECS;
+use starpod_subscription::pipeline::parse_payload;
 use starpod_subscription::{
     FetchRequest, HttpSubscriptionProvider, RefreshOutcome, SubscriptionCacheSet,
     SubscriptionError, SubscriptionMetadata, SubscriptionProvider, refresh,
@@ -126,6 +127,16 @@ pub struct ConfigCheck {
     pub engine_error: Option<String>,
     /// Warnings from the app's own build and from the engine.
     pub warnings: Vec<String>,
+}
+
+/// The text of one profile, as the profile editor shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileSource {
+    /// The configuration text: the pasted source for a local profile, or the
+    /// cached payload as JSON for a fetched one.
+    pub text: String,
+    /// Whether the profile is local, which means `text` is the only copy of it.
+    pub local: bool,
 }
 
 /// The application service.
@@ -335,6 +346,7 @@ impl AppService {
                 group_count: subscription.group_count,
                 quota: subscription.quota.clone(),
                 has_auth_header: subscription.has_auth_header,
+                local: subscription.local,
                 title: display_title(subscription),
                 announce: subscription.announce.clone(),
                 support_url: subscription.support_url.clone(),
@@ -877,6 +889,59 @@ impl AppService {
         self.finish(result)
     }
 
+    /// Add a profile from pasted configuration text instead of a URL.
+    ///
+    /// The text is parsed before anything is stored, so text the parser
+    /// rejects adds nothing. A local profile is never fetched: its source is
+    /// kept in the data directory and a refresh re-parses it. The new profile
+    /// is put in use at once. Returns its id.
+    pub async fn add_local_subscription(
+        &mut self,
+        label: String,
+        source: String,
+    ) -> Result<String, AppError> {
+        let result = self.add_local_inner(label, source).await;
+        self.finish(result)
+    }
+
+    /// The text of a profile, for the editor. A local profile gives its pasted
+    /// source; a fetched one gives its cached payload as JSON. Fails when a
+    /// fetched profile has not been downloaded yet.
+    pub async fn profile_source(&mut self, id: &str) -> Result<ProfileSource, AppError> {
+        let subscription = self
+            .meta
+            .subscriptions
+            .iter()
+            .find(|subscription| subscription.id == id)
+            .cloned()
+            .ok_or_else(|| AppError::NotFound("that subscription".to_string()))?;
+        if subscription.local {
+            let text = self
+                .store
+                .read_profile_source(id)
+                .map_err(|error| AppError::Storage(self.scrub(&error.to_string())))?
+                .ok_or_else(|| missing_source(&subscription.label))?;
+            return Ok(ProfileSource { text, local: true });
+        }
+        let payload = self.caches.payload(id).ok_or_else(|| {
+            AppError::Invalid("this profile has not been downloaded yet".to_string())
+        })?;
+        let text = serde_json::to_string_pretty(payload)
+            .map_err(|error| AppError::Storage(error.to_string()))?;
+        Ok(ProfileSource { text, local: false })
+    }
+
+    /// Replace the content of a profile with edited text.
+    ///
+    /// A local profile takes a configuration, which is parsed first; a fetched
+    /// profile takes either its cached JSON or a configuration, which is
+    /// stored as its payload. The text is checked before anything changes.
+    /// A running proxy is reloaded the same way a refresh reloads it.
+    pub async fn save_profile_source(&mut self, id: &str, text: String) -> Result<(), AppError> {
+        let result = self.save_profile_source_inner(id, text).await;
+        self.finish(result)
+    }
+
     /// The id of the subscription whose stored address is `url`, if there is
     /// one. A deep link for a subscription that is already added refreshes it
     /// rather than adding a copy.
@@ -886,6 +951,7 @@ impl AppService {
             .meta
             .subscriptions
             .iter()
+            .filter(|subscription| !subscription.local)
             .map(|subscription| subscription.id.clone())
             .collect();
         ids.into_iter().find(|id| {
@@ -1263,6 +1329,7 @@ impl AppService {
             global_mode_disabled: false,
             expand_proxy_groups: None,
             device_limit: false,
+            local: false,
         });
         meta.url_keys.push(SecretRef {
             subscription_id: id.clone(),
@@ -1295,6 +1362,199 @@ impl AppService {
         }
         self.log(format!("added the subscription “{label}”"));
         Ok(id)
+    }
+
+    async fn add_local_inner(&mut self, label: String, source: String) -> Result<String, AppError> {
+        let label = label.trim().to_string();
+        let label = if label.is_empty() {
+            "My profile".to_string()
+        } else {
+            label
+        };
+        if label.chars().count() > MAX_LABEL_CHARS {
+            return Err(AppError::Invalid(format!(
+                "the name is longer than {MAX_LABEL_CHARS} characters"
+            )));
+        }
+        if source.trim().is_empty() {
+            return Err(AppError::Invalid("paste a configuration first".to_string()));
+        }
+
+        let id = new_id();
+        let payload = parse_payload(source.as_bytes(), &id, &label)
+            .map_err(invalid_config)?
+            .payload;
+        let now = now_unix();
+        self.store
+            .write_profile_source(&id, &source)
+            .map_err(|error| AppError::Storage(self.scrub(&error.to_string())))?;
+
+        let mut meta = self.meta.clone();
+        meta.subscriptions.push(Subscription {
+            id: id.clone(),
+            label: label.clone(),
+            mode: SubscriptionMode::AppManaged,
+            interval_secs: DEFAULT_INTERVAL_SECS,
+            has_auth_header: false,
+            last_updated: timestamp::format(now),
+            quota: None,
+            node_count: payload.nodes.len(),
+            group_count: payload.groups.len(),
+            last_error: None,
+            profile_title: None,
+            announce: None,
+            support_url: None,
+            web_url: None,
+            web_page_name: None,
+            announce_url: None,
+            logo_file: None,
+            global_mode_disabled: false,
+            expand_proxy_groups: None,
+            device_limit: false,
+            local: true,
+        });
+
+        let mut state = self.state.clone();
+        state.selected_subscription = Some(id.clone());
+        let mut caches = self.caches.clone();
+        caches.store(&id, payload.clone(), now);
+        if let Err(error) = self.commit(state, meta, caches).await {
+            // A storage failure leaves the profile recorded, so its source must
+            // stay. Any other failure means it was never added.
+            if !matches!(error, AppError::Storage(_)) {
+                let _ = self.store.remove_profile_source(&id);
+            }
+            return Err(error);
+        }
+        self.persist_payload_cache(&id, &payload);
+        self.log(format!(
+            "added the pasted configuration “{label}”: {} nodes",
+            payload.nodes.len()
+        ));
+        Ok(id)
+    }
+
+    async fn save_profile_source_inner(&mut self, id: &str, text: String) -> Result<(), AppError> {
+        let subscription = self
+            .meta
+            .subscriptions
+            .iter()
+            .find(|subscription| subscription.id == id)
+            .cloned()
+            .ok_or_else(|| AppError::NotFound("that subscription".to_string()))?;
+        let label = subscription.label.clone();
+        if text.trim().is_empty() {
+            return Err(AppError::Invalid("the configuration is empty".to_string()));
+        }
+
+        let mut payload = if subscription.local {
+            parse_payload(text.as_bytes(), id, &label)
+                .map_err(invalid_config)?
+                .payload
+        } else {
+            // The app's own cached JSON is taken as it is; anything else is
+            // read as a configuration, as a refresh would read it.
+            match serde_json::from_str::<SubscriptionPayload>(&text) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    parse_payload(text.as_bytes(), id, &label)
+                        .map_err(invalid_config)?
+                        .payload
+                }
+            }
+        };
+        payload.subscription_id = id.to_string();
+        if payload.nodes.is_empty() {
+            return Err(AppError::Invalid(
+                "the configuration has no servers".to_string(),
+            ));
+        }
+
+        let now = now_unix();
+        let mut meta = self.meta.clone();
+        if let Some(entry) = meta.subscriptions.iter_mut().find(|entry| entry.id == id) {
+            record_payload_counts(entry, &payload, now);
+        }
+        let state = self.state.clone();
+        let mut caches = self.caches.clone();
+        caches.store(id, payload.clone(), now);
+        // Committed before the source is written: a rejected candidate must
+        // leave the saved source as it was.
+        self.commit(state, meta, caches).await?;
+        self.persist_payload_cache(id, &payload);
+        if subscription.local {
+            self.store
+                .write_profile_source(id, &text)
+                .map_err(|error| {
+                    AppError::Storage(format!(
+                        "the change is in effect but could not be saved: {}",
+                        self.scrub(&error.to_string())
+                    ))
+                })?;
+        }
+        self.log(format!(
+            "saved the configuration of “{label}”: {} nodes",
+            payload.nodes.len()
+        ));
+        Ok(())
+    }
+
+    /// Re-read and re-parse the pasted source of a local profile. Nothing is
+    /// fetched, so a cleared cache is rebuilt from the source file.
+    async fn refresh_local_inner(&mut self, subscription: Subscription) -> Result<(), AppError> {
+        let id = subscription.id.clone();
+        let label = subscription.label.clone();
+        let source = match self.store.read_profile_source(&id) {
+            Ok(Some(text)) => text,
+            Ok(None) => return Err(self.record_refresh_failure(&id, missing_source(&label))),
+            Err(error) => {
+                let error = AppError::Storage(self.scrub(&error.to_string()));
+                return Err(self.record_refresh_failure(&id, error));
+            }
+        };
+        let payload = match parse_payload(source.as_bytes(), &id, &label) {
+            Ok(parsed) => parsed.payload,
+            Err(error) => {
+                let error = AppError::Subscription(format!("“{label}” could not be read: {error}"));
+                return Err(self.record_refresh_failure(&id, error));
+            }
+        };
+
+        let now = now_unix();
+        let mut meta = self.meta.clone();
+        if let Some(entry) = meta.subscriptions.iter_mut().find(|entry| entry.id == id) {
+            record_payload_counts(entry, &payload, now);
+        }
+        let state = self.state.clone();
+        let mut caches = self.caches.clone();
+        caches.store(&id, payload.clone(), now);
+        if let Err(error) = self.commit(state, meta, caches).await {
+            return Err(self.record_refresh_failure(&id, error));
+        }
+        self.persist_payload_cache(&id, &payload);
+        self.log(format!(
+            "re-read “{label}”: {} nodes, {} groups",
+            payload.nodes.len(),
+            payload.groups.len()
+        ));
+        Ok(())
+    }
+
+    /// Write the cached payload of a subscription after its commit. A failed
+    /// write is logged, not returned: the cache can always be rebuilt, and a
+    /// local profile is rebuilt from its source on the next refresh.
+    fn persist_payload_cache(&mut self, id: &str, payload: &SubscriptionPayload) {
+        let written = serde_json::to_vec(payload)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                self.store
+                    .write_subscription_cache(id, &bytes)
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(message) = written {
+            let text = self.scrub(&message);
+            self.log(format!("could not save the parsed nodes: {text}"));
+        }
     }
 
     async fn remove_subscription_inner(&mut self, id: &str) -> Result<(), AppError> {
@@ -1331,6 +1591,13 @@ impl AppService {
             let text = self.scrub(&error.to_string());
             self.log(format!(
                 "could not delete the saved nodes of “{}”: {text}",
+                removed.label
+            ));
+        }
+        if let Err(error) = self.store.remove_profile_source(id) {
+            let text = self.scrub(&error.to_string());
+            self.log(format!(
+                "could not delete the pasted configuration of “{}”: {text}",
                 removed.label
             ));
         }
@@ -1406,6 +1673,10 @@ impl AppService {
                 "“{}” is managed by the engine, which refreshes it itself",
                 subscription.label
             )));
+        }
+
+        if subscription.local {
+            return self.refresh_local_inner(subscription).await;
         }
 
         let url = self.read_secret(&subscription_url_key(id))?;
@@ -1580,20 +1851,24 @@ impl AppService {
     }
 
     async fn refresh_all_inner(&mut self) -> Result<usize, AppError> {
-        let ids: Vec<String> = self
+        // A local profile is re-read from its source here too, so a cleared
+        // cache is rebuilt, but it is never counted: nothing is fetched, and
+        // its own status records any problem.
+        let ids: Vec<(String, bool)> = self
             .meta
             .subscriptions
             .iter()
             .filter(|subscription| subscription.mode == SubscriptionMode::AppManaged)
-            .map(|subscription| subscription.id.clone())
+            .map(|subscription| (subscription.id.clone(), subscription.local))
             .collect();
-        let attempted = ids.len();
+        let attempted = ids.iter().filter(|(_, local)| !local).count();
         let mut succeeded = 0usize;
         let mut last_error = None;
-        for id in ids {
+        for (id, local) in ids {
             match self.refresh_inner(&id).await {
-                Ok(()) => succeeded += 1,
-                Err(error) => last_error = Some(error),
+                Ok(()) if !local => succeeded += 1,
+                Err(error) if !local => last_error = Some(error),
+                _ => {}
             }
         }
         let failed = attempted - succeeded;
@@ -2764,6 +3039,26 @@ fn subscription_status(subscription: &Subscription) -> SubscriptionStatus {
     } else {
         SubscriptionStatus::NeverFetched
     }
+}
+
+/// The error for a configuration the parser rejected. The parser's message
+/// is shown as it is: it names what is wrong with the text.
+fn invalid_config(error: starpod_subscription::SubscriptionError) -> AppError {
+    AppError::Invalid(error.to_string())
+}
+
+/// The error for a local profile whose source file has gone missing.
+fn missing_source(label: &str) -> AppError {
+    AppError::Invalid(format!("the pasted configuration of “{label}” is missing"))
+}
+
+/// The counts and the timestamp a successful payload records on its
+/// subscription. Shared by every path that stores a payload, so they agree.
+fn record_payload_counts(entry: &mut Subscription, payload: &SubscriptionPayload, now: i64) {
+    entry.last_updated = timestamp::format(now);
+    entry.last_error = None;
+    entry.node_count = payload.nodes.len();
+    entry.group_count = payload.groups.len();
 }
 
 fn is_subscription_url(text: &str) -> bool {

@@ -259,6 +259,60 @@ fn wire_servers(bridge: &Bridge<'_>, ctx: &Ctx) {
     });
 
     let c = ctx.clone();
+    bridge.on_add_local_subscription(move |label, text| {
+        let label = label.to_string();
+        let text = text.to_string();
+        act(
+            &c,
+            "Adding the profile…",
+            Sink::Banner,
+            move |s| async move {
+                let mut svc = s.lock().await;
+                svc.add_local_subscription(label, text).await?;
+                ping_profile(&mut svc).await;
+                Ok(())
+            },
+        );
+    });
+
+    let c = ctx.clone();
+    bridge.on_open_profile_editor(move |id| {
+        let id = id.to_string();
+        let service = c.service.clone();
+        c.runtime.spawn(async move {
+            let mut svc = service.lock().await;
+            let title = svc
+                .snapshot()
+                .subscriptions
+                .iter()
+                .find(|view| view.id == id)
+                .map(|view| view.title.clone())
+                .unwrap_or_default();
+            let result = svc.profile_source(&id).await;
+            drop(svc);
+            super::runtime::post(move |ui| match result {
+                Ok(source) => ui.open_profile_editor(&id, &title, &source.text, source.local),
+                Err(error) => ui.report(Sink::Banner, error.to_string()),
+            });
+        });
+    });
+
+    let c = ctx.clone();
+    bridge.on_save_profile_source(move |id, text| {
+        let id = id.to_string();
+        let text = text.to_string();
+        let service = c.service.clone();
+        c.runtime.spawn(async move {
+            super::runtime::post(|ui| ui.begin_busy("Saving the profile…"));
+            let result = service.lock().await.save_profile_source(&id, text).await;
+            super::runtime::post(move |ui| {
+                ui.end_busy();
+                ui.finish_profile_edit(result.err().map(|error| error.to_string()));
+            });
+        });
+    });
+
+    let c = ctx.clone();
     bridge.on_refresh_all(move || {
         act(
             &c,

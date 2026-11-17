@@ -100,6 +100,7 @@ pub fn apply(bridge: &Bridge<'_>) {
             expires: Some("2026-11-16T00:00:00Z".into()),
         }),
         has_auth_header: false,
+        local: false,
         title: "Foxgirls VPN".into(),
         announce: None,
         support_url: None,
