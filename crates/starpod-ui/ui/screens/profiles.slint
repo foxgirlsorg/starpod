@@ -401,19 +401,9 @@ export component ProfilesPage inherits Rectangle {
                                 wrap: false;
                             }
 
-                            if (s.active) : VerticalLayout {
-                                alignment: center;
-
-                                HorizontalLayout {
-                                    Badge {
-                                        horizontal-stretch: 0;
-                                        text: @tr("In use");
-                                        variant: BadgeVariant.success;
-                                    }
-                                }
-                            }
-
-                            VerticalLayout {
+                            // The accent border marks the profile in use, and a
+                            // profile that is up to date needs no badge.
+                            if (s.status != "ok") : VerticalLayout {
                                 alignment: center;
 
                                 HorizontalLayout {

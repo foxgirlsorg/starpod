@@ -8,7 +8,7 @@ import { Design } from "../design.slint";
 import { Bridge, AnnouncementItem, ProfileCardItem, TextRun } from "../bridge.slint";
 import {
     Button, ButtonVariant, ButtonSize, Card, Select, EmojiText, Alert, AlertVariant,
-    IconButton, Progress
+    IconButton, Progress, WindowMetrics
 } from "../primitives.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Backdrop } from "../backdrop.slint";
@@ -194,7 +194,8 @@ export component HomePage inherits Rectangle {
             stack := VerticalLayout {
                 horizontal-stretch: 0;
                 vertical-stretch: 1;
-                width: 440px;
+                // 440px, or the window less a 16px margin on each side.
+                width: min(440px, WindowMetrics.width - 32px);
                 padding-top: 12px;
                 padding-bottom: 16px;
                 spacing: 0px;
@@ -561,7 +562,7 @@ export component HomePage inherits Rectangle {
                     alignment: center;
 
                     VerticalLayout {
-                        width: 320px;
+                        width: min(320px, WindowMetrics.width - 32px);
                         vertical-stretch: 0;
                         spacing: 4px;
 

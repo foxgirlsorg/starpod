@@ -997,14 +997,15 @@ export component ConfirmDialog inherits Rectangle {
     dlg := PopupWindow {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
-        width: 420px + 2 * root.pad;
+        // 420px, or the window less a 16px margin on each side on a phone.
+        width: min(420px, WindowMetrics.width - 32px - 2 * root.pad) + 2 * root.pad;
         height: panel.height + 2 * root.pad;
         close-policy: no-auto-close;
 
         panel := Rectangle {
             x: root.pad;
             y: root.pad;
-            width: 420px;
+            width: min(420px, WindowMetrics.width - 32px - 2 * root.pad);
             height: col.preferred-height;
             background: Design.popover;
             border-width: 1px;
@@ -1175,14 +1176,21 @@ export component PageHeader inherits VerticalLayout {
     in property <string> title;
     in property <string> description;
 
+    // On a narrow window (a phone) the actions go under the title, so the
+    // description keeps the full width instead of wrapping word by word.
+    private property <bool> stacked: WindowMetrics.width < 560px && actions.preferred-width > 0;
+
     vertical-stretch: 0;
     padding-bottom: 24px;
 
-    HorizontalLayout {
+    GridLayout {
         vertical-stretch: 0;
-        spacing: 16px;
+        spacing-horizontal: 16px;
+        spacing-vertical: root.stacked ? 16px : 0px;
 
         VerticalLayout {
+            row: 0;
+            col: 0;
             horizontal-stretch: 1;
             vertical-stretch: 0;
             alignment: start;
@@ -1213,11 +1221,15 @@ export component PageHeader inherits VerticalLayout {
         }
 
         VerticalLayout {
+            row: root.stacked ? 1 : 0;
+            col: root.stacked ? 0 : 1;
+            horizontal-stretch: 0;
             vertical-stretch: 0;
             alignment: center;
 
-            HorizontalLayout {
+            actions := HorizontalLayout {
                 spacing: 8px;
+                alignment: start;
 
                 @children
             }
@@ -1240,14 +1252,18 @@ export component PageFrame inherits Rectangle {
         // own height. Without this the page was laid out to the window height,
         // and cards near the bottom were squeezed into each other.
         content-height: max(self.height, body.preferred-height);
+        // The page is as wide as the window, never wider: a row that asks
+        // for more room wraps or elides instead of scrolling sideways.
+        content-width: self.visible-width;
 
         body := HorizontalLayout {
             // No vertical stretch: the page is as tall as its content, so it
             // starts at the top of the scroll area.
             vertical-stretch: 0;
-            padding-left: 32px;
-            padding-right: 32px;
-            padding-top: 28px;
+            // Phone-width windows keep 16px margins so the content gets the room.
+            padding-left: WindowMetrics.width < 600px ? 16px : 32px;
+            padding-right: WindowMetrics.width < 600px ? 16px : 32px;
+            padding-top: WindowMetrics.width < 600px ? 20px : 28px;
             padding-bottom: 32px;
 
             VerticalLayout {
