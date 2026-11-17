@@ -2,7 +2,7 @@
 # Build the Starpod APK: libstarpod.so (crates/starpod-android) for each ABI,
 # packed with android/AndroidManifest.xml and android/res, aligned and signed.
 #
-# The engine (meow, at the version pinned in crates/starpod-engine) is
+# The engine (meow, its newest stable release) is
 # downloaded for each ABI and packed as lib/<abi>/libmeow.so, next to
 # libstarpod.so, so Android runs it from the native library directory.
 #
@@ -24,6 +24,8 @@
 #                       made in target/android/debug.keystore
 #   STARPOD_KEYSTORE_PASS, STARPOD_KEY_ALIAS   its password and key alias
 #   STARPOD_APK         the output path (default: target/android/starpod.apk)
+#   STARPOD_ENGINE_VERSION  the meow version to pack (default: its newest release)
+#   GITHUB_TOKEN        sent with the GitHub API call when set (its rate limit)
 #
 # Run from the repository root:  bash tools/build-android.sh
 set -euo pipefail
@@ -72,6 +74,26 @@ IFS=. read -r MAJOR MINOR PATCH <<< "${VERSION%%-*}"
 VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
 echo "Starpod $VERSION (version code $VERSION_CODE), ABIs: ${ABIS[*]}"
 
+# 0. The engine version: the newest stable meow release, unless
+# STARPOD_ENGINE_VERSION names one. The app reads the same variable at compile
+# time, so it reports the version packed with it. When GitHub cannot be asked,
+# the version the code was written against is used.
+if [ -z "${STARPOD_ENGINE_VERSION:-}" ]; then
+    auth=()
+    if [ -n "${GITHUB_TOKEN:-}" ]; then auth=(-H "Authorization: Bearer $GITHUB_TOKEN"); fi
+    STARPOD_ENGINE_VERSION=$(curl -fsSL --retry 3 "${auth[@]}" \
+        https://api.github.com/repos/meow-rs/meow-rs/releases/latest \
+        | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -n1 || true)
+fi
+if [ -z "${STARPOD_ENGINE_VERSION:-}" ]; then
+    STARPOD_ENGINE_VERSION=$(sed -n 's/^ *None => "\(.*\)",$/\1/p' crates/starpod-engine/src/download.rs | head -n1)
+    echo "could not ask GitHub for the newest engine; using $STARPOD_ENGINE_VERSION"
+fi
+: "${STARPOD_ENGINE_VERSION:?could not decide the engine version}"
+export STARPOD_ENGINE_VERSION
+ENGINE_VERSION=$STARPOD_ENGINE_VERSION
+echo "engine: meow $ENGINE_VERSION"
+
 # 1. The native library for each ABI.
 targets=()
 for abi in "${ABIS[@]}"; do targets+=(-t "$abi"); done
@@ -86,8 +108,6 @@ sha256_of() {
         shasum -a 256 "$1" | awk '{print $1}'
     fi
 }
-ENGINE_VERSION=$(sed -n 's/^pub const ENGINE_VERSION: &str = "\(.*\)";.*/\1/p' crates/starpod-engine/src/download.rs | head -n1)
-: "${ENGINE_VERSION:?could not read ENGINE_VERSION from crates/starpod-engine/src/download.rs}"
 engine_dir="$OUT/engine"
 mkdir -p "$engine_dir"
 for abi in "${ABIS[@]}"; do

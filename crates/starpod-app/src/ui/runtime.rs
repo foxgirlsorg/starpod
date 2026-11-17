@@ -1039,6 +1039,15 @@ pub fn run(
     runtime.spawn(poll_engine(service.clone()));
     runtime.spawn(poll_connections(service.clone()));
     runtime.spawn(watch_engine_subscriptions(service.clone()));
+    // The engine follows its newest release: a newer one is installed at start.
+    runtime.spawn({
+        let service = service.clone();
+        async move {
+            if let Err(error) = service.lock().await.upgrade_engine_if_outdated().await {
+                warn!(%error, "could not update the engine at start");
+            }
+        }
+    });
     runtime.spawn(auto_refresh(service));
     // The startup update check runs only while the setting allows it.
     spawn_update_check(&ctx, false);

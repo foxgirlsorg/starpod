@@ -33,15 +33,21 @@ use sha2::{Digest as _, Sha256};
 
 use crate::error::{EngineError, EngineResult};
 
-/// The engine version the app ships with.
+/// The engine version this build was written and tested against.
 ///
-/// The app pins the version: an engine upgrade is a decision with a
-/// compatibility surface (the REST API, the config keys, the rule
-/// grammar), not something a user's proxy should decide for them.
-pub const ENGINE_VERSION: &str = "0.29.0";
+/// The app installs the newest engine release, so this is the fallback: what a
+/// first install takes when the release list cannot be read. On Android it is
+/// the engine packed into the APK, which the build script sets through
+/// `STARPOD_ENGINE_VERSION` to the newest release at build time.
+pub const ENGINE_VERSION: &str = match option_env!("STARPOD_ENGINE_VERSION") {
+    Some(version) => version,
+    None => "0.29.0",
+};
 
-/// The release tag the assets are published under.
-pub const RELEASE_TAG: &str = "v0.29.0";
+/// The release tag `ENGINE_VERSION`'s assets are published under.
+pub fn release_tag() -> String {
+    format!("v{ENGINE_VERSION}")
+}
 
 /// Where the release assets are published.
 pub const RELEASES_URL: &str = "https://github.com/meow-rs/meow-rs/releases/download";
@@ -69,10 +75,11 @@ pub struct Asset {
 /// error.
 pub fn asset_for_current_platform() -> Option<Asset> {
     let (target, archive) = target_triple()?;
-    let file_name = format!("meow-{RELEASE_TAG}-{target}.{archive}");
+    let tag = release_tag();
+    let file_name = format!("meow-{tag}-{target}.{archive}");
     Some(Asset {
-        url: format!("{RELEASES_URL}/{RELEASE_TAG}/{file_name}"),
-        checksum_url: format!("{RELEASES_URL}/{RELEASE_TAG}/{file_name}.sha256"),
+        url: format!("{RELEASES_URL}/{tag}/{file_name}"),
+        checksum_url: format!("{RELEASES_URL}/{tag}/{file_name}.sha256"),
         file_name,
     })
 }
@@ -780,7 +787,7 @@ mod tests {
     #[test]
     fn the_asset_url_points_at_the_pinned_release() {
         let asset = asset_for_current_platform().unwrap();
-        assert!(asset.url.contains(RELEASE_TAG), "{}", asset.url);
+        assert!(asset.url.contains(&release_tag()), "{}", asset.url);
         assert!(!asset.url.ends_with(".sha256"), "{}", asset.url);
         assert_eq!(asset.checksum_url, format!("{}.sha256", asset.url));
     }

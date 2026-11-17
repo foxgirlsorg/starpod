@@ -2396,6 +2396,43 @@ impl AppService {
         self.finish(result)
     }
 
+    /// Keep the installed engine at the newest release on the chosen channel:
+    /// run at start, it installs a newer one when there is one. An engine that
+    /// came with the app, or none at all, is left alone. A release list that
+    /// cannot be read is not an error here; the next start tries again.
+    pub async fn upgrade_engine_if_outdated(&mut self) -> Result<(), AppError> {
+        if starpod_engine::download::is_bundled() || self.installed_engine.is_none() {
+            return Ok(());
+        }
+        let channel = self.state.preferences.effective_engine_channel();
+        let latest = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            starpod_engine::download::latest_release(channel),
+        )
+        .await;
+        let release = match latest {
+            Ok(Ok(release)) => release,
+            Ok(Err(error)) => {
+                self.log(format!("could not check for a newer engine: {error}"));
+                return Ok(());
+            }
+            Err(_) => {
+                self.log("could not check for a newer engine: no answer in 20 seconds");
+                return Ok(());
+            }
+        };
+        if self.installed_engine.as_deref() == Some(release.version.as_str()) {
+            self.latest_engine = Some(release.version);
+            self.publish();
+            return Ok(());
+        }
+        self.log(format!(
+            "a newer engine is out ({}); installing it",
+            release.version
+        ));
+        self.upgrade_engine().await
+    }
+
     async fn upgrade_engine_inner(&mut self) -> Result<(), AppError> {
         if starpod_engine::download::is_bundled() {
             return Err(AppError::Invalid(
@@ -2595,13 +2632,38 @@ impl AppService {
     }
 
     async fn install_engine_inner(&mut self) -> Result<(), AppError> {
-        self.log("installing the proxy engine");
-        let path = starpod_engine::download::install_in(self.paths().data_dir())
-            .await
-            .map_err(|error| self.engine_failure(error))?;
+        // The newest release on the chosen channel. When the release list
+        // cannot be read (offline, rate-limited), the version this build was
+        // made with is installed instead, so a first install still works.
+        let channel = self.state.preferences.effective_engine_channel();
+        let data_dir = self.paths().data_dir().to_path_buf();
+        let (installed, version) = match starpod_engine::download::latest_release(channel).await {
+            Ok(release) => {
+                self.log(format!("installing the proxy engine {}", release.version));
+                let installed = starpod_engine::download::install_asset_in(
+                    &data_dir,
+                    &release.asset,
+                    &release.version,
+                )
+                .await;
+                (installed, release.version)
+            }
+            Err(error) => {
+                let version = starpod_engine::download::ENGINE_VERSION.to_string();
+                self.log(format!(
+                    "could not find the newest engine ({error}); installing {version}"
+                ));
+                (starpod_engine::download::install_in(&data_dir).await, version)
+            }
+        };
+        let path = installed.map_err(|error| self.engine_failure(error))?;
         self.engine_installed = true;
-        self.installed_engine = Some(starpod_engine::download::ENGINE_VERSION.to_string());
-        self.log(format!("installed the proxy engine at {}", path.display()));
+        self.installed_engine = Some(version.clone());
+        self.latest_engine = Some(version.clone());
+        self.log(format!(
+            "installed the proxy engine {version} at {}",
+            path.display()
+        ));
         Ok(())
     }
 
