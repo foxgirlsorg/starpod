@@ -53,3 +53,75 @@ pub fn write_panic_report(info: &PanicHookInfo<'_>, crash_dir: &Path) -> Option<
     );
     starpod_store::crash::write_report(crash_dir, "crash", &body)
 }
+
+/// Where [`native_crash_filter`] writes its report. Set once, before the
+/// filter is installed.
+#[cfg(windows)]
+static NATIVE_CRASH_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Write a crash report into `crash_dir` when the process dies of a native
+/// fault, such as an access violation or a stack overflow, that never
+/// reaches the panic hook. Windows only; elsewhere this does nothing.
+pub fn install_native_crash_handler(crash_dir: PathBuf) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Diagnostics::Debug::SetUnhandledExceptionFilter;
+
+        if NATIVE_CRASH_DIR.set(crash_dir).is_ok() {
+            // SAFETY: the filter is a plain function that lives for the
+            // whole process, and it only reads the record Windows passes.
+            unsafe {
+                SetUnhandledExceptionFilter(Some(native_crash_filter));
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = crash_dir;
+}
+
+/// The unhandled-exception filter: writes the exception code and address,
+/// then lets Windows go on ending the process.
+#[cfg(windows)]
+unsafe extern "system" fn native_crash_filter(
+    info: *const windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+) -> i32 {
+    /// Let the next handler, and then Windows, deal with the exception.
+    const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+
+    // SAFETY: Windows passes a valid pointer, or null, which is checked.
+    let (code, address) = unsafe {
+        info.as_ref()
+            .and_then(|pointers| pointers.ExceptionRecord.as_ref())
+            .map_or((0, 0), |record| {
+                (
+                    record.ExceptionCode as u32,
+                    record.ExceptionAddress as usize,
+                )
+            })
+    };
+    if let Some(dir) = NATIVE_CRASH_DIR.get() {
+        let thread = std::thread::current()
+            .name()
+            .unwrap_or("unnamed")
+            .to_string();
+        let kind = match code {
+            0xC000_0005 => "access violation",
+            0xC000_00FD => "stack overflow",
+            0xC000_0409 => "stack buffer overrun",
+            0xC000_001D => "illegal instruction",
+            _ => "native exception",
+        };
+        let body = format!(
+            "Starpod crash report\n\
+             version: {version}\n\
+             os: {os} {arch}\n\
+             thread: {thread}\n\
+             crash: {kind} (code {code:#010x}) at {address:#x}\n",
+            version = env!("CARGO_PKG_VERSION"),
+            os = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+        );
+        let _ = starpod_store::crash::write_report(dir, "crash", &body);
+    }
+    EXCEPTION_CONTINUE_SEARCH
+}

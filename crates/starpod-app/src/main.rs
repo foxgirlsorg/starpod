@@ -41,6 +41,11 @@ static ENGINE: OnceLock<(tokio::runtime::Handle, SharedAppService)> = OnceLock::
 fn main() -> Result<(), Box<dyn Error>> {
     // The hook goes first so that a panic anywhere in startup is recorded.
     install_panic_hook();
+    // A native fault (an access violation, a stack overflow) never reaches
+    // the panic hook; this records it too.
+    if let Ok(paths) = AppPaths::resolve() {
+        starpod_app::crash::install_native_crash_handler(paths.crash_dir());
+    }
 
     // One running Starpod at a time. This runs before anything that writes to
     // disk or changes the system: a second launch hands its link (or a request
