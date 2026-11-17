@@ -226,6 +226,9 @@ export component ProxiesPage inherits Rectangle {
     private property <bool> running: Bridge.engine-phase == "running";
     // A phone-width window: the routing mode and the sort get their own rows.
     private property <bool> narrow: WindowMetrics.width < 600px;
+    // A phone: the routing card is one row, the mode on the left and the
+    // traffic on the right. The desktop rows below are left out.
+    private property <bool> phone-row: Bridge.mobile && root.narrow;
     private property <[string]> mode-labels: Bridge.global-mode-allowed ? [@tr("Rule"), @tr("Global"), @tr("Direct")] : [@tr("Rule"), @tr("Direct")];
     private property <[string]> mode-keys: Bridge.global-mode-allowed ? ["rule", "global", "direct"] : ["rule", "direct"];
     private property <int> mode-index: Bridge.mode == "direct" ? root.mode-keys.length - 1
@@ -284,9 +287,87 @@ export component ProxiesPage inherits Rectangle {
                     VerticalLayout {
                         spacing: 8px;
 
+                        // The phone row: the mode on the left, the session traffic
+                        // on the right, one line.
+                        if (root.phone-row) : HorizontalLayout {
+                            vertical-stretch: 0;
+                            height: 36px;
+                            spacing: 8px;
+
+                            phone-mode := Segmented {
+                                options: root.mode-labels;
+                                current-index: root.mode-index;
+                                min-width: phone-mode.preferred-width;
+                                selected(i) => {
+                                    Bridge.set-mode(root.mode-keys[i]);
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            if (root.running && Bridge.session-traffic-visible) : HorizontalLayout {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                alignment: end;
+                                spacing: 12px;
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+
+                                    VerticalLayout {
+                                        vertical-stretch: 0;
+                                        alignment: center;
+
+                                        Image {
+                                            width: 12px;
+                                            height: 12px;
+                                            source: @image-url("../assets/icons/arrow-up.svg");
+                                            colorize: Design.muted-foreground;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: Bridge.session-upload;
+                                        color: Design.foreground;
+                                        font-family: Design.font-family;
+                                        font-size: Design.font-xs;
+                                        vertical-alignment: center;
+                                        wrap: no-wrap;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+
+                                    VerticalLayout {
+                                        vertical-stretch: 0;
+                                        alignment: center;
+
+                                        Image {
+                                            width: 12px;
+                                            height: 12px;
+                                            source: @image-url("../assets/icons/arrow-down.svg");
+                                            colorize: Design.muted-foreground;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: Bridge.session-download;
+                                        color: Design.foreground;
+                                        font-family: Design.font-family;
+                                        font-size: Design.font-xs;
+                                        vertical-alignment: center;
+                                        wrap: no-wrap;
+                                    }
+                                }
+                            }
+                        }
+
                         // One row: the switches and the session traffic on the
-                        // left, the routing mode on the right.
-                        HorizontalLayout {
+                        // left, the routing mode on the right. Left out on a phone.
+                        if (!root.phone-row) : HorizontalLayout {
                             vertical-stretch: 0;
                             height: 36px;
                             spacing: 16px;
@@ -377,7 +458,7 @@ export component ProxiesPage inherits Rectangle {
                             }
                         }
 
-                        if (root.narrow) : HorizontalLayout {
+                        if (root.narrow && !root.phone-row) : HorizontalLayout {
                             alignment: start;
 
                             Segmented {
@@ -389,7 +470,7 @@ export component ProxiesPage inherits Rectangle {
                             }
                         }
 
-                        if (root.narrow) : HorizontalLayout {
+                        if (root.narrow && !root.phone-row) : HorizontalLayout {
                             alignment: start;
 
                             if (root.running && Bridge.session-traffic-visible) : HorizontalLayout {
