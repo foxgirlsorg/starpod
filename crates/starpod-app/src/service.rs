@@ -2328,6 +2328,11 @@ impl AppService {
     }
 
     async fn check_engine_update_inner(&mut self) -> Result<(), AppError> {
+        if starpod_engine::download::is_bundled() {
+            return Err(AppError::Invalid(
+                "the engine comes with the app and is updated with it".to_string(),
+            ));
+        }
         let channel = self.state.preferences.effective_engine_channel();
         let latest = starpod_engine::download::latest_release(channel)
             .await
@@ -2352,6 +2357,11 @@ impl AppService {
     }
 
     async fn upgrade_engine_inner(&mut self) -> Result<(), AppError> {
+        if starpod_engine::download::is_bundled() {
+            return Err(AppError::Invalid(
+                "the engine comes with the app and is updated with it".to_string(),
+            ));
+        }
         let channel = self.state.preferences.effective_engine_channel();
         let release = starpod_engine::download::latest_release(channel)
             .await

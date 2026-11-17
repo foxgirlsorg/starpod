@@ -105,8 +105,9 @@ fn target_triple() -> Option<(&'static str, &'static str)> {
     {
         Some(("aarch64-unknown-linux-gnu", "tar.gz"))
     }
-    // Android runs the static musl builds: they need no Bionic libc, and the
-    // app targets API 28 so it may run a binary from its own data directory.
+    // Android runs the static musl builds, which need no Bionic libc. They
+    // ship inside the APK ([`use_bundled_binary`]) rather than downloaded:
+    // Android only lets an app run binaries from its native library directory.
     #[cfg(all(target_os = "android", target_arch = "aarch64"))]
     {
         Some(("aarch64-unknown-linux-musl", "tar.gz"))
@@ -157,8 +158,26 @@ pub fn install_dir_in(data_dir: &Path) -> PathBuf {
     data_dir.join("engine").join(ENGINE_VERSION)
 }
 
+/// An engine that came with the app (Android's `libmeow.so`), set once at
+/// start. While it is set it is the installed engine, at the pinned version,
+/// and nothing is downloaded or replaced.
+static BUNDLED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Use the engine binary at `path`, which came with the app.
+pub fn use_bundled_binary(path: PathBuf) {
+    let _ = BUNDLED.set(path);
+}
+
+/// Whether the engine came with the app, so it is updated with the app.
+pub fn is_bundled() -> bool {
+    BUNDLED.get().is_some()
+}
+
 /// The path of the installed engine binary, under `data_dir`.
 pub fn installed_binary_path_in(data_dir: &Path) -> PathBuf {
+    if let Some(bundled) = BUNDLED.get() {
+        return bundled.clone();
+    }
     install_dir_in(data_dir).join(binary_name())
 }
 
@@ -208,6 +227,11 @@ pub async fn install_asset_in(
     asset: &Asset,
     version: &str,
 ) -> EngineResult<PathBuf> {
+    if is_bundled() {
+        return Err(EngineError::Install(
+            "the engine comes with the app and is updated with it".to_string(),
+        ));
+    }
     let client = http_client()?;
 
     let expected = fetch_checksum(&client, &asset.checksum_url).await?;
@@ -278,6 +302,9 @@ const VERSION_FILE: &str = "VERSION";
 pub fn installed_version_in(data_dir: &Path) -> Option<String> {
     if !is_installed_in(data_dir) {
         return None;
+    }
+    if is_bundled() {
+        return Some(ENGINE_VERSION.to_string());
     }
     let marker = install_dir_in(data_dir).join(VERSION_FILE);
     match std::fs::read_to_string(marker) {

@@ -2,13 +2,17 @@
 # Build the Starpod APK: libstarpod.so (crates/starpod-android) for each ABI,
 # packed with android/AndroidManifest.xml and android/res, aligned and signed.
 #
+# The engine (meow, at the version pinned in crates/starpod-engine) is
+# downloaded for each ABI and packed as lib/<abi>/libmeow.so, next to
+# libstarpod.so, so Android runs it from the native library directory.
+#
 # The app is a NativeActivity with two small Java classes for the VPN
 # (android/java), so no Gradle is needed: javac and d8 make classes.dex,
 # aapt2 links the manifest and resources, the libraries are added as
 # lib/<abi>/, zipalign aligns them and apksigner signs.
 #
 # Needs: the Android SDK (build-tools 34+ and a platform), a JDK 11+, the NDK,
-# cargo-ndk, and the Rust targets for the ABIs:
+# cargo-ndk, curl and tar (for the engine), and the Rust targets for the ABIs:
 #   rustup target add aarch64-linux-android x86_64-linux-android
 #   cargo install cargo-ndk
 #
@@ -73,7 +77,57 @@ targets=()
 for abi in "${ABIS[@]}"; do targets+=(-t "$abi"); done
 cargo ndk "${targets[@]}" --platform 26 -o "$OUT/lib" build --release -p starpod-android
 
-# 2. Manifest and resources.
+# 2. The engine (meow) for each ABI, from its release on GitHub. The tarball
+# is cached in $OUT/engine/ and its checksum is checked before and after use.
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+ENGINE_VERSION=$(sed -n 's/^pub const ENGINE_VERSION: &str = "\(.*\)";.*/\1/p' crates/starpod-engine/src/download.rs | head -n1)
+: "${ENGINE_VERSION:?could not read ENGINE_VERSION from crates/starpod-engine/src/download.rs}"
+engine_dir="$OUT/engine"
+mkdir -p "$engine_dir"
+for abi in "${ABIS[@]}"; do
+    case "$abi" in
+        arm64-v8a) triple=aarch64-unknown-linux-musl ;;
+        x86_64) triple=x86_64-unknown-linux-musl ;;
+        armeabi-v7a) triple=armv7-unknown-linux-musleabihf ;;
+        *) echo "no meow engine build for ABI $abi (use arm64-v8a, x86_64 or armeabi-v7a)" >&2; exit 1 ;;
+    esac
+    name="meow-v$ENGINE_VERSION-$triple.tar.gz"
+    url="https://github.com/meow-rs/meow-rs/releases/download/v$ENGINE_VERSION/$name"
+    tarball="$engine_dir/$name"
+
+    expected=$(curl -fsSL --retry 3 "$url.sha256" | awk '{print $1}')
+    if [ -z "$expected" ]; then echo "could not read the checksum from $url.sha256" >&2; exit 1; fi
+    if [ -f "$tarball" ] && [ "$(sha256_of "$tarball")" = "$expected" ]; then
+        echo "engine $name is already downloaded"
+    else
+        echo "downloading the engine $name"
+        curl -fsSL --retry 3 -o "$tarball" "$url"
+        if [ "$(sha256_of "$tarball")" != "$expected" ]; then
+            rm -f "$tarball"
+            echo "checksum mismatch for $name, not using it" >&2
+            exit 1
+        fi
+    fi
+
+    extract="$engine_dir/extract-$abi"
+    rm -rf "$extract"
+    mkdir -p "$extract"
+    tar -xzf "$tarball" -C "$extract"
+    engine_bin=$(find "$extract" -name meow -type f | head -n1 || true)
+    if [ -z "$engine_bin" ]; then echo "no meow binary in $name" >&2; exit 1; fi
+    mkdir -p "$engine_dir/$abi"
+    cp "$engine_bin" "$engine_dir/$abi/libmeow.so"
+    chmod 755 "$engine_dir/$abi/libmeow.so"
+    rm -rf "$extract"
+done
+
+# 3. Manifest and resources.
 work="$OUT/apk-work"
 rm -rf "$work"
 mkdir -p "$work"
@@ -87,18 +141,19 @@ if [ -z "${STARPOD_KEYSTORE:-}" ]; then DEBUG_MODE=(--debug-mode); fi
 "$AAPT2" link -o "$work/unaligned.apk" -I "$PLATFORM/android.jar" "${DEBUG_MODE[@]}" \
     --manifest "$work/AndroidManifest.xml" "$work/res.zip"
 
-# 3. The Java classes, compiled against the platform and dexed.
+# 4. The Java classes, compiled against the platform and dexed.
 mkdir -p "$work/classes" "$work/pack"
 javac --release 11 -classpath "$ANDROID_JAR" -d "$work/classes"     $(find android/java -name '*.java')
 classes=()
 while IFS= read -r -d '' class; do classes+=("$class"); done     < <(find "$work/classes" -name '*.class' -print0)
 "$D8" --release --min-api 26 --lib "$ANDROID_JAR" --output "$work/pack" "${classes[@]}"
 
-# 4. The libraries, stored uncompressed under lib/<abi>/.
+# 5. The libraries and the engine, stored uncompressed under lib/<abi>/.
 mkdir -p "$work/pack/lib"
 for abi in "${ABIS[@]}"; do
     mkdir -p "$work/pack/lib/$abi"
     cp "$OUT/lib/$abi/libstarpod.so" "$work/pack/lib/$abi/"
+    cp "$engine_dir/$abi/libmeow.so" "$work/pack/lib/$abi/"
 done
 PYTHON=$(command -v python3 || command -v python)
 "$PYTHON" - "$work/unaligned.apk" "$work/pack" <<'PY'
@@ -112,7 +167,7 @@ with zipfile.ZipFile(apk, "a") as zf:
             zf.write(path, arc, compress_type=zipfile.ZIP_STORED)
 PY
 
-# 5. Align (page-aligned .so files) and sign.
+# 6. Align (page-aligned .so files) and sign.
 "$ZIPALIGN" -f -p 4 "$work/unaligned.apk" "$work/aligned.apk"
 if [ -n "${STARPOD_KEYSTORE:-}" ]; then
     KEYSTORE=$STARPOD_KEYSTORE

@@ -1641,7 +1641,8 @@ export component SettingsPage inherits Rectangle {
                             HorizontalLayout {
                                 alignment: end;
 
-                                Button {
+                                // On a phone the engine comes with the app.
+                                if (!Bridge.mobile) : Button {
                                     text: Bridge.engine-installed ? @tr("Reinstall") : @tr("Install");
                                     variant: ButtonVariant.outline;
                                     busy: Bridge.busy;
@@ -1653,50 +1654,53 @@ export component SettingsPage inherits Rectangle {
                             }
                         }
 
-                        Separator {}
+                        // A phone's engine is updated with the app.
+                        if (!Bridge.mobile) : VerticalLayout {
+                            Separator {}
 
-                        SettingRow {
-                            label: @tr("Channel");
-                            description: @tr("Alpha releases come first and may be less stable.");
+                            SettingRow {
+                                label: @tr("Channel");
+                                description: @tr("Alpha releases come first and may be less stable.");
 
-                            DraftChoice {
-                                items: root.channel-items;
-                                values: root.channel-values;
-                                value: root.edraft.engine-channel;
-                                revision: root.rev;
-                                committed(v) => {
-                                    root.edraft.engine-channel = v;
-                                }
-                            }
-                        }
-
-                        Separator {}
-
-                        SettingRow {
-                            label: @tr("Latest");
-                            description: Bridge.engine-latest-version == "" ? @tr("Not checked yet")
-                                : Bridge.engine-update-available ? @tr("Version {} is available on this channel", Bridge.engine-latest-version)
-                                : @tr("Up to date on this channel");
-
-                            HorizontalLayout {
-                                alignment: end;
-                                spacing: 8px;
-
-                                Button {
-                                    text: @tr("Check");
-                                    variant: ButtonVariant.outline;
-                                    enabled: !Bridge.busy;
-                                    clicked => {
-                                        Bridge.check-engine-update();
+                                DraftChoice {
+                                    items: root.channel-items;
+                                    values: root.channel-values;
+                                    value: root.edraft.engine-channel;
+                                    revision: root.rev;
+                                    committed(v) => {
+                                        root.edraft.engine-channel = v;
                                     }
                                 }
+                            }
 
-                                if (Bridge.engine-update-available) : Button {
-                                    text: @tr("Upgrade");
-                                    variant: ButtonVariant.primary;
-                                    enabled: !Bridge.busy;
-                                    clicked => {
-                                        Bridge.upgrade-engine();
+                            Separator {}
+
+                            SettingRow {
+                                label: @tr("Latest");
+                                description: Bridge.engine-latest-version == "" ? @tr("Not checked yet")
+                                    : Bridge.engine-update-available ? @tr("Version {} is available on this channel", Bridge.engine-latest-version)
+                                    : @tr("Up to date on this channel");
+
+                                HorizontalLayout {
+                                    alignment: end;
+                                    spacing: 8px;
+
+                                    Button {
+                                        text: @tr("Check");
+                                        variant: ButtonVariant.outline;
+                                        enabled: !Bridge.busy;
+                                        clicked => {
+                                            Bridge.check-engine-update();
+                                        }
+                                    }
+
+                                    if (Bridge.engine-update-available) : Button {
+                                        text: @tr("Upgrade");
+                                        variant: ButtonVariant.primary;
+                                        enabled: !Bridge.busy;
+                                        clicked => {
+                                            Bridge.upgrade-engine();
+                                        }
                                     }
                                 }
                             }

@@ -5,17 +5,19 @@
   activity asks for the VPN permission, and the VpnService opens the tunnel
   that libstarpod.so reads.
 
-  targetSdkVersion stays at 28: from 29 on, an app may not run a binary from
-  its own data directory, and the engine (the static musl build of meow) is
-  installed there, as on the desktop. tools/build-android.sh fills in the
-  version.
+  targetSdkVersion is the current API (35), which Play requires for new apps.
+  The engine (the static musl build of meow) is shipped in the APK as
+  lib/<abi>/libmeow.so, because Android only lets an app run binaries from its
+  native library directory, not from its data directory. The attribute
+  android:extractNativeLibs="true" makes Android extract those libraries there.
+  tools/build-android.sh fills in the version.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.foxgirls.starpod"
     android:versionCode="__VERSION_CODE__"
     android:versionName="__VERSION_NAME__">
 
-    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />

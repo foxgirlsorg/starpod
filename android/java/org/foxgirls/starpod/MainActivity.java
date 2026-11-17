@@ -120,6 +120,14 @@ public class MainActivity extends NativeActivity {
     };
 
     /**
+     * Where Android extracted the APK's native libraries, among them the
+     * engine (libmeow.so): the one place an app may run a binary from.
+     */
+    public String nativeLibraryDir() {
+        return getApplicationInfo().nativeLibraryDir;
+    }
+
+    /**
      * The package that installed this app, such as an app store, or null when
      * Android does not say. Any thread.
      */

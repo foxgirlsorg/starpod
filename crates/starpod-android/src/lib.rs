@@ -15,9 +15,9 @@
 //!   Android starts one activity. An app installed straight from an APK
 //!   updates itself through Android's installer ([`update`]); one a store
 //!   installed is updated by that store.
-//! - The engine is the static musl Linux build of meow, installed from the
-//!   app like on the desktop. The app targets API 28 so it may run a binary
-//!   from its own data directory.
+//! - The engine is the static musl Linux build of meow, shipped in the APK
+//!   as `lib/<abi>/libmeow.so` (Android runs binaries only from the native
+//!   library directory) and updated with the app.
 //! - Traffic reaches the engine through a VPN ([`vpn`]), never a system
 //!   proxy: connecting turns the VPN on, disconnecting turns it off.
 
@@ -85,20 +85,25 @@ fn run(app: &AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
         .enable_all()
         .thread_name("starpod-runtime")
         .build()?;
+    // The Java bridge and the engine come first: the service finds the
+    // engine when it opens.
+    match java::init(app) {
+        Ok(()) => {
+            update::init();
+            use_bundled_engine();
+        }
+        Err(error) => error!(%error, "the Java bridge could not be set up"),
+    }
     let mut service = AppService::open_default()?;
     let service = runtime.block_on(async move {
         service.load().await?;
         Ok::<_, starpod_app::AppError>(service.into_shared())
     })?;
     info!("service opened and loaded");
-    match java::init(app) {
-        Ok(()) => {
-            update::init();
-            if let Err(error) = vpn::install(runtime.handle(), service.clone()) {
-                error!(%error, "the VPN could not be set up");
-            }
-        }
-        Err(error) => error!(%error, "the Java bridge could not be set up"),
+    if java::get().is_some()
+        && let Err(error) = vpn::install(runtime.handle(), service.clone())
+    {
+        error!(%error, "the VPN could not be set up");
     }
     let outcome = ui::run(
         runtime.handle().clone(),
@@ -118,6 +123,22 @@ fn run(app: &AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
     });
     runtime.shutdown_timeout(Duration::from_secs(5));
     outcome
+}
+
+/// Run the engine that came in the APK: Android extracts `lib/<abi>/libmeow.so`
+/// into the native library directory, the one place an app may run a binary
+/// from.
+fn use_bundled_engine() {
+    let dir =
+        java::get().and_then(|java| java.call_string("nativeLibraryDir", None).ok().flatten());
+    match dir {
+        Some(dir) => {
+            let engine = std::path::PathBuf::from(dir).join("libmeow.so");
+            info!(path = %engine.display(), present = engine.is_file(), "the bundled engine");
+            starpod_engine::download::use_bundled_binary(engine);
+        }
+        None => error!("the native library directory is unknown; the engine cannot start"),
+    }
 }
 
 /// A deep link left in `<files>/link.txt`, used once and then removed.
