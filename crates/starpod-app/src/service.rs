@@ -20,14 +20,15 @@
 //!    becomes text is scrubbed against every secret the service has read.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use starpod_core::config::{DEFAULT_GROUP_NAME, DEFAULT_MIXED_PORT};
 use starpod_core::rules::{parse_line, translate_all};
 use starpod_core::timestamp;
 use starpod_core::{
-    Node, ProxyGroup, ProxyMode, RuleSpec, RuntimeConfig, StoredRule, Subscription,
-    SubscriptionMode, SubscriptionPayload, SubscriptionQuota as CoreQuota, UserPreferences,
+    ProxyGroup, ProxyMode, RuleSpec, RuntimeConfig, StoredRule, Subscription, SubscriptionMode,
+    SubscriptionPayload, SubscriptionQuota as CoreQuota, UserPreferences,
 };
 use starpod_engine::log::redact_urls;
 use starpod_engine::reassert::{desired_rule_order, is_match_rule};
@@ -168,7 +169,11 @@ pub struct AppService {
     store: Store,
     secrets: Box<dyn SecretStore>,
     secret_fallback_reason: Option<String>,
-    engine: Box<dyn ProxyEngine>,
+    /// The proxy core. Shared, so a latency test can probe servers from
+    /// several tasks at once.
+    engine: Arc<dyn ProxyEngine>,
+    /// Makes the engine a latency test runs on while the proxy is off.
+    probe_engine: ProbeEngineFactory,
     provider: Arc<dyn SubscriptionProvider>,
     engine_installed: bool,
     state: UserState,
@@ -254,7 +259,8 @@ impl AppService {
             store,
             secrets: secret_store,
             secret_fallback_reason: fallback_reason,
-            engine,
+            engine: Arc::from(engine),
+            probe_engine: Box::new(installed_probe_engine),
             provider,
             engine_installed,
             state: UserState::default(),
@@ -1185,6 +1191,12 @@ impl AppService {
         self.system_proxy_backend = backend;
     }
 
+    /// Replace the engine a latency test runs on while the proxy is off. The
+    /// app uses the installed engine; tests substitute a fake one.
+    pub fn set_probe_engine_factory(&mut self, factory: ProbeEngineFactory) {
+        self.probe_engine = factory;
+    }
+
     /// Select a node by id.
     ///
     /// The choice is saved and takes effect at the next start. When the
@@ -1206,11 +1218,13 @@ impl AppService {
         self.finish(result)
     }
 
-    /// Measure every node's latency against the running engine.
+    /// Measure every node's latency with the engine's own delay test.
     ///
-    /// Probes run one after another, each bounded by a short timeout, so a
-    /// long node list takes a while. A node whose probe fails is recorded as
-    /// untested. Fails with [`AppError::Invalid`] when the proxy is stopped.
+    /// While the proxy is running, the running engine runs the test. While it
+    /// is stopped, a temporary engine runs it, with the current configuration,
+    /// and is stopped again afterwards. Probes run in parallel, each bounded
+    /// by the delay-test timeout. A node whose probe fails is recorded as
+    /// timed out.
     pub async fn test_latency(&mut self) -> Result<(), AppError> {
         let result = self.test_latency_inner().await;
         self.finish(result)
@@ -2216,114 +2230,89 @@ impl AppService {
     }
 
     async fn test_latency_inner(&mut self) -> Result<(), AppError> {
-        if !self.refresh_engine_status().await.is_running() {
-            // Not connected: ping each server directly instead.
-            let nodes = self.compose_current()?.config.proxies;
-            let total = nodes.len();
-            let timeout = self.state.preferences.effective_delay_test_timeout_ms();
-            let results = tcp_ping(nodes, timeout).await;
-            let answered = results.values().filter(|latency| latency.is_some()).count();
-            self.latencies = results;
-            self.log(format!(
-                "latency test (direct ping, not connected): {answered} of {total} nodes answered"
-            ));
-            return Ok(());
-        }
-        let nodes: Vec<(String, String)> = self
-            .built
-            .as_ref()
-            .map(|config| {
-                config
-                    .proxies
-                    .iter()
-                    .map(|node| (node.id.clone(), node.name.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-
+        let running = self.refresh_engine_status().await.is_running();
+        let config = match self.built.clone() {
+            Some(config) if running => config,
+            _ => self.compose_current()?.config,
+        };
+        let nodes: Vec<(String, String)> = config
+            .proxies
+            .iter()
+            .map(|node| (node.id.clone(), node.name.clone()))
+            .collect();
+        let total = nodes.len();
         let url = self
             .state
             .preferences
             .effective_delay_test_url()
             .to_string();
         let timeout = self.state.preferences.effective_delay_test_timeout_ms();
-        let mut results = BTreeMap::new();
-        for (id, name) in nodes {
-            let latency = self.engine.delay(&name, &url, timeout).await.ok();
-            results.insert(id, latency);
-        }
+
+        let (results, how) = if running {
+            let results = measure_delays(Arc::clone(&self.engine), nodes, url, timeout).await;
+            (results, "")
+        } else {
+            let probe = self.start_probe_engine(config).await?;
+            let results = measure_delays(Arc::clone(&probe.engine), nodes, url, timeout).await;
+            self.stop_probe_engine(probe).await;
+            (results, " (proxy off, temporary engine)")
+        };
         let answered = results.values().filter(|latency| latency.is_some()).count();
-        let total = results.len();
         self.latencies = results;
         self.log(format!(
-            "latency test: {answered} of {total} nodes answered"
+            "latency test{how}: {answered} of {total} nodes answered"
         ));
         Ok(())
     }
 
-    /// Measure every member of a proxy group against the running engine, and
-    /// merge the results into the node latencies. Returns how many members
-    /// answered.
+    /// Measure every member of a proxy group with the engine's own delay test,
+    /// and merge the results into the node latencies. While the proxy is
+    /// stopped, a temporary engine runs the test, as for
+    /// [`AppService::test_latency`]. Returns how many members answered.
     pub async fn test_group(&mut self, group: &str) -> Result<usize, AppError> {
         let result = self.test_group_inner(group).await;
         self.finish(result)
     }
 
     async fn test_group_inner(&mut self, group: &str) -> Result<usize, AppError> {
-        if !self.refresh_engine_status().await.is_running() {
-            // Not connected: ping the group's servers directly instead.
-            let config = self.compose_current()?.config;
-            let members = config
-                .proxy_groups
-                .iter()
-                .find(|candidate| candidate.name == group)
-                .map(|candidate| candidate.members.clone())
-                .ok_or_else(|| AppError::Invalid(format!("there is no group named “{group}”")))?;
-            let nodes: Vec<Node> = config
-                .proxies
-                .into_iter()
-                .filter(|node| members.contains(&node.name))
-                .collect();
-            let timeout = self.state.preferences.effective_delay_test_timeout_ms();
-            let results = tcp_ping(nodes, timeout).await;
-            let count = results.values().filter(|latency| latency.is_some()).count();
-            self.latencies.extend(results);
-            self.log(format!(
-                "group latency test “{group}” (direct ping, not connected): {count} of {} members answered",
-                members.len()
-            ));
-            return Ok(count);
-        }
-        let (members, proxies) = {
-            let Some(config) = self.built.as_ref() else {
-                return Err(AppError::Invalid(
-                    "Connect first to test latency".to_string(),
-                ));
-            };
-            let members = config
-                .proxy_groups
-                .iter()
-                .find(|candidate| candidate.name == group)
-                .map(|candidate| candidate.members.clone())
-                .ok_or_else(|| AppError::Invalid(format!("there is no group named “{group}”")))?;
-            let proxies: Vec<(String, String)> = config
-                .proxies
-                .iter()
-                .map(|node| (node.id.clone(), node.name.clone()))
-                .collect();
-            (members, proxies)
+        let running = self.refresh_engine_status().await.is_running();
+        let config = match self.built.clone() {
+            Some(config) if running => config,
+            _ => self.compose_current()?.config,
         };
+        let members = config
+            .proxy_groups
+            .iter()
+            .find(|candidate| candidate.name == group)
+            .map(|candidate| candidate.members.clone())
+            .ok_or_else(|| AppError::Invalid(format!("there is no group named “{group}”")))?;
+        let proxies: Vec<(String, String)> = config
+            .proxies
+            .iter()
+            .map(|node| (node.id.clone(), node.name.clone()))
+            .collect();
         let url = self
             .state
             .preferences
             .effective_delay_test_url()
             .to_string();
         let timeout = self.state.preferences.effective_delay_test_timeout_ms();
-        let answered = self
-            .engine
-            .group_delay(group, &url, timeout)
-            .await
-            .map_err(|error| self.engine_failure(error))?;
+        let answered = if running {
+            self.engine
+                .group_delay(group, &url, timeout)
+                .await
+                .map_err(|error| self.engine_failure(error))?
+        } else {
+            let probe = self.start_probe_engine(config).await?;
+            let outcome = probe.engine.group_delay(group, &url, timeout).await;
+            self.stop_probe_engine(probe).await;
+            outcome.map_err(|error| AppError::Engine(self.scrub(&error.to_string())))?
+        };
+        let how = if running {
+            ""
+        } else {
+            " (proxy off, temporary engine)"
+        };
 
         let mut count = 0;
         for member in &members {
@@ -2338,10 +2327,57 @@ impl AppService {
             self.latencies.insert(id.clone(), latency);
         }
         self.log(format!(
-            "group latency test “{group}”: {count} of {} members answered",
+            "group latency test “{group}”{how}: {count} of {} members answered",
             members.len()
         ));
         Ok(count)
+    }
+
+    /// Start the engine a latency test runs on while the proxy is off. It runs
+    /// `config` with TUN and the LAN off, in a directory of its own, so it does
+    /// not touch the proxy's files, its controller or the system proxy. The
+    /// proxy's phase, the built configuration and the phone tunnel are left as
+    /// they are. The result must go to [`AppService::stop_probe_engine`] on
+    /// every path.
+    async fn start_probe_engine(&self, config: RuntimeConfig) -> Result<ProbeEngine, AppError> {
+        if !self.engine_installed {
+            return Err(AppError::Invalid(
+                "the latency test needs the engine. Install the engine first.".to_string(),
+            ));
+        }
+        let settings = probe_config(config)?;
+        let dir = self
+            .paths()
+            .data_dir()
+            .join(format!("latency-probe-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join(PROBE_CONTROLLER_DIR))
+            .map_err(|error| AppError::Storage(self.scrub(&error.to_string())))?;
+        let engine: Arc<dyn ProxyEngine> = Arc::from((self.probe_engine)(dir.as_path()));
+        let started = engine.start(&settings).await;
+        match started {
+            Ok(handle) => Ok(ProbeEngine {
+                engine,
+                dir,
+                _handle: handle,
+            }),
+            Err(error) => {
+                let message = self.scrub(&error.to_string());
+                // A start that failed part-way can leave the engine up.
+                let _ = engine.stop().await;
+                let _ = std::fs::remove_dir_all(&dir);
+                Err(AppError::Engine(message))
+            }
+        }
+    }
+
+    /// Stop a latency test's engine and remove its directory. A stop that
+    /// fails is logged, since the engine may still be running.
+    async fn stop_probe_engine(&mut self, probe: ProbeEngine) {
+        if let Err(error) = probe.engine.stop().await {
+            let text = self.scrub(&error.to_string());
+            self.log(format!("could not stop the latency test's engine: {text}"));
+        }
+        let _ = std::fs::remove_dir_all(&probe.dir);
     }
 
     /// The installed engine, the newest one on the chosen channel, and whether
@@ -3259,47 +3295,78 @@ fn now_unix() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
 
-/// Protocols that carry traffic over UDP only. A TCP connection says nothing
-/// about them, so a direct ping leaves them untested.
-const UDP_ONLY_PROTOCOLS: &[&str] = &["hysteria", "hysteria2", "tuic", "wireguard"];
+/// How many node probes a latency test runs at once.
+const LATENCY_PROBES_AT_ONCE: usize = 16;
 
-/// Ping each node's server directly, without the engine: the time to open a
-/// TCP connection to its address and port, in milliseconds, or `None` when it
-/// does not answer within `timeout_ms`. The name lookup is done first and is
-/// not counted. A node without an address (`direct`) or on a UDP-only
-/// protocol gets no entry, so it shows as untested rather than failed.
-///
-/// This is what the latency test does while the proxy is off. It measures the
-/// route to the server, not a request through it, so it says a server is
-/// reachable, not that the proxy works.
-pub(crate) async fn tcp_ping(nodes: Vec<Node>, timeout_ms: u32) -> BTreeMap<String, Option<u32>> {
-    let timeout = std::time::Duration::from_millis(u64::from(timeout_ms));
+/// The file, in a latency test's directory, that its engine is started on.
+const PROBE_CONFIG_FILE: &str = "runtime-config.yaml";
+
+/// The controller directory of a latency test's engine, inside its directory.
+const PROBE_CONTROLLER_DIR: &str = "controllers";
+
+/// Builds the engine a latency test runs on while the proxy is off. It is
+/// given a directory the engine may write its files into.
+pub type ProbeEngineFactory = Box<dyn Fn(&Path) -> Box<dyn ProxyEngine> + Send + Sync>;
+
+/// A temporary engine that one latency test runs on. It is stopped with
+/// [`AppService::stop_probe_engine`] when the test is done.
+struct ProbeEngine {
+    engine: Arc<dyn ProxyEngine>,
+    /// The directory the engine's files are in. Removed when it is stopped.
+    dir: PathBuf,
+    /// Kept so the engine's exit signal stays with the test.
+    _handle: EngineHandle,
+}
+
+/// The engine a latency test runs on while the proxy is off: the installed
+/// engine, with its configuration and controller in `dir`.
+fn installed_probe_engine(dir: &Path) -> Box<dyn ProxyEngine> {
+    Box::new(
+        MeowEngine::installed(dir.join(PROBE_CONFIG_FILE))
+            .with_controller_dir(dir.join(PROBE_CONTROLLER_DIR)),
+    )
+}
+
+/// The configuration a latency test's engine runs: `config` with TUN off, so
+/// no elevation is needed, and the LAN closed. The only listener is the mixed
+/// port, on a free loopback address, so nothing the proxy would bind is taken.
+fn probe_config(config: RuntimeConfig) -> Result<RuntimeConfig, AppError> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|error| AppError::Engine(error.to_string()))?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| AppError::Engine(error.to_string()))?
+        .port();
+    drop(listener);
+    let mut probe = starpod_engine::tun::without_tun(&config);
+    probe.mixed_port = Some(port);
+    probe.socks_port = None;
+    probe.port = None;
+    probe.allow_lan = false;
+    probe.bind_address = Some("127.0.0.1".to_string());
+    Ok(probe)
+}
+
+/// Measure each node with `engine`'s delay test, [`LATENCY_PROBES_AT_ONCE`]
+/// at a time. Each node is given as its id and name. A probe that fails, or
+/// is not answered within `timeout_ms`, is recorded as `None`.
+async fn measure_delays(
+    engine: Arc<dyn ProxyEngine>,
+    nodes: Vec<(String, String)>,
+    url: String,
+    timeout_ms: u32,
+) -> BTreeMap<String, Option<u32>> {
+    let slots = Arc::new(tokio::sync::Semaphore::new(LATENCY_PROBES_AT_ONCE));
     let mut set = tokio::task::JoinSet::new();
-    for node in nodes {
-        let (Some(server), Some(port)) = (node.server.clone(), node.port) else {
-            continue;
-        };
-        if UDP_ONLY_PROTOCOLS.contains(&node.protocol.to_ascii_lowercase().as_str()) {
-            continue;
-        }
+    for (id, name) in nodes {
+        let engine = Arc::clone(&engine);
+        let slots = Arc::clone(&slots);
+        let url = url.clone();
         set.spawn(async move {
-            let latency = tokio::time::timeout(timeout, async {
-                let address = tokio::net::lookup_host((server.as_str(), port))
-                    .await
-                    .ok()?
-                    .next()?;
-                let started = std::time::Instant::now();
-                tokio::net::TcpStream::connect(address).await.ok()?;
-                Some(
-                    u32::try_from(started.elapsed().as_millis())
-                        .unwrap_or(u32::MAX)
-                        .max(1),
-                )
-            })
-            .await
-            .ok()
-            .flatten();
-            (node.id, latency)
+            // Held until the probe ends, so no more than the limit run at once.
+            let _slot = slots.acquire_owned().await.ok();
+            let latency = engine.delay(&name, &url, timeout_ms).await.ok();
+            (id, latency)
         });
     }
     let mut results = BTreeMap::new();
@@ -3309,52 +3376,4 @@ pub(crate) async fn tcp_ping(nodes: Vec<Node>, timeout_ms: u32) -> BTreeMap<Stri
         }
     }
     results
-}
-
-#[cfg(test)]
-mod tcp_ping_tests {
-    use super::*;
-
-    fn node(id: &str, protocol: &str, server: Option<&str>, port: Option<u16>) -> Node {
-        Node {
-            id: id.to_string(),
-            name: id.to_string(),
-            protocol: protocol.to_string(),
-            server: server.map(str::to_string),
-            port,
-            tags: Vec::new(),
-            raw: serde_json::Map::new(),
-        }
-    }
-
-    #[tokio::test]
-    async fn a_direct_ping_times_open_ports_and_skips_what_tcp_cannot_test() {
-        let open = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let open_port = open.local_addr().unwrap().port();
-        // A port that was free a moment ago: nothing listens on it.
-        let closed_port = {
-            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            probe.local_addr().unwrap().port()
-        };
-        let results = tcp_ping(
-            vec![
-                node("up", "vless", Some("127.0.0.1"), Some(open_port)),
-                node("down", "trojan", Some("127.0.0.1"), Some(closed_port)),
-                node("direct", "direct", None, None),
-                node("udp", "hysteria2", Some("127.0.0.1"), Some(open_port)),
-            ],
-            2_000,
-        )
-        .await;
-        assert!(
-            matches!(results.get("up"), Some(Some(ms)) if *ms >= 1),
-            "{results:?}"
-        );
-        assert_eq!(results.get("down"), Some(&None));
-        assert!(!results.contains_key("direct"), "no address, not tested");
-        assert!(
-            !results.contains_key("udp"),
-            "TCP says nothing about a UDP protocol"
-        );
-    }
 }

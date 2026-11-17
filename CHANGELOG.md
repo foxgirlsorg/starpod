@@ -10,6 +10,10 @@ All notable changes to Starpod are recorded here. The format follows
 
 - Crash reports are saved to the crashes folder next to the log.
 
+### Changed
+
+- Latency tests always go through the engine, also when you're not connected, and test servers in parallel.
+
 ## [1.1.0] - 2026-11-17
 
 ### Changed

@@ -1102,18 +1102,24 @@ async fn latency_is_forgotten_when_the_proxy_stops() {
 }
 
 #[tokio::test]
-async fn latency_pings_the_servers_directly_when_the_proxy_is_stopped() {
+async fn latency_runs_on_a_temporary_engine_when_the_proxy_is_stopped() {
     let dir = TempDir::new().unwrap();
     let engine = FakeEngine::default();
     let provider: Arc<dyn SubscriptionProvider> =
         Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
     let mut service = build_service(&dir, &engine, provider);
+    // The temporary engine is a fake too; it shares the record of `engine`.
+    let probe = engine.clone();
+    service.set_probe_engine_factory(Box::new(move |_dir: &std::path::Path| {
+        Box::new(probe.clone()) as Box<dyn ProxyEngine>
+    }));
     service.load().await.unwrap();
     let id = add_airport(&mut service, None).await;
     service.refresh_subscription(&id).await.unwrap();
 
-    // No engine is running, so the servers are pinged directly. The fixture's
-    // servers do not exist, so none answers; the test still runs and says so.
+    // No engine is running, so a temporary one runs the test and is stopped
+    // again. The fixture's servers do not exist, so none answers; the test
+    // still runs and says so.
     service
         .test_latency()
         .await
@@ -1122,9 +1128,14 @@ async fn latency_pings_the_servers_directly_when_the_proxy_is_stopped() {
     assert!(
         snap.log_lines
             .iter()
-            .any(|line| line.contains("direct ping, not connected")),
+            .any(|line| line.contains("temporary engine")),
         "{:?}",
         snap.log_lines
+    );
+    assert!(
+        matches!(engine.calls().last(), Some(Call::Stop)),
+        "the temporary engine is stopped after the test: {:?}",
+        engine.calls()
     );
     assert_eq!(
         snap.engine.phase,
