@@ -264,6 +264,21 @@ export component AppWindow inherits Window {
     preferred-height: 840px;
     background: Design.background;
 
+    // Open a page from the sidebar, the dock or the More sheet. Picking the
+    // page already open takes it back to its start: Settings to its section
+    // list, Profiles out of the profile editor (as Cancel does).
+    function go(page: int) {
+        if (page == Bridge.active-page) {
+            if (page == 5) {
+                Bridge.settings-section = -1;
+            }
+            if (page == 1) {
+                Bridge.editor-open = false;
+            }
+        }
+        Bridge.active-page = page;
+    }
+
     // Popups read the window size from WindowMetrics (see Select).
     // The std-widgets (TextEdit, ScrollView, ListView scrollbars) take their
     // colors from this palette. The app is dark only, so they follow it.
@@ -508,7 +523,7 @@ export component AppWindow inherits Window {
                     icon: @image-url("assets/icons/house.svg");
                     active: Bridge.active-page == 0;
                     activated => {
-                        Bridge.active-page = 0;
+                        root.go(0);
                     }
                 }
 
@@ -517,7 +532,7 @@ export component AppWindow inherits Window {
                     icon: @image-url("assets/icons/layers.svg");
                     active: Bridge.active-page == 1;
                     activated => {
-                        Bridge.active-page = 1;
+                        root.go(1);
                     }
                 }
 
@@ -526,7 +541,7 @@ export component AppWindow inherits Window {
                     icon: @image-url("assets/icons/server.svg");
                     active: Bridge.active-page == 2;
                     activated => {
-                        Bridge.active-page = 2;
+                        root.go(2);
                     }
                 }
 
@@ -535,7 +550,7 @@ export component AppWindow inherits Window {
                     icon: @image-url("assets/icons/settings.svg");
                     active: Bridge.active-page == 5;
                     activated => {
-                        Bridge.active-page = 5;
+                        root.go(5);
                     }
                 }
 
@@ -656,7 +671,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/house.svg");
                         active: Bridge.active-page == 0;
                         activated => {
-                            Bridge.active-page = 0;
+                            root.go(0);
                             root.nav-open = false;
                         }
                     }
@@ -666,7 +681,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/layers.svg");
                         active: Bridge.active-page == 1;
                         activated => {
-                            Bridge.active-page = 1;
+                            root.go(1);
                             root.nav-open = false;
                         }
                     }
@@ -676,7 +691,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/server.svg");
                         active: Bridge.active-page == 2;
                         activated => {
-                            Bridge.active-page = 2;
+                            root.go(2);
                             root.nav-open = false;
                         }
                     }
@@ -686,7 +701,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/route.svg");
                         active: Bridge.active-page == 3;
                         activated => {
-                            Bridge.active-page = 3;
+                            root.go(3);
                             root.nav-open = false;
                         }
                     }
@@ -696,7 +711,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/scroll-text.svg");
                         active: Bridge.active-page == 4;
                         activated => {
-                            Bridge.active-page = 4;
+                            root.go(4);
                             root.nav-open = false;
                         }
                     }
@@ -706,7 +721,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/activity.svg");
                         active: Bridge.active-page == 6;
                         activated => {
-                            Bridge.active-page = 6;
+                            root.go(6);
                             root.nav-open = false;
                         }
                     }
@@ -725,7 +740,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("assets/icons/settings.svg");
                         active: Bridge.active-page == 5;
                         activated => {
-                            Bridge.active-page = 5;
+                            root.go(5);
                             root.nav-open = false;
                         }
                     }
@@ -835,7 +850,7 @@ export component AppWindow inherits Window {
                 icon: @image-url("assets/icons/activity.svg");
                 active: Bridge.active-page == 6;
                 activated => {
-                    Bridge.active-page = 6;
+                    root.go(6);
                     root.more-open = false;
                 }
             }
@@ -845,7 +860,7 @@ export component AppWindow inherits Window {
                 icon: @image-url("assets/icons/route.svg");
                 active: Bridge.active-page == 3;
                 activated => {
-                    Bridge.active-page = 3;
+                    root.go(3);
                     root.more-open = false;
                 }
             }
@@ -855,7 +870,7 @@ export component AppWindow inherits Window {
                 icon: @image-url("assets/icons/scroll-text.svg");
                 active: Bridge.active-page == 4;
                 activated => {
-                    Bridge.active-page = 4;
+                    root.go(4);
                     root.more-open = false;
                 }
             }
