@@ -418,7 +418,9 @@ export component Select inherits Rectangle {
                 border-width: 1px;
                 border-color: root.error != "" ? Design.destructive
                     : (open-popup.is-open ? Design.ring : Design.input);
-                background: transparent;
+                // Solid, so a field over a picture (Home's background) stays
+                // readable; on a card it matches the card.
+                background: Design.card;
                 opacity: root.enabled ? 1 : 0.5;
 
                 value-text := EmojiText {
