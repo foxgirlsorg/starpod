@@ -105,7 +105,6 @@ export component HomePage inherits Rectangle {
     private property <bool> blocked: !root.running && Bridge.connect-blocked-reason != "";
     private property <bool> clickable: !root.blocked && !root.transitioning;
     private property <bool> hovered: ta.has-hover && root.clickable;
-    private property <bool> pulse-high: true;
 
     private property <string> status-title: root.running ? @tr("Connected")
         : Bridge.engine-phase == "starting" ? @tr("Connecting…")
@@ -138,15 +137,6 @@ export component HomePage inherits Rectangle {
     private property <int> gi: max(0, min(root.group-index, Bridge.groups.length - 1));
 
     background: transparent;
-
-    // The pulse of the icon while the engine is starting or stopping.
-    Timer {
-        interval: 900ms;
-        running: root.transitioning;
-        triggered => {
-            root.pulse-high = !root.pulse-high;
-        }
-    }
 
     // Slint has no search over a model, so these invisible repeaters find the
     // indexes: each element compares itself with the name it looks for when it
@@ -422,14 +412,43 @@ export component HomePage inherits Rectangle {
                     horizontal-stretch: 1;
                     height: 120px;
 
+                    // The glow: soft behind the connected button, and a gentle
+                    // pulse while starting or stopping. The animation-tick()
+                    // reads sit in the branch that is only taken then, so the
+                    // window does not redraw every frame at rest.
                     Rectangle {
                         x: (parent.width - self.width) / 2;
                         y: -14px;
                         width: 148px;
                         height: 148px;
                         border-radius: Design.radius-full;
-                        background: root.running ? Design.primary-soft : transparent;
+                        background: (root.running || root.transitioning) ? Design.primary-soft : transparent;
+                        opacity: root.transitioning ? 0.35 + 0.65 * (0.5 + 0.5 * sin(mod(animation-tick() / 1s, 1) * 360deg)) : 1;
                         animate background { duration: 150ms; }
+                    }
+
+                    // The spinning arc while starting or stopping: a 100-degree
+                    // arc, 3px wide, centred on the button's 148px ring. The
+                    // arc is drawn at the top and the wrapper turns it once a
+                    // second. It fades out over 200ms once connected, so it
+                    // does not vanish abruptly.
+                    ring := Rectangle {
+                        x: (parent.width - self.width) / 2;
+                        y: -14px;
+                        width: 148px;
+                        height: 148px;
+                        opacity: root.transitioning ? 1 : 0;
+                        transform-rotation: root.transitioning ? mod(animation-tick() / 1s, 1) * 360deg : 0deg;
+                        animate opacity { duration: 200ms; }
+
+                        // Stroke centred 1.5px in from the edge, so it stays inside the 148px box.
+                        Path {
+                            commands: "M 74 1.5 A 72.5 72.5 0 0 1 145.4 86.6";
+                            fill: transparent;
+                            stroke: Design.primary;
+                            stroke-width: 3px;
+                            stroke-line-cap: round;
+                        }
                     }
 
                     button := Rectangle {
@@ -456,8 +475,6 @@ export component HomePage inherits Rectangle {
                                 : root.transitioning ? Design.primary
                                 : root.hovered ? Design.foreground
                                 : Design.muted-foreground;
-                            opacity: root.transitioning ? (root.pulse-high ? 1 : 0.4) : 1;
-                            animate opacity { duration: 900ms; }
                             animate colorize { duration: 150ms; }
                         }
 
@@ -473,9 +490,11 @@ export component HomePage inherits Rectangle {
                             }
                         }
 
+                        // Stays enabled while starting or stopping, so the pointer
+                        // looks normal; toggle() drops the press instead.
                         ta := TouchArea {
-                            enabled: root.clickable;
-                            mouse-cursor: root.clickable ? pointer : default;
+                            enabled: !root.blocked;
+                            mouse-cursor: root.blocked ? default : pointer;
                             clicked => {
                                 root.toggle();
                             }
@@ -598,6 +617,11 @@ export component HomePage inherits Rectangle {
     }
 
     function toggle() {
+        // A press during starting or stopping is ignored, so one click
+        // sends one command.
+        if (root.transitioning) {
+            return;
+        }
         if (root.running) {
             Bridge.disconnect();
         } else if (root.clickable) {
