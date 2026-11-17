@@ -142,11 +142,18 @@ pub struct ProfileSource {
 /// A phone's VPN (Android's `VpnService`): it captures the device's traffic
 /// and hands it to the engine's local SOCKS port.
 ///
-/// Both calls return at once. Starting may ask the user for permission
-/// first; a tunnel that cannot start, or that the system closes later,
-/// reports it with [`AppService::phone_tunnel_failed`].
+/// Connecting asks for the VPN permission first ([`PhoneTunnel::prepare`]),
+/// then starts the engine, then the tunnel. The proxy counts as connected
+/// once the tunnel reports it is up ([`AppService::phone_tunnel_ready`]).
+/// A tunnel that cannot start, or that the system closes later, reports it
+/// with [`AppService::phone_tunnel_failed`].
+#[async_trait::async_trait]
 pub trait PhoneTunnel: Send + Sync {
+    /// Make sure the app may open the tunnel, asking the user if it may
+    /// not yet. An error says why it may not.
+    async fn prepare(&self) -> Result<(), String>;
     /// Capture the device's traffic and send it to `127.0.0.1:socks_port`.
+    /// Returns at once.
     fn start(&self, socks_port: u16);
     /// Stop capturing traffic.
     fn stop(&self);
@@ -174,6 +181,10 @@ pub struct AppService {
     meta_writable: bool,
     /// The configuration the state last built into.
     built: Option<RuntimeConfig>,
+    /// The configuration the running engine was started or last reloaded
+    /// with, when this run knows it. A change that builds the same one
+    /// leaves the engine alone.
+    running_config: Option<RuntimeConfig>,
     /// The primary group of the configuration in `built`.
     built_primary: Option<String>,
     /// The result of the last latency test, by node id. `None` means the
@@ -181,10 +192,6 @@ pub struct AppService {
     latencies: BTreeMap<String, Option<u32>>,
     /// The member each group uses now, as the running engine reports it
     /// (group name to member name). Empty while the engine is not running.
-    /// The configuration the running engine was started or last reloaded
-    /// with, when this run knows it. A change that builds the same one
-    /// leaves the engine alone.
-    running_config: Option<RuntimeConfig>,
     live_selected: BTreeMap<String, String>,
     warnings: Vec<String>,
     /// Warnings about engine-managed subscriptions, from the last engine
@@ -216,6 +223,8 @@ pub struct AppService {
     phone_tunnel: Option<Arc<dyn PhoneTunnel>>,
     /// The engine port the phone tunnel was started for, while it is on.
     phone_tunnel_port: Option<u16>,
+    /// Whether that tunnel is up and carrying traffic.
+    phone_tunnel_up: bool,
     updates: watch::Sender<AppSnapshot>,
     /// A subscription the user just added, to be put in use once its first
     /// refresh has servers. Putting it in use before then would leave the
@@ -254,6 +263,7 @@ impl AppService {
             state_writable: true,
             meta_writable: true,
             built: None,
+            running_config: None,
             built_primary: None,
             latencies: BTreeMap::new(),
             live_selected: BTreeMap::new(),
@@ -263,7 +273,6 @@ impl AppService {
             engine_status: EngineStatus::default(),
             engine_error: None,
             handle: None,
-            running_config: None,
             notice: None,
             app_log: VecDeque::new(),
             installed_engine,
@@ -275,6 +284,7 @@ impl AppService {
             system_proxy_backend: sysproxy::os_backend(),
             phone_tunnel: None,
             phone_tunnel_port: None,
+            phone_tunnel_up: false,
             updates: watch::channel(AppSnapshot::default()).0,
             activate_after_refresh: None,
         };
@@ -320,12 +330,22 @@ impl AppService {
     /// `reason` is shown.
     pub async fn phone_tunnel_failed(&mut self, reason: &str) {
         self.phone_tunnel_port = None;
+        self.phone_tunnel_up = false;
         self.log(format!("the VPN stopped: {reason}"));
         let result = self
             .disconnect_inner()
             .await
             .and(Err::<(), _>(AppError::Invalid(reason.to_string())));
         let _ = self.finish(result);
+    }
+
+    /// The phone tunnel is up: the proxy now counts as connected.
+    pub fn phone_tunnel_ready(&mut self) {
+        if self.phone_tunnel_port.is_some() && !self.phone_tunnel_up {
+            self.phone_tunnel_up = true;
+            self.log("the VPN is up");
+            self.publish();
+        }
     }
 
     pub fn into_shared(self) -> SharedAppService {
@@ -497,8 +517,15 @@ impl AppService {
             })
         });
 
+        // On a phone the proxy is connected once its VPN is up; until then
+        // it is still connecting.
+        let tunnel_pending = self.phone_tunnel_port.is_some() && !self.phone_tunnel_up;
         let engine = EngineView {
-            phase: self.engine_status.phase,
+            phase: if tunnel_pending && self.engine_status.phase.is_running() {
+                EnginePhase::Starting
+            } else {
+                self.engine_status.phase
+            },
             installed: self.engine_installed,
             version: self.engine_status.version.clone(),
             uptime_secs: self.engine_status.uptime_secs,
@@ -596,6 +623,7 @@ impl AppService {
                 if self.phone_tunnel_port.take().is_some() {
                     tunnel.stop();
                 }
+                self.phone_tunnel_up = false;
                 if let Some(port) = wanted {
                     tunnel.start(port);
                     self.phone_tunnel_port = Some(port);
@@ -1998,6 +2026,11 @@ impl AppService {
         if self.refresh_engine_status().await.is_running() {
             return Ok(());
         }
+        // On a phone the VPN permission comes first: without it nothing
+        // would reach the engine.
+        if let Some(tunnel) = self.phone_tunnel.clone() {
+            tunnel.prepare().await.map_err(AppError::Invalid)?;
+        }
         let composed = self.compose_current()?;
         self.adopt(&composed);
 
@@ -2016,6 +2049,7 @@ impl AppService {
             .await
             .map_err(|error| self.engine_failure(error))?;
         self.handle = Some(handle);
+        self.running_config = Some(composed.config.clone());
         self.engine_error = None;
         self.refresh_engine_status().await;
         self.assert_default_selection(composed.default_selection.as_ref())
@@ -2044,12 +2078,12 @@ impl AppService {
             .await
             .map_err(|error| self.engine_failure(error))?;
         self.handle = None;
+        self.running_config = None;
         self.engine_error = None;
         self.refresh_engine_status().await;
         // Latencies were measured against a proxy that is now gone.
         self.latencies.clear();
         self.sync_system_proxy().await;
-        self.running_config = Some(composed.config.clone());
         Ok(())
     }
 
@@ -2078,7 +2112,6 @@ impl AppService {
         state.preferences = prefs;
         self.commit_user(state).await
     }
-        self.running_config = None;
 
     async fn select_node_inner(&mut self, node_id: &str) -> Result<(), AppError> {
         let current = self.compose_current()?;
@@ -2668,6 +2701,11 @@ impl AppService {
 
     /// Validate and reload the candidate, if and only if the engine runs.
     async fn apply_if_running(&mut self, composed: &Composed) -> Result<(), AppError> {
+        // A change the engine's configuration does not see (the theme, the
+        // background, the accent colour) leaves the engine alone.
+        if self.running_config.as_ref() == Some(&composed.config) {
+            return Ok(());
+        }
         if !self.refresh_engine_status().await.is_running() {
             return Ok(());
         }
@@ -2683,6 +2721,7 @@ impl AppService {
             .reload(&composed.config)
             .await
             .map_err(|error| self.engine_failure(error))?;
+        self.running_config = Some(composed.config.clone());
         // The engine applies its managed subscriptions again on a reload,
         // which puts their rules ahead of the user's (ARCHITECTURE §4.6).
         if !self.engine_managed_names().is_empty() {
@@ -2701,11 +2740,6 @@ impl AppService {
     /// not returned: the proxy runs, on the engine's own first member.
     async fn assert_default_selection(&mut self, default: Option<&(String, String)>) {
         let Some((group, member)) = default else {
-        // A change the engine's configuration does not see (the theme, the
-        // background, the accent colour) leaves the engine alone.
-        if self.running_config.as_ref() == Some(&composed.config) {
-            return Ok(());
-        }
             return;
         };
         if !self.engine_status.phase.is_running() {
@@ -2721,7 +2755,6 @@ impl AppService {
 
     // ----- engine-managed subscriptions (ARCHITECTURE §4.6, R12) ---------------
 
-        self.running_config = Some(composed.config.clone());
     /// Check the engine-managed subscriptions, as the background loop does
     /// every 30 seconds.
     ///

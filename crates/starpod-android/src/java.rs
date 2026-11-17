@@ -43,6 +43,11 @@ pub fn init(app: &AndroidApp) -> Result<(), String> {
             fn_ptr: crate::vpn::vpn_failed as *mut c_void,
         },
         NativeMethod {
+            name: "vpnPermission".into(),
+            sig: "(ZLjava/lang/String;)V".into(),
+            fn_ptr: crate::vpn::vpn_permission as *mut c_void,
+        },
+        NativeMethod {
             name: "updateFailed".into(),
             sig: "(Ljava/lang/String;)V".into(),
             fn_ptr: crate::update::update_failed as *mut c_void,

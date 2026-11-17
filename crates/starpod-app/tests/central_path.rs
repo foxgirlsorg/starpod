@@ -2387,7 +2387,12 @@ async fn removing_a_pasted_profile_deletes_its_source_file() {
 #[derive(Default)]
 struct RecordingTunnel(Mutex<Vec<String>>);
 
+#[async_trait]
 impl starpod_app::PhoneTunnel for RecordingTunnel {
+    async fn prepare(&self) -> Result<(), String> {
+        self.0.lock().unwrap().push("prepare".to_string());
+        Ok(())
+    }
     fn start(&self, socks_port: u16) {
         self.0.lock().unwrap().push(format!("start {socks_port}"));
     }
@@ -2410,9 +2415,18 @@ async fn a_phone_tunnel_follows_the_engine_and_a_failed_one_stops_the_proxy() {
     service.refresh_subscription(&id).await.unwrap();
 
     service.connect().await.unwrap();
-    let started = tunnel.0.lock().unwrap().clone();
-    assert_eq!(started.len(), 1, "{started:?}");
-    assert!(started[0].starts_with("start "), "{started:?}");
+    let calls = tunnel.0.lock().unwrap().clone();
+    assert_eq!(
+        calls.len(),
+        2,
+        "permission first, then the tunnel: {calls:?}"
+    );
+    assert_eq!(calls[0], "prepare");
+    assert!(calls[1].starts_with("start "), "{calls:?}");
+    // Connecting until the tunnel is up.
+    assert_eq!(service.snapshot().engine.phase, EnginePhase::Starting);
+    service.phone_tunnel_ready();
+    assert!(service.snapshot().engine.phase.is_running());
 
     service.disconnect().await.unwrap();
     assert_eq!(tunnel.0.lock().unwrap().last().unwrap(), "stop");
@@ -2422,7 +2436,7 @@ async fn a_phone_tunnel_follows_the_engine_and_a_failed_one_stops_the_proxy() {
     service.connect().await.unwrap();
     service.phone_tunnel_failed("The VPN was turned off").await;
     let calls = tunnel.0.lock().unwrap().clone();
-    assert_eq!(calls.len(), 3, "{calls:?}");
+    assert_eq!(calls.len(), 5, "{calls:?}");
     assert!(!service.snapshot().engine.phase.is_running());
     assert_eq!(
         service.snapshot().notice.map(|(_, text)| text),

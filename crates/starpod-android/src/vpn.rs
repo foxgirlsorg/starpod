@@ -16,9 +16,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JString};
-use jni::sys::jint;
+use jni::sys::{jboolean, jint};
 use starpod_app::{PhoneTunnel, SharedAppService};
 use tokio::runtime::Handle;
+use tokio::sync::oneshot;
 use tracing::{info, warn};
 use tun2proxy::{ArgDns, Args, CancellationToken, ProxyParameters};
 
@@ -41,6 +42,8 @@ struct State {
     port: Option<u16>,
     /// Stops the tun2proxy reading the tunnel, while one runs.
     running: Option<CancellationToken>,
+    /// Waits for the user's answer to the VPN permission request.
+    permission: Option<oneshot::Sender<Result<(), String>>>,
 }
 
 /// Make the VPN the service's phone tunnel. The Java bridge
@@ -109,6 +112,9 @@ impl Vpn {
             .close_fd_on_drop(true)
             .setup(false);
         info!(port, "the VPN is up");
+        let service = self.service.clone();
+        self.runtime
+            .spawn(async move { service.lock().await.phone_tunnel_ready() });
         self.runtime.spawn(async move {
             let outcome = tun2proxy::general_run_async(args, MTU, false, token.clone()).await;
             if token.is_cancelled() {
@@ -146,7 +152,22 @@ impl Vpn {
     }
 }
 
+/// How long the user has to answer the VPN permission request.
+const PERMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+#[async_trait::async_trait]
 impl PhoneTunnel for Vpn {
+    async fn prepare(&self) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.state().permission = Some(tx);
+        self.call("requestVpnPermission");
+        match tokio::time::timeout(PERMISSION_TIMEOUT, rx).await {
+            Ok(Ok(answer)) => answer,
+            Ok(Err(_)) => Err("the VPN permission request was dropped".to_string()),
+            Err(_) => Err("Starpod needs the VPN permission to connect".to_string()),
+        }
+    }
+
     fn start(&self, socks_port: u16) {
         {
             let mut state = self.state();
@@ -190,5 +211,27 @@ pub extern "system" fn vpn_failed(mut env: JNIEnv, _class: JClass, reason: JStri
         .unwrap_or_else(|_| "The VPN stopped".to_string());
     if let Some(vpn) = VPN.get() {
         vpn.fail(reason);
+    }
+}
+
+/// `MainActivity.vpnPermission(boolean, String)`.
+pub extern "system" fn vpn_permission(
+    mut env: JNIEnv,
+    _class: JClass,
+    granted: jboolean,
+    reason: JString,
+) {
+    let answer = if granted != 0 {
+        Ok(())
+    } else {
+        Err(env
+            .get_string(&reason)
+            .map(Into::into)
+            .unwrap_or_else(|_| "Starpod needs the VPN permission to connect".to_string()))
+    };
+    if let Some(vpn) = VPN.get()
+        && let Some(waiting) = vpn.state().permission.take()
+    {
+        let _ = waiting.send(answer);
     }
 }

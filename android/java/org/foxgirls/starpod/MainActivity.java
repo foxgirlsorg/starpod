@@ -37,26 +37,34 @@ public class MainActivity extends NativeActivity {
     /** The update could not be installed, or Android did not finish it. */
     static native void updateFailed(String reason);
 
-    /** Ask for the VPN permission if needed, then start the VPN. Any thread. */
-    public void startVpn() {
+    /** Whether the user let Starpod open a VPN, the answer to {@link #requestVpnPermission()}. */
+    static native void vpnPermission(boolean granted, String reason);
+
+    /** Ask for the VPN permission if Starpod does not have it yet. Any thread. */
+    public void requestVpnPermission() {
         runOnUiThread(() -> {
             Intent consent;
             try {
                 consent = VpnService.prepare(this);
             } catch (RuntimeException e) {
-                vpnFailed("Android refused to set up a VPN: " + e.getMessage());
+                vpnPermission(false, "Android refused to set up a VPN: " + e.getMessage());
                 return;
             }
             if (consent == null) {
-                command(StarpodVpnService.ACTION_START);
+                vpnPermission(true, null);
                 return;
             }
             try {
                 startActivityForResult(consent, VPN_REQUEST);
             } catch (ActivityNotFoundException e) {
-                vpnFailed("This device has no VPN support");
+                vpnPermission(false, "This device has no VPN support");
             }
         });
+    }
+
+    /** Start the VPN; the permission was granted. Any thread. */
+    public void startVpn() {
+        runOnUiThread(() -> command(StarpodVpnService.ACTION_START));
     }
 
     /** Stop the VPN. Any thread. */
@@ -81,9 +89,9 @@ public class MainActivity extends NativeActivity {
             return;
         }
         if (resultCode == RESULT_OK) {
-            command(StarpodVpnService.ACTION_START);
+            vpnPermission(true, null);
         } else {
-            vpnFailed("Starpod needs the VPN permission to connect");
+            vpnPermission(false, "Starpod needs the VPN permission to connect");
         }
     }
 
