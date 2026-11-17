@@ -505,6 +505,11 @@ impl AppService {
     /// The `set_system_proxy` action's body.
     async fn set_system_proxy_inner(&mut self, enabled: bool) -> Result<(), AppError> {
         if self.state.preferences.system_proxy == enabled {
+            // The setting is already saved. Enabling it again retries a change
+            // that failed earlier; the sync does nothing when it is in effect.
+            if enabled {
+                self.sync_system_proxy().await;
+            }
             return Ok(());
         }
         let mut state = self.state.clone();
@@ -536,6 +541,17 @@ impl AppService {
         let wanted = prefs.system_proxy && self.engine_status.phase.is_running();
         let path = self.system_proxy_record();
         if wanted {
+            // Do not point the system at a port nothing listens on: the
+            // browsers would then fail every request.
+            if !Self::mixed_port_listens(want.port).await {
+                let text = format!(
+                    "Nothing is listening on 127.0.0.1:{}; another program may be using that port",
+                    want.port
+                );
+                self.log(format!("the system proxy was not changed: {text}"));
+                self.system_proxy.error = Some(text);
+                return;
+            }
             let result = self
                 .system_proxy
                 .apply(self.system_proxy_backend.as_ref(), &path, want)
@@ -574,10 +590,25 @@ impl AppService {
 
     /// The mixed port the engine listens on, which the system proxy points at.
     fn current_mixed_port(&self) -> u16 {
+        // The running engine's port. Before it is built, the saved preference
+        // is the port it will listen on.
         self.built
             .as_ref()
             .and_then(|config| config.mixed_port.or(config.port))
+            .or(self.state.preferences.mixed_port)
             .unwrap_or(DEFAULT_MIXED_PORT)
+    }
+
+    /// Whether something accepts connections on 127.0.0.1:`port`, within half
+    /// a second. A port another program holds, or a listener that never
+    /// started, does not.
+    async fn mixed_port_listens(port: u16) -> bool {
+        tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await
+        .is_ok_and(|connected| connected.is_ok())
     }
 
     /// Restore the proxy settings a crashed run left behind. Returns a

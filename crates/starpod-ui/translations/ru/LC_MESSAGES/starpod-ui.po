@@ -1330,3 +1330,6 @@ msgstr "Карта"
 
 msgid "Dots"
 msgstr "Точки"
+
+msgid "Applies when connected"
+msgstr "Применится при подключении"

@@ -1330,3 +1330,6 @@ msgstr ""
 
 msgid "Dots"
 msgstr ""
+
+msgid "Applies when connected"
+msgstr ""

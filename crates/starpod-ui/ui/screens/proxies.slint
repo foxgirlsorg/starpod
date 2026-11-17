@@ -286,7 +286,9 @@ export component ProxiesPage inherits Rectangle {
 
                             SwitchRow {
                                 label: @tr("System proxy");
-                                checked: Bridge.system-proxy-active;
+                                // Connected: whether the system proxy points at the engine.
+                                // Not connected: the saved setting, which applies on connect.
+                                checked: root.running ? Bridge.system-proxy-active : Bridge.settings.system-proxy;
                                 toggled(value) => {
                                     Bridge.toggle-system-proxy(value);
                                 }
@@ -371,6 +373,14 @@ export component ProxiesPage inherits Rectangle {
                         if (root.running && Bridge.system-proxy-error != "") : Text {
                             text: Bridge.system-proxy-error;
                             color: Design.destructive;
+                            font-family: Design.font-family;
+                            font-size: Design.font-xs;
+                            wrap: word-wrap;
+                        }
+
+                        if (!root.running && Bridge.settings.system-proxy) : Text {
+                            text: @tr("Applies when connected");
+                            color: Design.muted-foreground;
                             font-family: Design.font-family;
                             font-size: Design.font-xs;
                             wrap: word-wrap;
