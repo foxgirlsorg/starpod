@@ -1366,3 +1366,9 @@ msgstr "О программе"
 
 msgid "Made by foxgirls. Source code, releases and issues are on GitHub."
 msgstr "Сделано foxgirls. Исходный код, релизы и задачи — на GitHub."
+
+msgid "Ports, LAN access and IPv6"
+msgstr "Порты, доступ из сети и IPv6"
+
+msgid "Up {}"
+msgstr "Работает {}"

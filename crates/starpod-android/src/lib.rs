@@ -17,8 +17,12 @@
 //! - The engine is the static musl Linux build of meow, installed from the
 //!   app like on the desktop. The app targets API 28 so it may run a binary
 //!   from its own data directory.
+//! - Traffic reaches the engine through a VPN ([`vpn`]), never a system
+//!   proxy: connecting turns the VPN on, disconnecting turns it off.
 
 #![cfg(target_os = "android")]
+
+mod vpn;
 
 use std::ffi::{CString, c_char, c_int};
 use std::io::{self, Write};
@@ -63,16 +67,17 @@ fn android_main(app: AndroidApp) {
         "starpod starting on Android"
     );
 
+    let activity = app.clone();
     if let Err(error) = slint::android::init(app) {
         error!(%error, "the Android window backend could not start");
         return;
     }
-    if let Err(error) = run() {
+    if let Err(error) = run(&activity) {
         error!(%error, "starpod stopped with an error");
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+fn run(app: &AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("starpod-runtime")
@@ -83,6 +88,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Ok::<_, starpod_app::AppError>(service.into_shared())
     })?;
     info!("service opened and loaded");
+    if let Err(error) = vpn::install(app, runtime.handle(), service.clone()) {
+        error!(%error, "the VPN could not be set up");
+    }
     let outcome = ui::run(
         runtime.handle().clone(),
         service.clone(),

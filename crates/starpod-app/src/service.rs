@@ -139,6 +139,19 @@ pub struct ProfileSource {
     pub local: bool,
 }
 
+/// A phone's VPN (Android's `VpnService`): it captures the device's traffic
+/// and hands it to the engine's local SOCKS port.
+///
+/// Both calls return at once. Starting may ask the user for permission
+/// first; a tunnel that cannot start, or that the system closes later,
+/// reports it with [`AppService::phone_tunnel_failed`].
+pub trait PhoneTunnel: Send + Sync {
+    /// Capture the device's traffic and send it to `127.0.0.1:socks_port`.
+    fn start(&self, socks_port: u16);
+    /// Stop capturing traffic.
+    fn stop(&self);
+}
+
 /// The application service.
 ///
 /// Every mutating method leaves the snapshot up to date and publishes it.
@@ -193,6 +206,12 @@ pub struct AppService {
     system_proxy: SystemProxy,
     /// The platform code that reads and writes the system proxy.
     system_proxy_backend: Box<dyn sysproxy::Backend>,
+    /// On a phone, the VPN that carries the device's traffic to the engine.
+    /// When set, it takes the system proxy's place: it is on exactly while
+    /// the engine runs, whatever the system proxy setting says.
+    phone_tunnel: Option<Arc<dyn PhoneTunnel>>,
+    /// The engine port the phone tunnel was started for, while it is on.
+    phone_tunnel_port: Option<u16>,
     updates: watch::Sender<AppSnapshot>,
     /// A subscription the user just added, to be put in use once its first
     /// refresh has servers. Putting it in use before then would leave the
@@ -249,6 +268,8 @@ impl AppService {
             device,
             system_proxy: SystemProxy::default(),
             system_proxy_backend: sysproxy::os_backend(),
+            phone_tunnel: None,
+            phone_tunnel_port: None,
             updates: watch::channel(AppSnapshot::default()).0,
             activate_after_refresh: None,
         };
@@ -282,6 +303,26 @@ impl AppService {
     }
 
     /// Move the service behind a lock, for a UI on another thread.
+    /// Use `tunnel` as the way traffic reaches the engine (Android's VPN)
+    /// instead of the system proxy.
+    pub fn set_phone_tunnel(&mut self, tunnel: Arc<dyn PhoneTunnel>) {
+        self.phone_tunnel = Some(tunnel);
+    }
+
+    /// The phone tunnel could not start, or the system closed it (the user
+    /// turned the VPN off in the system settings, or another VPN app took
+    /// over). The proxy is stopped, since nothing reaches it any more, and
+    /// `reason` is shown.
+    pub async fn phone_tunnel_failed(&mut self, reason: &str) {
+        self.phone_tunnel_port = None;
+        self.log(format!("the VPN stopped: {reason}"));
+        let result = self
+            .disconnect_inner()
+            .await
+            .and(Err::<(), _>(AppError::Invalid(reason.to_string())));
+        let _ = self.finish(result);
+    }
+
     pub fn into_shared(self) -> SharedAppService {
         Arc::new(Mutex::new(self))
     }
@@ -543,6 +584,20 @@ impl AppService {
     /// runs, and restored otherwise. A failure is recorded, not returned, so a
     /// proxy problem never fails the action that caused the sync.
     async fn sync_system_proxy(&mut self) {
+        if let Some(tunnel) = self.phone_tunnel.clone() {
+            let port = self.current_mixed_port();
+            let wanted = self.engine_status.phase.is_running().then_some(port);
+            if wanted != self.phone_tunnel_port {
+                if self.phone_tunnel_port.take().is_some() {
+                    tunnel.stop();
+                }
+                if let Some(port) = wanted {
+                    tunnel.start(port);
+                    self.phone_tunnel_port = Some(port);
+                }
+            }
+            return;
+        }
         let prefs = &self.state.preferences;
         let want = Desired {
             mode: prefs.sysproxy_mode,

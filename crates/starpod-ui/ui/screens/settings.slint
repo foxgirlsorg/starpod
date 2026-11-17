@@ -46,7 +46,8 @@ export component SettingsPage inherits Rectangle {
     ];
     private property <[string]> section-texts: [
         @tr("Startup, routing, subscriptions and updates"),
-        @tr("Ports, LAN access, IPv6 and the system proxy"),
+        // A phone connects through its VPN, never a system proxy or TUN.
+        Bridge.mobile ? @tr("Ports, LAN access and IPv6") : @tr("Ports, LAN access, IPv6 and the system proxy"),
         @tr("The virtual adapter that routes all system traffic"),
         @tr("How the engine resolves names"),
         @tr("Reads domain names from the traffic"),
@@ -348,8 +349,9 @@ export component SettingsPage inherits Rectangle {
 
                 if (root.section < 0) : Card {
                     for name[i] in root.section-names : VerticalLayout {
-                        // Global shortcuts (9) do not exist on a phone.
-                        if !(Bridge.mobile && i == 9) : SectionLink {
+                        // TUN (2) and global shortcuts (9) do not exist on a
+                        // phone: it connects through its VPN.
+                        if !(Bridge.mobile && (i == 2 || i == 9)) : SectionLink {
                             icon: root.section-icons[i];
                             text: name;
                             description: root.section-texts[i];
@@ -837,7 +839,7 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
 
-                    Card {
+                    if (!Bridge.mobile) : Card {
                         CardHeader {
                             title: @tr("System proxy");
                         }

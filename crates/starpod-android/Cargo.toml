@@ -26,3 +26,6 @@ android-activity = { version = "0.6", features = ["native-activity"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# The VPN: packets from the Android tunnel go to the engine's SOCKS port.
+tun2proxy = { version = "0.8.7", default-features = false }
+jni = "0.21"

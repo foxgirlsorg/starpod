@@ -2379,3 +2379,50 @@ async fn removing_a_pasted_profile_deletes_its_source_file() {
     assert!(service.snapshot().subscriptions.is_empty());
     assert!(!source_file.exists(), "the pasted source is gone");
 }
+
+/// A phone tunnel that records what it was asked to do.
+#[derive(Default)]
+struct RecordingTunnel(Mutex<Vec<String>>);
+
+impl starpod_app::PhoneTunnel for RecordingTunnel {
+    fn start(&self, socks_port: u16) {
+        self.0.lock().unwrap().push(format!("start {socks_port}"));
+    }
+    fn stop(&self) {
+        self.0.lock().unwrap().push("stop".to_string());
+    }
+}
+
+#[tokio::test]
+async fn a_phone_tunnel_follows_the_engine_and_a_failed_one_stops_the_proxy() {
+    let dir = TempDir::new().unwrap();
+    let engine = FakeEngine::default();
+    let provider: Arc<dyn SubscriptionProvider> =
+        Arc::new(StaticSubscriptionProvider::new(FIXTURE.as_bytes().to_vec()));
+    let mut service = build_service(&dir, &engine, provider);
+    let tunnel = Arc::new(RecordingTunnel::default());
+    service.set_phone_tunnel(tunnel.clone());
+    service.load().await.unwrap();
+    let id = add_airport(&mut service, None).await;
+    service.refresh_subscription(&id).await.unwrap();
+
+    service.connect().await.unwrap();
+    let started = tunnel.0.lock().unwrap().clone();
+    assert_eq!(started.len(), 1, "{started:?}");
+    assert!(started[0].starts_with("start "), "{started:?}");
+
+    service.disconnect().await.unwrap();
+    assert_eq!(tunnel.0.lock().unwrap().last().unwrap(), "stop");
+
+    // A tunnel the system closes stops the proxy and says why; it is not
+    // asked to stop again.
+    service.connect().await.unwrap();
+    service.phone_tunnel_failed("The VPN was turned off").await;
+    let calls = tunnel.0.lock().unwrap().clone();
+    assert_eq!(calls.len(), 3, "{calls:?}");
+    assert!(!service.snapshot().engine.phase.is_running());
+    assert_eq!(
+        service.snapshot().notice.map(|(_, text)| text),
+        Some("The VPN was turned off".to_string())
+    );
+}

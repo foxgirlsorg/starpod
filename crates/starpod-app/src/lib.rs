@@ -43,7 +43,7 @@ pub mod ui;
 pub mod update;
 
 pub use error::{AppError, RuleLineError};
-pub use service::{AppService, ConfigCheck, ServiceDeps, SharedAppService};
+pub use service::{AppService, ConfigCheck, PhoneTunnel, ServiceDeps, SharedAppService};
 pub use snapshot::{
     AnnouncementView, AppSnapshot, EngineView, GroupView, Latency, MemberView, NodeView,
     NoticeKind, RuleKindView, RuleView, SubscriptionStatus, SubscriptionView,

@@ -2,12 +2,13 @@
 # Build the Starpod APK: libstarpod.so (crates/starpod-android) for each ABI,
 # packed with android/AndroidManifest.xml and android/res, aligned and signed.
 #
-# The APK has no Java code (a NativeActivity), so no Gradle is needed: aapt2
-# links the manifest and resources, the libraries are added as lib/<abi>/,
-# zipalign aligns them and apksigner signs.
+# The app is a NativeActivity with two small Java classes for the VPN
+# (android/java), so no Gradle is needed: javac and d8 make classes.dex,
+# aapt2 links the manifest and resources, the libraries are added as
+# lib/<abi>/, zipalign aligns them and apksigner signs.
 #
-# Needs: the Android SDK (build-tools 34+ and a platform), the NDK, cargo-ndk,
-# and the Rust targets for the ABIs:
+# Needs: the Android SDK (build-tools 34+ and a platform), a JDK 11+, the NDK,
+# cargo-ndk, and the Rust targets for the ABIs:
 #   rustup target add aarch64-linux-android x86_64-linux-android
 #   cargo install cargo-ndk
 #
@@ -52,6 +53,7 @@ EXE=""
 BAT=""
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) EXE=".exe"; BAT=".bat" ;; esac
 AAPT2="$BUILD_TOOLS/aapt2$EXE"
+D8="$BUILD_TOOLS/d8$BAT"
 ZIPALIGN="$BUILD_TOOLS/zipalign$EXE"
 APKSIGNER="$BUILD_TOOLS/apksigner$BAT"
 
@@ -85,7 +87,14 @@ if [ -z "${STARPOD_KEYSTORE:-}" ]; then DEBUG_MODE=(--debug-mode); fi
 "$AAPT2" link -o "$work/unaligned.apk" -I "$PLATFORM/android.jar" "${DEBUG_MODE[@]}" \
     --manifest "$work/AndroidManifest.xml" "$work/res.zip"
 
-# 3. The libraries, stored uncompressed under lib/<abi>/.
+# 3. The Java classes, compiled against the platform and dexed.
+mkdir -p "$work/classes" "$work/pack"
+javac --release 11 -classpath "$ANDROID_JAR" -d "$work/classes"     $(find android/java -name '*.java')
+classes=()
+while IFS= read -r -d '' class; do classes+=("$class"); done     < <(find "$work/classes" -name '*.class' -print0)
+"$D8" --release --min-api 26 --lib "$ANDROID_JAR" --output "$work/pack" "${classes[@]}"
+
+# 4. The libraries, stored uncompressed under lib/<abi>/.
 mkdir -p "$work/pack/lib"
 for abi in "${ABIS[@]}"; do
     mkdir -p "$work/pack/lib/$abi"
@@ -103,7 +112,7 @@ with zipfile.ZipFile(apk, "a") as zf:
             zf.write(path, arc, compress_type=zipfile.ZIP_STORED)
 PY
 
-# 4. Align (page-aligned .so files) and sign.
+# 5. Align (page-aligned .so files) and sign.
 "$ZIPALIGN" -f -p 4 "$work/unaligned.apk" "$work/aligned.apk"
 if [ -n "${STARPOD_KEYSTORE:-}" ]; then
     KEYSTORE=$STARPOD_KEYSTORE
