@@ -2653,7 +2653,10 @@ impl AppService {
                 self.log(format!(
                     "could not find the newest engine ({error}); installing {version}"
                 ));
-                (starpod_engine::download::install_in(&data_dir).await, version)
+                (
+                    starpod_engine::download::install_in(&data_dir).await,
+                    version,
+                )
             }
         };
         let path = installed.map_err(|error| self.engine_failure(error))?;
