@@ -12,13 +12,14 @@ import { EmojiText } from "../emoji-text.slint";
 import { ListView, ScrollView, TextEdit } from "std-widgets.slint";
 import {
     Button, ButtonVariant, ButtonSize, IconButton, Input, Switch, Segmented,
-    Badge, BadgeVariant, Card, EmptyState, PageHeader, ConfirmDialog
+    Badge, BadgeVariant, Card, EmptyState, PageHeader, ConfirmDialog, WindowMetrics
 } from "../primitives.slint";
 
 // ---------------------------------------------------------------------------
 // A Select over plain strings (the engine's rule kinds and targets). It looks
 // and behaves like Select: 36px field, popup under it, 32px items, a check on
-// the chosen one. `value` is the chosen string itself.
+// the chosen one. `value` is the chosen string itself. The width is set by the
+// user of the Select (a preferred width, and a stretch when the form reflows).
 // ---------------------------------------------------------------------------
 
 component RuleSelect inherits Rectangle {
@@ -151,9 +152,58 @@ component RuleSelect inherits Rectangle {
 }
 
 // ---------------------------------------------------------------------------
-// One of your rules, at rest: 44px. Switch, kind, value, arrow, target, and
-// the four ghost IconButtons. Each column has a fixed width so the rows line
-// up; the value takes the rest.
+// The four ghost IconButtons of one of your rules: move up and down, edit and
+// delete. The wide and the narrow row both place it, so it lives here once.
+// ---------------------------------------------------------------------------
+
+component RuleActions inherits Rectangle {
+    in property <bool> first;
+    in property <bool> last;
+    callback move(int);
+    callback edit();
+    callback delete();
+
+    width: 4 * 28px + 3 * 4px;
+    height: 28px;
+
+    HorizontalLayout {
+        spacing: 4px;
+
+        IconButton {
+            size: ButtonSize.sm;
+            icon: @image-url("../assets/icons/arrow-up.svg");
+            tooltip: @tr("Move up");
+            enabled: !root.first;
+            clicked => { root.move(-1); }
+        }
+        IconButton {
+            size: ButtonSize.sm;
+            icon: @image-url("../assets/icons/arrow-down.svg");
+            tooltip: @tr("Move down");
+            enabled: !root.last;
+            clicked => { root.move(1); }
+        }
+        IconButton {
+            size: ButtonSize.sm;
+            icon: @image-url("../assets/icons/pencil.svg");
+            tooltip: @tr("Edit");
+            clicked => { root.edit(); }
+        }
+        IconButton {
+            size: ButtonSize.sm;
+            icon: @image-url("../assets/icons/trash-2.svg");
+            tooltip: @tr("Delete");
+            clicked => { root.delete(); }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One of your rules, at rest. Wide: one line of 44px, with switch, kind,
+// value, arrow, target and the actions. Narrow (under 680px): two lines. The
+// value gets the whole first line; the arrow and target sit under the kind,
+// and the actions close the second line. Each column has a fixed width in the
+// wide form so the rows line up; the value takes the rest.
 // ---------------------------------------------------------------------------
 
 component UserRuleRow inherits Rectangle {
@@ -165,101 +215,186 @@ component UserRuleRow inherits Rectangle {
     callback edit();
     callback delete();
 
-    height: 44px;
+    // The window width decides the form, not this row's own width: reading
+    // the row's width here would be a binding loop.
+    private property <bool> narrow: WindowMetrics.width < 680px;
 
-    HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 12px;
-        spacing: 12px;
+    // 44px at rest. The content sets the height, so the two-line form grows.
+    preferred-height: body.preferred-height;
 
-        Rectangle {
-            width: 36px;
+    body := VerticalLayout {
+        horizontal-stretch: 1;
 
-            Switch {
-                x: 0px;
-                y: (parent.height - self.height) / 2;
-                checked: root.rule.enabled;
-                toggled(v) => { root.toggled(v); }
-            }
-        }
-
-        Rectangle {
-            width: 136px;
-
-            Badge {
-                x: 0px;
-                y: (parent.height - self.height) / 2;
-                text: root.rule.kind;
-                variant: BadgeVariant.outline;
-            }
-        }
-
-        EmojiText {
-            runs: root.rule.payload-runs;
-            fallback: root.rule.payload;
-            color: root.rule.enabled ? Design.foreground : Design.muted-foreground;
-            font-size: Design.font-base;
+        if (!root.narrow) : HorizontalLayout {
+            height: 44px;
             horizontal-stretch: 1;
-            vertical-stretch: 1;
-            min-width: 0px;
-            wrap: false;
-        }
+            padding-left: 16px;
+            padding-right: 12px;
+            spacing: 12px;
 
-        Rectangle {
-            width: 16px;
+            Rectangle {
+                width: 36px;
 
-            Image {
-                y: (parent.height - self.height) / 2;
+                Switch {
+                    x: 0px;
+                    y: (parent.height - self.height) / 2;
+                    checked: root.rule.enabled;
+                    toggled(v) => { root.toggled(v); }
+                }
+            }
+
+            Rectangle {
+                width: 136px;
+
+                Badge {
+                    x: 0px;
+                    y: (parent.height - self.height) / 2;
+                    text: root.rule.kind;
+                    variant: BadgeVariant.outline;
+                }
+            }
+
+            EmojiText {
+                runs: root.rule.payload-runs;
+                fallback: root.rule.payload;
+                color: root.rule.enabled ? Design.foreground : Design.muted-foreground;
+                font-size: Design.font-base;
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                min-width: 0px;
+                wrap: false;
+            }
+
+            Rectangle {
                 width: 16px;
-                height: 16px;
-                source: @image-url("../assets/icons/arrow-right.svg");
-                colorize: Design.muted-foreground;
+
+                Image {
+                    y: (parent.height - self.height) / 2;
+                    width: 16px;
+                    height: 16px;
+                    source: @image-url("../assets/icons/arrow-right.svg");
+                    colorize: Design.muted-foreground;
+                }
+            }
+
+            EmojiText {
+                runs: root.rule.target-runs;
+                fallback: root.rule.target;
+                width: 112px;
+                vertical-stretch: 1;
+                color: root.rule.enabled ? Design.foreground : Design.muted-foreground;
+                font-size: Design.font-sm;
+                wrap: false;
+            }
+
+            Rectangle {
+                width: 4 * 28px + 3 * 4px;
+
+                RuleActions {
+                    y: (parent.height - self.height) / 2;
+                    first: root.first;
+                    last: root.last;
+                    move(delta) => {
+                        root.move(delta);
+                    }
+                    edit => { root.edit(); }
+                    delete => { root.delete(); }
+                }
             }
         }
 
-        EmojiText {
-            runs: root.rule.target-runs;
-            fallback: root.rule.target;
-            width: 112px;
-            vertical-stretch: 1;
-            color: root.rule.enabled ? Design.foreground : Design.muted-foreground;
-            font-size: Design.font-sm;
-            wrap: false;
-        }
+        if (root.narrow) : VerticalLayout {
+            horizontal-stretch: 1;
+            padding-left: 16px;
+            padding-right: 12px;
+            padding-top: 4px;
+            padding-bottom: 4px;
 
-        Rectangle {
-            width: 4 * 28px + 3 * 4px;
-
+            // Line 1: switch, kind, value. The value takes what is left.
             HorizontalLayout {
-                y: (parent.height - self.height) / 2;
                 height: 28px;
-                spacing: 4px;
+                horizontal-stretch: 1;
+                spacing: 12px;
 
-                IconButton {
-                    size: ButtonSize.sm;
-                    icon: @image-url("../assets/icons/arrow-up.svg");
-                    tooltip: @tr("Move up");
-                    enabled: !root.first;
-                    clicked => { root.move(-1); }
+                Rectangle {
+                    width: 36px;
+
+                    Switch {
+                        x: 0px;
+                        y: (parent.height - self.height) / 2;
+                        checked: root.rule.enabled;
+                        toggled(v) => { root.toggled(v); }
+                    }
                 }
-                IconButton {
-                    size: ButtonSize.sm;
-                    icon: @image-url("../assets/icons/arrow-down.svg");
-                    tooltip: @tr("Move down");
-                    enabled: !root.last;
-                    clicked => { root.move(1); }
+
+                Rectangle {
+                    width: 136px;
+
+                    Badge {
+                        x: 0px;
+                        y: (parent.height - self.height) / 2;
+                        text: root.rule.kind;
+                        variant: BadgeVariant.outline;
+                    }
                 }
-                IconButton {
-                    size: ButtonSize.sm;
-                    icon: @image-url("../assets/icons/pencil.svg");
-                    tooltip: @tr("Edit");
-                    clicked => { root.edit(); }
+
+                EmojiText {
+                    runs: root.rule.payload-runs;
+                    fallback: root.rule.payload;
+                    color: root.rule.enabled ? Design.foreground : Design.muted-foreground;
+                    font-size: Design.font-base;
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    min-width: 0px;
+                    wrap: false;
                 }
-                IconButton {
-                    size: ButtonSize.sm;
-                    icon: @image-url("../assets/icons/trash-2.svg");
-                    tooltip: @tr("Delete");
-                    clicked => { root.delete(); }
+            }
+
+            // Line 2: the arrow and target start under the kind pill, which
+            // is the switch's width plus its gap. Starting under the value
+            // instead would leave the target no room at 400px wide.
+            HorizontalLayout {
+                height: 28px;
+                horizontal-stretch: 1;
+                padding-left: 48px;
+                spacing: 12px;
+
+                Rectangle {
+                    width: 16px;
+
+                    Image {
+                        y: (parent.height - self.height) / 2;
+                        width: 16px;
+                        height: 16px;
+                        source: @image-url("../assets/icons/arrow-right.svg");
+                        colorize: Design.muted-foreground;
+                    }
+                }
+
+                EmojiText {
+                    runs: root.rule.target-runs;
+                    fallback: root.rule.target;
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    min-width: 0px;
+                    color: root.rule.enabled ? Design.foreground : Design.muted-foreground;
+                    font-size: Design.font-sm;
+                    wrap: false;
+                }
+
+                Rectangle {
+                    width: 4 * 28px + 3 * 4px;
+
+                    RuleActions {
+                        y: (parent.height - self.height) / 2;
+                        first: root.first;
+                        last: root.last;
+                        move(delta) => {
+                            root.move(delta);
+                        }
+                        edit => { root.edit(); }
+                        delete => { root.delete(); }
+                    }
                 }
             }
         }
@@ -279,6 +414,9 @@ export component RulesPage inherits Rectangle {
     private property <int> tab: 0;
     // The position of the user rule being edited inline, or -1.
     private property <int> editing-index: -1;
+    // Under 680px the add and edit forms stack: the value on its own line,
+    // then the selects and buttons. Read from the window, not from a row.
+    private property <bool> narrow: WindowMetrics.width < 680px;
     // The add row. The kind and target start on the first choice the engine
     // offers; the value is typed.
     private property <string> add-kind: root.default-kind();
@@ -429,32 +567,46 @@ export component RulesPage inherits Rectangle {
                             VerticalLayout {
                                 spacing: 8px;
 
-                                HorizontalLayout {
-                                    height: 36px;
+                                // A grid, so the same controls can reflow. Wide:
+                                // one line of kind, value, target and Add. Narrow:
+                                // the value on its own line, then kind, target and
+                                // Add. The selects take the spare width, and Add
+                                // keeps its own, so it is never squashed.
+                                GridLayout {
                                     spacing: 8px;
 
                                     RuleSelect {
-                                        width: 160px;
+                                        row: root.narrow ? 1 : 0;
+                                        col: 0;
+                                        preferred-width: 160px;
+                                        horizontal-stretch: root.narrow ? 1 : 0;
                                         options: Bridge.rule-kinds;
                                         value <=> root.add-kind;
                                         placeholder: @tr("Kind");
                                     }
 
                                     Input {
-                                        horizontal-stretch: 1;
+                                        row: 0;
+                                        col: root.narrow ? 0 : 1;
+                                        colspan: root.narrow ? 3 : 1;
                                         text <=> root.add-payload;
                                         placeholder: root.placeholder-for(root.add-kind);
                                         accepted(v) => { root.submit-add(); }
                                     }
 
                                     RuleSelect {
-                                        width: 180px;
+                                        row: root.narrow ? 1 : 0;
+                                        col: root.narrow ? 1 : 2;
+                                        preferred-width: 180px;
+                                        horizontal-stretch: root.narrow ? 1 : 0;
                                         options: Bridge.rule-targets;
                                         value <=> root.add-target;
                                         placeholder: @tr("Target");
                                     }
 
                                     Button {
+                                        row: root.narrow ? 1 : 0;
+                                        col: root.narrow ? 2 : 3;
                                         text: @tr("Add");
                                         variant: ButtonVariant.primary;
                                         size: ButtonSize.md;
@@ -506,49 +658,67 @@ export component RulesPage inherits Rectangle {
                                             }
 
                                             // The inline edit: the add row's layout, with Save and Cancel.
+                                            // Narrow, Save and Cancel close the form on their own line.
                                             if (root.editing-index == rule.index) : VerticalLayout {
+                                                horizontal-stretch: 1;
                                                 padding-left: 12px;
                                                 padding-right: 12px;
                                                 padding-top: 8px;
                                                 padding-bottom: 8px;
                                                 spacing: 8px;
 
-                                                HorizontalLayout {
-                                                    height: 36px;
+                                                GridLayout {
                                                     spacing: 8px;
 
                                                     RuleSelect {
-                                                        width: 160px;
+                                                        row: root.narrow ? 1 : 0;
+                                                        col: 0;
+                                                        preferred-width: 160px;
+                                                        horizontal-stretch: root.narrow ? 1 : 0;
                                                         options: Bridge.rule-kinds;
                                                         value <=> root.edit-kind;
                                                     }
 
                                                     Input {
-                                                        horizontal-stretch: 1;
+                                                        row: 0;
+                                                        col: root.narrow ? 0 : 1;
+                                                        colspan: root.narrow ? 2 : 1;
                                                         text <=> root.edit-payload;
                                                         placeholder: root.placeholder-for(root.edit-kind);
                                                         accepted(v) => { root.submit-edit(); }
                                                     }
 
                                                     RuleSelect {
-                                                        width: 180px;
+                                                        row: root.narrow ? 1 : 0;
+                                                        col: root.narrow ? 1 : 2;
+                                                        preferred-width: 180px;
+                                                        horizontal-stretch: root.narrow ? 1 : 0;
                                                         options: Bridge.rule-targets;
                                                         value <=> root.edit-target;
                                                     }
 
-                                                    Button {
-                                                        text: @tr("Save");
-                                                        variant: ButtonVariant.primary;
-                                                        size: ButtonSize.md;
-                                                        enabled: root.edit-payload != "";
-                                                        clicked => { root.submit-edit(); }
-                                                    }
+                                                    HorizontalLayout {
+                                                        row: root.narrow ? 2 : 0;
+                                                        col: root.narrow ? 0 : 3;
+                                                        colspan: root.narrow ? 2 : 1;
+                                                        horizontal-stretch: 0;
+                                                        alignment: end;
+                                                        spacing: 8px;
 
-                                                    Button {
-                                                        text: @tr("Cancel");
-                                                        variant: ButtonVariant.outline;
-                                                        size: ButtonSize.md;
-                                                        clicked => { root.close-edit(); }
+                                                        Button {
+                                                            text: @tr("Save");
+                                                            variant: ButtonVariant.primary;
+                                                            size: ButtonSize.md;
+                                                            enabled: root.edit-payload != "";
+                                                            clicked => { root.submit-edit(); }
+                                                        }
+
+                                                        Button {
+                                                            text: @tr("Cancel");
+                                                            variant: ButtonVariant.outline;
+                                                            size: ButtonSize.md;
+                                                            clicked => { root.close-edit(); }
+                                                        }
                                                     }
                                                 }
 
