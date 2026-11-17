@@ -115,8 +115,12 @@ pub async fn validate_config(
         return Err(EngineError::Io(error.to_string()));
     }
 
-    // The candidate must not outlive the check, whatever the outcome.
+    // The candidate must not outlive the check, whatever the outcome. A
+    // rejected one is kept beside the live file, so the reason can be found.
     let outcome = run_validation(binary, &candidate).await;
+    if matches!(&outcome, Ok(report) if !report.ok) {
+        let _ = tokio::fs::copy(&candidate, candidate.with_extension("rejected.yaml")).await;
+    }
 
     let _ = tokio::fs::remove_file(&candidate).await;
 
@@ -162,7 +166,10 @@ async fn run_validation(binary: &Path, path: &Path) -> EngineResult<ValidationRe
     Ok(ValidationReport {
         ok: false,
         engine_error: Some(if message.is_empty() {
-            "the engine rejected the configuration without saying why".to_string()
+            format!(
+                "the engine rejected the configuration without saying why ({})",
+                output.status
+            )
         } else {
             message
         }),

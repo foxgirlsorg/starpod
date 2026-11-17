@@ -32,9 +32,6 @@ flate2 = { workspace = true }
 sha2 = { workspace = true }
 # Grapheme clusters, so that a flag or a ZWJ sequence is one emoji.
 unicode-segmentation = "1.13"
-# Slint 1.18 has no clipboard API for applications, so the Logs screen's
-# copy action uses arboard, which Slint's own winit backend already depends on.
-arboard = "3.7"
 # The instance channel's random token (src/instance.rs).
 rand = { workspace = true }
 # The update check's GitHub request and version comparison (src/update.rs).
@@ -48,6 +45,20 @@ dirs = { workspace = true }
 # tar.gz elsewhere, as build.yml packs them.
 zip = { workspace = true }
 tar = { workspace = true }
+
+# The desktop window backend: winit, with the GL renderer and the native
+# SystemTrayIcon backend (ARCHITECTURE §6.4). Without "system-tray" the tray
+# element compiles but fails at runtime with "no system tray backend".
+[target.'cfg(not(target_os = "android"))'.dependencies]
+slint = { workspace = true, features = ["backend-winit", "renderer-femtovg", "system-tray"] }
+# Slint 1.18 has no clipboard API for applications, so the Logs screen's
+# copy action uses arboard, which Slint's own winit backend already depends on.
+# arboard has no Android implementation.
+arboard = "3.7"
+
+# Android: the NativeActivity backend (crates/starpod-android).
+[target.'cfg(target_os = "android")'.dependencies]
+slint = { workspace = true, features = ["backend-android-activity-06"] }
 
 # The Windows scheme registration writes to the current user's registry hive.
 [target.'cfg(windows)'.dependencies]

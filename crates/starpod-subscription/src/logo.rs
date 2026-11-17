@@ -105,7 +105,7 @@ pub enum LogoError {
 
 /// Download a logo with the app's limits.
 pub async fn fetch_logo(url: &str) -> Result<Logo, LogoError> {
-    let client = reqwest::Client::builder()
+    let client = crate::tls::configure(reqwest::Client::builder())
         .timeout(LOGO_TIMEOUT)
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()

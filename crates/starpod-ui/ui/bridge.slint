@@ -365,6 +365,9 @@ export global Bridge {
     // a pasted profile (its own text) rather than a fetched one (stored JSON)
     in property <bool> editor-local;
     in property <string> editor-error;
+    // Running on a phone (Android): no tray, no login start, no global
+    // shortcuts and no self-update, so their settings are hidden.
+    in property <bool> mobile: false;
 
     // --- engine -------------------------------------------------------------
     // "stopped" | "starting" | "running" | "stopping" | "failed"

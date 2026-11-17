@@ -177,13 +177,20 @@ export component AppWindow inherits Window {
     in-out property <bool> nav-open: false;
 
     VerticalLayout {
+        // On a phone the system bars overlap the window: the gesture bar at
+        // the bottom, and the status bar, which the top bar extends under.
+        padding-bottom: root.safe-area-insets.bottom;
+        padding-left: root.safe-area-insets.left;
+        padding-right: root.safe-area-insets.right;
+
         // The top bar: the menu button, the mark and the name, and the
         // update notice when there is one.
         Rectangle {
-            height: 52px;
+            height: 52px + root.safe-area-insets.top;
             background: Design.sidebar;
 
             HorizontalLayout {
+                padding-top: root.safe-area-insets.top;
                 padding-left: 10px;
                 padding-right: 16px;
                 spacing: 10px;
@@ -340,7 +347,7 @@ export component AppWindow inherits Window {
     drawer := Rectangle {
         x: root.nav-open ? 0px : -self.width - 2px;
         y: 0px;
-        width: 240px;
+        width: 240px + root.safe-area-insets.left;
         height: root.height;
         background: Design.sidebar;
         animate x {
@@ -360,7 +367,8 @@ export component AppWindow inherits Window {
 
         VerticalLayout {
             padding: 12px;
-            padding-top: 8px;
+            padding-top: 8px + root.safe-area-insets.top;
+            padding-left: 12px + root.safe-area-insets.left;
             spacing: 0px;
 
             // The brand row, with the button that closes the drawer at the

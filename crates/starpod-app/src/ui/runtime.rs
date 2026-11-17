@@ -109,6 +109,7 @@ pub struct UiState {
     banner: Option<Banner>,
     busy: u32,
     busy_message: String,
+    #[cfg(not(target_os = "android"))]
     clipboard: Option<arboard::Clipboard>,
     /// `STARPOD_UI_DEMO=1`: fill the window with the demo data after the first push.
     demo_requested: bool,
@@ -152,6 +153,7 @@ impl UiState {
             banner: None,
             busy: 0,
             busy_message: String::new(),
+            #[cfg(not(target_os = "android"))]
             clipboard: None,
             demo_requested: demo::requested(),
             demo_applied: false,
@@ -450,16 +452,26 @@ impl UiState {
         }
     }
 
-    fn copy_text(&mut self, text: String) -> Result<(), arboard::Error> {
+    #[cfg(not(target_os = "android"))]
+    fn copy_text(&mut self, text: String) -> Result<(), String> {
         // The clipboard is kept alive: on some platforms its contents go away
         // with the handle.
         if self.clipboard.is_none() {
-            self.clipboard = Some(arboard::Clipboard::new()?);
+            self.clipboard = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
         }
         if let Some(clipboard) = self.clipboard.as_mut() {
-            clipboard.set_text(text)?;
+            clipboard
+                .set_text(text)
+                .map_err(|error| error.to_string())?;
         }
         Ok(())
+    }
+
+    /// Android has no clipboard access from native code without the Java
+    /// side, so copying says so instead.
+    #[cfg(target_os = "android")]
+    fn copy_text(&mut self, _text: String) -> Result<(), String> {
+        Err("copying is not available on Android yet".to_string())
     }
 
     /// Show the profile editor with a profile's text.
@@ -640,6 +652,11 @@ impl UiState {
 /// Check GitHub for a newer release. A manual check always runs. The startup
 /// check runs only while the user keeps the setting on.
 pub fn spawn_update_check(ctx: &Ctx, manual: bool) {
+    // On Android a new version comes as a new APK; the app does not update
+    // itself.
+    if cfg!(target_os = "android") {
+        return;
+    }
     let service = ctx.service.clone();
     ctx.runtime.spawn(async move {
         if !manual {
@@ -919,6 +936,9 @@ pub fn run(
 ) -> Result<(), Box<dyn Error>> {
     let window = AppWindow::new()?;
     info!("window created");
+    window
+        .global::<Bridge>()
+        .set_mobile(cfg!(target_os = "android"));
     // Debug hook for tools/ui-shot.sh: STARPOD_UI_PAGE=0..6 opens that page
     // (6 is Connections).
     if let Some(page) = std::env::var("STARPOD_UI_PAGE")

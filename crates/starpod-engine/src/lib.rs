@@ -37,6 +37,7 @@ pub mod rest;
 pub mod secret;
 pub mod signal;
 pub mod supervisor;
+pub mod tls;
 pub mod tun;
 pub mod validate;
 

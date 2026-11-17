@@ -241,7 +241,7 @@ impl Default for HttpSubscriptionProvider {
     /// fetch as a [`ProviderError::Network`].
     fn default() -> Self {
         Self::builder().build().unwrap_or_else(|_| {
-            let client = reqwest::Client::builder()
+            let client = crate::tls::configure(reqwest::Client::builder())
                 .timeout(Duration::from_secs(30))
                 .redirect(reqwest::redirect::Policy::limited(
                     HttpSubscriptionProvider::DEFAULT_MAX_REDIRECTS,
@@ -295,7 +295,7 @@ impl HttpSubscriptionProviderBuilder {
 
     /// Build the provider.
     pub fn build(self) -> Result<HttpSubscriptionProvider, ProviderError> {
-        let client = reqwest::Client::builder()
+        let client = crate::tls::configure(reqwest::Client::builder())
             .timeout(self.timeout)
             .redirect(reqwest::redirect::Policy::limited(self.max_redirects))
             .user_agent(self.user_agent)

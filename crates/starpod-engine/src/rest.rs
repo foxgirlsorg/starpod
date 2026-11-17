@@ -45,7 +45,7 @@ pub struct ControllerClient {
 impl ControllerClient {
     /// Build a client for a controller at `base` (e.g. `http://127.0.0.1:9090`).
     pub fn new(base: impl Into<String>, secret: impl Into<String>) -> Self {
-        let http = reqwest::Client::builder()
+        let http = crate::tls::configure(reqwest::Client::builder())
             .timeout(DEFAULT_TIMEOUT)
             // The controller is on loopback; a proxy in the environment
             // would break the connection and is a surprise the user does

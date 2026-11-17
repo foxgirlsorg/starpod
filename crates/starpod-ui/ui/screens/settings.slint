@@ -347,12 +347,15 @@ export component SettingsPage inherits Rectangle {
                 }
 
                 if (root.section < 0) : Card {
-                    for name[i] in root.section-names : SectionLink {
-                        icon: root.section-icons[i];
-                        text: name;
-                        description: root.section-texts[i];
-                        clicked => {
-                            root.open-section(i);
+                    for name[i] in root.section-names : VerticalLayout {
+                        // Global shortcuts (9) do not exist on a phone.
+                        if !(Bridge.mobile && i == 9) : SectionLink {
+                            icon: root.section-icons[i];
+                            text: name;
+                            description: root.section-texts[i];
+                            clicked => {
+                                root.open-section(i);
+                            }
                         }
                     }
                 }
@@ -516,7 +519,8 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
 
-                    Card {
+                    // A phone has no login start and no tray.
+                    if (!Bridge.mobile) : Card {
                         CardHeader {
                             title: @tr("Startup");
                         }
@@ -621,7 +625,8 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
 
-                    Card {
+                    // On a phone a new version comes as a new APK.
+                    if (!Bridge.mobile) : Card {
                         CardHeader {
                             title: @tr("Updates");
                         }

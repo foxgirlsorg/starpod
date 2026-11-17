@@ -64,6 +64,9 @@ Builds are on the [GitHub Releases](https://github.com/foxgirlsorg/starpod/relea
 | Windows x86_64 | `starpod-windows-x86_64-setup.exe` | `starpod-windows-x86_64-portable.zip` |
 | Linux x86_64 | `starpod-linux-x86_64-setup.deb` | `starpod-linux-x86_64-portable.tar.gz` |
 | macOS Apple silicon | `starpod-macos-aarch64-setup.dmg` | `starpod-macos-aarch64-portable.tar.gz` |
+| Android (arm64, x86_64) | `starpod-android.apk` | — |
+
+On Android, install the APK (allow installs from your browser or file manager), then install the engine from the Home screen; Starpod runs the engine as a local proxy on 127.0.0.1:7890. VPN mode (routing every app without setting a proxy) is not available on Android yet.
 
 Each file has a `.sha256` checksum. The Windows installer installs for the current user and needs no administrator rights. The portable archives run from any folder, and the built-in updater keeps them current. Nothing is code-signed yet, so Windows SmartScreen and macOS Gatekeeper warn on first launch. TUN elevation and some platform paths have not been run on real machines. See the [known limitations](docs/DEVELOPMENT.md#5-known-limitations-and-remaining-work).
 

@@ -94,7 +94,7 @@ pub fn parse_release(body: &str) -> Result<Release, String> {
 /// Fetch the latest release from GitHub. The request carries a User-Agent,
 /// which the GitHub API requires.
 pub async fn fetch_latest_release() -> Result<Release, String> {
-    let client = reqwest::Client::builder()
+    let client = starpod_subscription::tls::configure(reqwest::Client::builder())
         .timeout(REQUEST_TIMEOUT)
         .build()
         .map_err(|error| format!("the request could not be made: {error}"))?;
@@ -332,7 +332,7 @@ pub async fn download_update(
 ) -> Result<PathBuf, String> {
     let (archive_asset, checksum_asset) = pick_platform_assets(release)?;
     let archive = archive_asset.name.as_str();
-    let client = reqwest::Client::builder()
+    let client = starpod_subscription::tls::configure(reqwest::Client::builder())
         .timeout(DOWNLOAD_TIMEOUT)
         .build()
         .map_err(|error| format!("the request could not be made: {error}"))?;
