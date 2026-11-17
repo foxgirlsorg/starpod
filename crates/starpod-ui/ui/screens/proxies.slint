@@ -287,9 +287,9 @@ export component ProxiesPage inherits Rectangle {
                     VerticalLayout {
                         spacing: 8px;
 
-                        // The phone row: the mode on the left, the session traffic
-                        // on the right, one line.
-                        if (root.phone-row) : HorizontalLayout {
+                        // In a narrow window: the mode on the left, the session
+                        // traffic on the right, one line.
+                        if (root.narrow) : HorizontalLayout {
                             vertical-stretch: 0;
                             height: 36px;
                             spacing: 8px;
@@ -459,78 +459,6 @@ export component ProxiesPage inherits Rectangle {
                                     Bridge.set-mode(root.mode-keys[i]);
                                 }
                             }
-                        }
-
-                        if (root.narrow && !root.phone-row) : HorizontalLayout {
-                            alignment: start;
-
-                            Segmented {
-                                options: root.mode-labels;
-                                current-index: root.mode-index;
-                                selected(i) => {
-                                    Bridge.set-mode(root.mode-keys[i]);
-                                }
-                            }
-                        }
-
-                        if (root.narrow && !root.phone-row) : HorizontalLayout {
-                            alignment: start;
-
-                            if (root.running && Bridge.session-traffic-visible) : HorizontalLayout {
-                                horizontal-stretch: 0;
-                                spacing: 12px;
-
-                                HorizontalLayout {
-                                    spacing: 4px;
-
-                                    VerticalLayout {
-                                        vertical-stretch: 0;
-                                        alignment: center;
-
-                                        Image {
-                                            width: 12px;
-                                            height: 12px;
-                                            source: @image-url("../assets/icons/arrow-up.svg");
-                                            colorize: Design.muted-foreground;
-                                        }
-                                    }
-
-                                    Text {
-                                        text: Bridge.session-upload;
-                                        color: Design.foreground;
-                                        font-family: Design.font-family;
-                                        font-size: Design.font-xs;
-                                        vertical-alignment: center;
-                                        wrap: no-wrap;
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 4px;
-
-                                    VerticalLayout {
-                                        vertical-stretch: 0;
-                                        alignment: center;
-
-                                        Image {
-                                            width: 12px;
-                                            height: 12px;
-                                            source: @image-url("../assets/icons/arrow-down.svg");
-                                            colorize: Design.muted-foreground;
-                                        }
-                                    }
-
-                                    Text {
-                                        text: Bridge.session-download;
-                                        color: Design.foreground;
-                                        font-family: Design.font-family;
-                                        font-size: Design.font-xs;
-                                        vertical-alignment: center;
-                                        wrap: no-wrap;
-                                    }
-                                }
-                            }
-
                         }
 
                         if (root.running && Bridge.system-proxy-error != "") : Text {
